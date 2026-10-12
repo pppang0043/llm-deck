@@ -7,4 +7,6 @@ dependencies = [
     "zeroconf>=0.130",
     "sounddevice>=0.4.6",
     "numpy>=1.26",
+    "pyserial>=3.5",
+    "bleak>=0.22",
 ]

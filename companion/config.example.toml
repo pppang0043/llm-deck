@@ -2,8 +2,12 @@
 # 키를 비워 둔 서비스는 화면에 나타나지 않습니다.
 
 [device]
-# 비워 두면 같은 Wi-Fi 에서 기기를 자동으로 찾습니다. 못 찾을 때만 기기 화면에 보이는 IP 를 적으세요.
+# 연결 방식: "auto"(USB -> 블루투스 -> Wi-Fi 순으로 되는 것), "usb", "ble", "wifi"
+link = "auto"
+# Wi-Fi: 비워 두면 기기를 자동으로 찾습니다. 못 찾을 때만 기기 화면에 보이는 IP 를 적으세요.
 host = ""
+# USB: 비워 두면 포트를 자동으로 찾습니다. (예: "/dev/cu.usbmodem101", "COM5")
+port = ""
 
 [claude_code]
 enabled = true

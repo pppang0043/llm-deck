@@ -21,6 +21,8 @@ static lv_obj_t *level_bar;
 static lv_obj_t *mic_btn;
 static lv_obj_t *mic_lbl;
 static void (*mic_toggle_cb)();
+static bool waiting = true;
+static char wifi_info[48] = "starting...";
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
@@ -56,6 +58,14 @@ static void show_placeholder(const char *title, const char *body) {
   lv_obj_set_width(lbl, lv_pct(100));
 }
 
+// PC 에서 첫 데이터가 오기 전까지 보여주는 화면: 연결 방법 안내
+static void show_waiting() {
+  char body[200];
+  snprintf(body, sizeof(body),
+           "Waiting for the PC companion app.\n\nUSB: plug in the cable\nBluetooth: " "LLM-Deck" "\nWi-Fi: %s", wifi_info);
+  show_placeholder("LLM Deck", body);
+}
+
 static void mic_btn_event(lv_event_t *e) {
   if (mic_toggle_cb) mic_toggle_cb();
 }
@@ -79,7 +89,7 @@ void ui_init(void (*on_mic_toggle)()) {
   lv_obj_set_size(tiles, LCD_W, LCD_H - STATUS_H - LEVEL_H - MIC_H);
   lv_obj_set_pos(tiles, 0, STATUS_H);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
-  show_placeholder("LLM Deck", "Waiting for data from the PC companion app.");
+  show_waiting();
 
   level_bar = lv_bar_create(scr);
   lv_obj_set_size(level_bar, LCD_W, LEVEL_H);
@@ -102,7 +112,13 @@ void ui_set_status(const char *text) {
   lv_label_set_text(status_lbl, text);
 }
 
+void ui_set_wifi_info(const char *text) {
+  strlcpy(wifi_info, text, sizeof(wifi_info));
+  if (waiting) show_waiting();
+}
+
 void ui_set_usage(JsonArrayConst services, const char *updated) {
+  waiting = false;
   lv_label_set_text(updated_lbl, updated ? updated : "");
 
   // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다

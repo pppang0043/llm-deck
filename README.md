@@ -8,21 +8,39 @@ LLM 사용량을 화면에 보여주고, 버튼으로 켜고 끄는 무선 마�
 
 ## 처음 설정
 
-1. `firmware/include/secrets.example.h` 를 `secrets.h` 로 복사하고 Wi-Fi 이름/비밀번호를 적는다 (2.4GHz 만 가능)
-2. 보드를 USB-C 로 연결하고 펌웨어를 올린다
+보드를 USB-C 로 연결하고 펌웨어를 올린다.
 
-   ```sh
-   cd firmware
-   pio run -t upload        # 빌드 + 업로드
-   pio device monitor       # 보드가 내보내는 로그 보기 (Ctrl+C 로 종료)
-   ```
+```sh
+cd firmware
+pio run -t upload        # 빌드 + 업로드
+pio device monitor       # 보드가 내보내는 로그 보기 (Ctrl+C 로 종료)
+```
 
-3. PC 도우미를 실행한다 (기기와 같은 Wi-Fi 에 있어야 한다)
+PC 도우미가 USB 포트를 쓰는 동안에는 업로드와 로그 보기가 안 된다. 도우미를 먼저 끈다 (Ctrl+C).
 
-   ```sh
-   cd companion
-   uv run main.py
-   ```
+## PC 와 연결하기
+
+기기는 세 가지 방식을 모두 켜 두고, 가장 최근에 데이터를 보내온 쪽을 쓴다 (화면 왼쪽 위에 표시).
+PC 도우미에서 방식을 고른다.
+
+```sh
+cd companion
+uv run main.py               # 되는 방식을 자동 선택 (USB -> 블루투스 -> Wi-Fi 순)
+uv run main.py --link usb    # USB 케이블
+uv run main.py --link ble    # 블루투스
+uv run main.py --link wifi   # Wi-Fi
+```
+
+| 방식 | 준비할 것 | 마이크 음질 |
+|---|---|---|
+| USB | 케이블만 연결 | 원본 그대로 |
+| 블루투스 | Mac 은 시스템 설정 > 개인정보 보호 및 보안 > Bluetooth 에서 터미널 앱 허용 | 1/4 로 압축 (ADPCM) |
+| Wi-Fi | 아래 둘 중 하나 | 원본 그대로 |
+
+Wi-Fi 는 두 가지로 쓸 수 있다.
+
+- **기기가 만든 Wi-Fi 에 PC 가 접속** (기본): PC 에서 `LLM-Deck` (비밀번호 `llmdeck1234`) 에 접속한다. 이 Wi-Fi 에는 인터넷이 없으므로, PC 가 유선 등 다른 경로로 인터넷에 연결되어 있어야 API 사용량을 가져올 수 있다
+- **같은 공유기에 접속**: `firmware/include/secrets.h` 에 Wi-Fi 이름/비밀번호(2.4GHz)를 적고 펌웨어를 다시 올린다
 
 API 사용량까지 보려면 `companion/config.example.toml` 을 `config.toml` 로 복사해 키를 채운다.
 
@@ -30,6 +48,7 @@ API 사용량까지 보려면 `companion/config.example.toml` 을 `config.toml` 
 
 - 화면을 좌우로 밀면 서비스별 페이지가 넘어간다
 - 화면 아래 버튼이나 보드의 BOOT 버튼을 누르면 마이크가 켜지고 꺼진다
+- PC 에서도 켜고 끌 수 있다: `uv run main.py --mic on`
 
 ## 마이크 (INMP441) 연결
 
@@ -44,4 +63,4 @@ API 사용량까지 보려면 `companion/config.example.toml` 을 `config.toml` 
 
 PC 에서 마이크로 쓰려면 가상 오디오 장치가 필요하다 (Mac: [BlackHole](https://existential.audio/blackhole/) 2ch, Windows: VB-CABLE).
 도우미가 기기의 소리를 그 장치로 내보내므로, 다른 프로그램에서는 입력 장치로 BlackHole 을 고르면 된다.
-가상 장치 없이 수신만 확인하려면 `uv run main.py --record test.wav`.
+가상 장치 없이 수신만 확인하려면 `uv run main.py --mic on --record test.wav` (10초간 녹음해 파일로 저장).
