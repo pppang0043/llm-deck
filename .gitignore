@@ -1,0 +1,12 @@
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/
+
+# 비밀 정보 (Wi-Fi 비밀번호, API 키) — 절대 커밋하지 않음
+firmware/include/secrets.h
+companion/config.toml
+
+# Python
+__pycache__/
+.venv/
+.DS_Store

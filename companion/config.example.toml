@@ -1,0 +1,21 @@
+# 이 파일을 config.toml 로 복사한 뒤 필요한 값만 채우세요. (config.toml 은 git 에 올라가지 않습니다)
+# 키를 비워 둔 서비스는 화면에 나타나지 않습니다.
+
+[device]
+# 비워 두면 같은 Wi-Fi 에서 기기를 자동으로 찾습니다. 못 찾을 때만 기기 화면에 보이는 IP 를 적으세요.
+host = ""
+
+[claude_code]
+enabled = true
+
+[anthropic_api]
+# Admin API 키 (sk-ant-admin01-...). 조직 계정에서만 만들 수 있습니다.
+admin_key = ""
+
+[openai_api]
+# Admin 키 (sk-admin-...). platform.openai.com > Settings > Organization > Admin keys
+admin_key = ""
+
+[audio]
+# 마이크 소리를 내보낼 가상 오디오 장치 이름의 일부. 비워 두면 BlackHole(Mac) / CABLE Input(Windows) 을 찾습니다.
+output = ""
