@@ -15,5 +15,8 @@ void ui_set_wifi_info(const char *text);
 // 서비스 하나: {"name", "note", "headline", "sub", "bars": [{"label", "note", "text", "pct"}], "rows": [[이름, 값]]}
 void ui_set_usage(JsonArrayConst services);
 
+// 화면 방향이 바뀐 뒤(display_set_rotation) 부르면 가로/세로에 맞게 다시 배치한다.
+void ui_layout();
+
 void ui_set_mic(bool on);
 void ui_set_level(uint8_t pct);

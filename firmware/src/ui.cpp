@@ -2,10 +2,12 @@
 
 #include <lvgl.h>
 
-#include "pins.h"
+#include "display.h"
 
 #define STATUS_H 24
 #define MIC_H 56
+// 가로 화면에서는 마이크 버튼이 오른쪽에 세로로 놓인다
+#define MIC_W 72
 #define LEVEL_H 4
 
 #define COLOR_BG lv_color_hex(0x101418)
@@ -23,6 +25,9 @@ static lv_obj_t *mic_btn;
 static lv_obj_t *mic_lbl;
 static void (*mic_toggle_cb)();
 static bool waiting = true;
+static bool mic_on = false;
+// 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
+static JsonDocument last_usage;
 static char wifi_info[48] = "starting...";
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
@@ -105,26 +110,51 @@ void ui_init(void (*on_mic_toggle)()) {
   lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, 4);
 
   tiles = lv_tileview_create(scr);
-  lv_obj_set_size(tiles, LCD_W, LCD_H - STATUS_H - LEVEL_H - MIC_H);
-  lv_obj_set_pos(tiles, 0, STATUS_H);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
-  show_waiting();
 
   level_bar = lv_bar_create(scr);
-  lv_obj_set_size(level_bar, LCD_W, LEVEL_H);
-  lv_obj_set_pos(level_bar, 0, LCD_H - MIC_H - LEVEL_H);
   lv_obj_set_style_radius(level_bar, 0, 0);
   lv_obj_set_style_radius(level_bar, 0, LV_PART_INDICATOR);
   lv_bar_set_range(level_bar, 0, 100);
 
   mic_btn = lv_btn_create(scr);
-  lv_obj_set_size(mic_btn, LCD_W, MIC_H);
-  lv_obj_set_pos(mic_btn, 0, LCD_H - MIC_H);
   lv_obj_set_style_radius(mic_btn, 0, 0);
   lv_obj_add_event_cb(mic_btn, mic_btn_event, LV_EVENT_CLICKED, NULL);
   mic_lbl = add_label(mic_btn, "", &lv_font_montserrat_20, lv_color_white());
-  lv_obj_center(mic_lbl);
+  lv_obj_set_style_text_align(mic_lbl, LV_TEXT_ALIGN_CENTER, 0);
+
+  ui_layout();
   ui_set_mic(false);
+}
+
+static void render_usage();
+
+void ui_layout() {
+  int w = display_width(), h = display_height();
+  if (w > h) {
+    // 가로: 왼쪽에 페이지, 오른쪽에 마이크 버튼
+    lv_obj_set_size(tiles, w - MIC_W, h - STATUS_H);
+    lv_obj_set_pos(tiles, 0, STATUS_H);
+    lv_obj_set_size(level_bar, MIC_W, LEVEL_H);
+    lv_obj_set_pos(level_bar, w - MIC_W, STATUS_H);
+    lv_obj_set_size(mic_btn, MIC_W, h - STATUS_H - LEVEL_H);
+    lv_obj_set_pos(mic_btn, w - MIC_W, STATUS_H + LEVEL_H);
+  } else {
+    // 세로: 위에 페이지, 아래에 마이크 버튼
+    lv_obj_set_size(tiles, w, h - STATUS_H - LEVEL_H - MIC_H);
+    lv_obj_set_pos(tiles, 0, STATUS_H);
+    lv_obj_set_size(level_bar, w, LEVEL_H);
+    lv_obj_set_pos(level_bar, 0, h - MIC_H - LEVEL_H);
+    lv_obj_set_size(mic_btn, w, MIC_H);
+    lv_obj_set_pos(mic_btn, 0, h - MIC_H);
+  }
+  ui_set_mic(mic_on);
+  // 페이지는 크기에 맞춰 새로 만든다
+  if (waiting) {
+    show_waiting();
+  } else {
+    render_usage();
+  }
 }
 
 void ui_set_status(const char *text) {
@@ -138,10 +168,17 @@ void ui_set_wifi_info(const char *text) {
 
 void ui_set_usage(JsonArrayConst services) {
   waiting = false;
+  last_usage.set(services);
+  render_usage();
+}
+
+static void render_usage() {
+  JsonArrayConst services = last_usage.as<JsonArrayConst>();
 
   // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다
   lv_obj_t *active = lv_tileview_get_tile_act(tiles);
-  uint8_t keep = active ? lv_obj_get_x(active) / LCD_W : 0;
+  int tile_w = lv_obj_get_width(tiles);
+  uint8_t keep = active && tile_w > 0 ? lv_obj_get_x(active) / tile_w : 0;
 
   size_t count = services.size();
   if (count == 0) {
@@ -180,8 +217,16 @@ void ui_set_usage(JsonArrayConst services) {
 }
 
 void ui_set_mic(bool on) {
+  mic_on = on;
+  bool wide = display_width() > display_height();
   lv_obj_set_style_bg_color(mic_btn, on ? COLOR_MIC_ON : COLOR_MIC_OFF, 0);
-  lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "  MIC ON" : LV_SYMBOL_MUTE "  MIC OFF");
+  // 가로 화면의 버튼은 좁아서 두 줄로 쓴다
+  if (wide) {
+    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "\nMIC\nON" : LV_SYMBOL_MUTE "\nMIC\nOFF");
+  } else {
+    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "  MIC ON" : LV_SYMBOL_MUTE "  MIC OFF");
+  }
+  lv_obj_center(mic_lbl);
   if (!on) ui_set_level(0);
 }
 

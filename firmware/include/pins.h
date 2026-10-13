@@ -17,6 +17,13 @@
 #define TP_SDA 48
 #define TP_SCL 47
 
+// 기울기 센서 (QMI8658, 터치와 같은 I2C 선).
+// 센서의 각 축이 아래(중력 방향)를 향할 때 화면을 몇 번 돌려야 바로 보이는지 (90도 단위, 시계 방향).
+#define IMU_ROT_Y_POS 0
+#define IMU_ROT_Y_NEG 2
+#define IMU_ROT_X_POS 3
+#define IMU_ROT_X_NEG 1
+
 // BOOT 버튼: 누르면 LOW
 #define BTN_BOOT 0
 
