@@ -11,7 +11,7 @@ from statusline import SNAPSHOT
 
 from .fmt import limits_page
 
-WINDOWS = [("five_hour", "5-hour"), ("seven_day", "weekly")]
+WINDOWS = [("five_hour", "5h"), ("seven_day", "Week")]
 
 
 def collect(cfg: dict) -> dict | None:
@@ -24,7 +24,7 @@ def collect(cfg: dict) -> dict | None:
         return {
             "name": "Claude Code",
             "headline": "No data",
-            "sub": "run: main.py --install-statusline, then use Claude Code",
+            "sub": "run main.py --install-statusline",
         }
     windows = [
         (label, limits[key].get("used_percentage", 0), limits[key].get("resets_at"))
@@ -33,4 +33,4 @@ def collect(cfg: dict) -> dict | None:
     ]
     if not windows:
         return None
-    return limits_page("Claude Code", windows, as_of, [])
+    return limits_page("Claude Code", windows, as_of)

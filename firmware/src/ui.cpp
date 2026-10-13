@@ -11,11 +11,12 @@
 #define COLOR_BG lv_color_hex(0x101418)
 #define COLOR_DIM lv_color_hex(0x8A939E)
 #define COLOR_ACCENT lv_color_hex(0xD97757)
+#define COLOR_WARN lv_color_hex(0xE0A030)
+#define COLOR_FULL lv_color_hex(0xE0483C)
 #define COLOR_MIC_OFF lv_color_hex(0x2A3038)
 #define COLOR_MIC_ON lv_color_hex(0xC8372D)
 
 static lv_obj_t *status_lbl;
-static lv_obj_t *updated_lbl;
 static lv_obj_t *tiles;
 static lv_obj_t *level_bar;
 static lv_obj_t *mic_btn;
@@ -32,13 +33,33 @@ static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *
   return lbl;
 }
 
-// 왼쪽에 이름, 오른쪽에 값이 있는 한 줄
-static void add_row(lv_obj_t *parent, const char *left, const char *right, lv_color_t left_color) {
+// 왼쪽과 오른쪽에 글자가 하나씩 있는 한 줄
+static void add_row(lv_obj_t *parent, const char *left, const lv_font_t *left_font, lv_color_t left_color,
+                    const char *right, const lv_font_t *right_font, lv_color_t right_color) {
   lv_obj_t *row = lv_obj_create(parent);
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-  lv_obj_align(add_label(row, left, &lv_font_montserrat_14, left_color), LV_ALIGN_LEFT_MID, 0, 0);
-  lv_obj_align(add_label(row, right, &lv_font_montserrat_14, lv_color_white()), LV_ALIGN_RIGHT_MID, 0, 0);
+  lv_obj_align(add_label(row, left, left_font, left_color), LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_align(add_label(row, right, right_font, right_color), LV_ALIGN_RIGHT_MID, 0, 0);
+}
+
+// 한도 한 구간: 왼쪽에 이름과 초기화 시각, 오른쪽에 큰 숫자, 아래에 막대
+static void add_gauge(lv_obj_t *parent, JsonObjectConst bar) {
+  int pct = constrain(bar["pct"] | 0, 0, 100);
+  lv_color_t color = pct >= 90 ? COLOR_FULL : pct >= 70 ? COLOR_WARN : lv_color_white();
+
+  lv_obj_t *row = lv_obj_create(parent);
+  lv_obj_remove_style_all(row);
+  lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+  lv_obj_align(add_label(row, bar["label"] | "", &lv_font_montserrat_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_align(add_label(row, bar["note"] | "", &lv_font_montserrat_14, COLOR_DIM), LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_align(add_label(row, bar["text"] | "", &lv_font_montserrat_48, color), LV_ALIGN_RIGHT_MID, 0, 0);
+
+  lv_obj_t *b = lv_bar_create(parent);
+  lv_obj_set_size(b, lv_pct(100), 12);
+  lv_bar_set_range(b, 0, 100);
+  lv_bar_set_value(b, pct, LV_ANIM_OFF);
+  if (pct >= 70) lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
 }
 
 static lv_obj_t *add_page(uint8_t index) {
@@ -82,8 +103,6 @@ void ui_init(void (*on_mic_toggle)()) {
 
   status_lbl = add_label(scr, "Starting...", &lv_font_montserrat_14, COLOR_DIM);
   lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, 4);
-  updated_lbl = add_label(scr, "", &lv_font_montserrat_14, COLOR_DIM);
-  lv_obj_align(updated_lbl, LV_ALIGN_TOP_RIGHT, -8, 4);
 
   tiles = lv_tileview_create(scr);
   lv_obj_set_size(tiles, LCD_W, LCD_H - STATUS_H - LEVEL_H - MIC_H);
@@ -117,9 +136,8 @@ void ui_set_wifi_info(const char *text) {
   if (waiting) show_waiting();
 }
 
-void ui_set_usage(JsonArrayConst services, const char *updated) {
+void ui_set_usage(JsonArrayConst services) {
   waiting = false;
-  lv_label_set_text(updated_lbl, updated ? updated : "");
 
   // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다
   lv_obj_t *active = lv_tileview_get_tile_act(tiles);
@@ -136,31 +154,24 @@ void ui_set_usage(JsonArrayConst services, const char *updated) {
   for (JsonObjectConst svc : services) {
     lv_obj_t *page = add_page(index);
 
-    char pos[12];
-    snprintf(pos, sizeof(pos), "%u/%u", index + 1, (unsigned)count);
-    lv_obj_t *head = lv_obj_create(page);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_align(add_label(head, svc["name"] | "?", &lv_font_montserrat_20, COLOR_ACCENT), LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_align(add_label(head, pos, &lv_font_montserrat_14, COLOR_DIM), LV_ALIGN_RIGHT_MID, 0, 0);
+    // 제목 오른쪽의 작은 글자는 이 값이 언제 것인지(시각)를 나타낸다
+    add_row(page, svc["name"] | "?", &lv_font_montserrat_28, COLOR_ACCENT, svc["note"] | "", &lv_font_montserrat_14,
+            COLOR_DIM);
 
     if (svc["headline"].is<const char *>()) {
-      add_label(page, svc["headline"], &lv_font_montserrat_28, lv_color_white());
+      add_label(page, svc["headline"], &lv_font_montserrat_48, lv_color_white());
     }
     if (svc["sub"].is<const char *>()) {
-      add_label(page, svc["sub"], &lv_font_montserrat_14, COLOR_DIM);
+      lv_obj_t *sub = add_label(page, svc["sub"], &lv_font_montserrat_14, COLOR_DIM);
+      lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
+      lv_obj_set_width(sub, lv_pct(100));
     }
-
     for (JsonObjectConst bar : svc["bars"].as<JsonArrayConst>()) {
-      add_row(page, bar["label"] | "", bar["text"] | "", COLOR_DIM);
-      lv_obj_t *b = lv_bar_create(page);
-      lv_obj_set_size(b, lv_pct(100), 8);
-      lv_bar_set_range(b, 0, 100);
-      lv_bar_set_value(b, constrain(bar["pct"] | 0, 0, 100), LV_ANIM_OFF);
+      add_gauge(page, bar);
     }
-
     for (JsonArrayConst row : svc["rows"].as<JsonArrayConst>()) {
-      add_row(page, row[0] | "", row[1] | "", COLOR_DIM);
+      add_row(page, row[0] | "", &lv_font_montserrat_20, COLOR_DIM, row[1] | "", &lv_font_montserrat_20,
+              lv_color_white());
     }
     index++;
   }

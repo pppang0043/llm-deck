@@ -12,7 +12,8 @@ void ui_set_status(const char *text);
 void ui_set_wifi_info(const char *text);
 
 // PC 도우미가 보낸 사용량 데이터로 페이지를 다시 그린다.
-void ui_set_usage(JsonArrayConst services, const char *updated);
+// 서비스 하나: {"name", "note", "headline", "sub", "bars": [{"label", "note", "text", "pct"}], "rows": [[이름, 값]]}
+void ui_set_usage(JsonArrayConst services);
 
 void ui_set_mic(bool on);
 void ui_set_level(uint8_t pct);

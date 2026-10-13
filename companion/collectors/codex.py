@@ -18,9 +18,9 @@ MAX_FILES = 5
 def _label(window: dict) -> str:
     minutes = window.get("window_minutes") or 0
     if minutes == 300:
-        return "5-hour"
+        return "5h"
     if minutes == 10080:
-        return "weekly"
+        return "Week"
     return f"{minutes // 60}h"
 
 
@@ -59,6 +59,5 @@ def collect(cfg: dict) -> dict | None:
             for w in (limits.get("primary"), limits.get("secondary"))
             if isinstance(w, dict)
         ]
-        rows = [["Plan", str(limits["plan_type"])]] if limits.get("plan_type") else []
-        return limits_page("Codex", windows, as_of, rows)
+        return limits_page("Codex", windows, as_of)
     return None

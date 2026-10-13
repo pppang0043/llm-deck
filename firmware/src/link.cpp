@@ -63,7 +63,7 @@ void link_loop() {
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["services"].is<JsonArrayConst>()) {
         JsonArrayConst services = doc["services"];
-        ui_set_usage(services, doc["updated"]);
+        ui_set_usage(services);
         Serial.printf("[link] usage via %s: %u services\n", link_name(from), (unsigned)services.size());
       }
     }
