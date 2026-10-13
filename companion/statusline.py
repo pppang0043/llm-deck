@@ -46,9 +46,9 @@ $OutputEncoding = $utf8
 $dir = Join-Path $env:USERPROFILE '.llm-deck'
 $payload = [Console]::In.ReadToEnd()
 if ($payload -match '"rate_limits"') {
-  $tmp = Join-Path $dir "claude-statusline.tmp.$PID"
-  [IO.File]::WriteAllText($tmp, $payload, $utf8)
-  Move-Item -Force $tmp (Join-Path $dir 'claude-statusline.json')
+  # 임시 파일을 거치지 않고 바로 쓴다. Claude Code 가 실행 중인 스크립트를 중단시키면 임시 파일이 남기 때문이다.
+  # 쓰다 만 파일은 도우미가 건너뛴다.
+  [IO.File]::WriteAllText((Join-Path $dir 'claude-statusline.json'), $payload, $utf8)
 }
 $next = Join-Path $dir 'statusline-next.cmd'
 if (Test-Path $next) {
