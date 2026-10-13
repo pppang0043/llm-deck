@@ -6,6 +6,7 @@ Claude Code / Codex 가 있는 PC 는 새 값을 올리고, 없는 PC 는 내려
 
 import json
 import os
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -13,6 +14,8 @@ import urllib.request
 API = "https://api.github.com/gists"
 FILE = "llm-deck.json"
 FETCH_INTERVAL = 60
+# 숫자는 그대로이고 시각만 바뀐 경우, 이만큼 지나야 다시 올린다 (쓸 때마다 올리지 않도록)
+PUSH_INTERVAL = 300
 
 
 def _request(method: str, url: str, token: str, body: dict | None = None) -> dict:
@@ -32,14 +35,21 @@ def _request(method: str, url: str, token: str, body: dict | None = None) -> dic
 
 
 def _token(cfg: dict) -> str:
-    return cfg.get("github_token") or os.environ.get("GITHUB_TOKEN", "")
+    """설정 파일 > 환경 변수 > GitHub CLI(gh) 로그인 순으로 토큰을 찾는다."""
+    token = cfg.get("github_token") or os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        return token
+    try:
+        return subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def create(cfg: dict) -> None:
     """공유용 gist 를 새로 만들고 id 를 알려준다."""
     token = _token(cfg)
     if not token:
-        print("[sync] config.toml 의 [sync] github_token 을 먼저 채우세요.")
+        print("[sync] GitHub 토큰이 없습니다. `gh auth login -s gist` 로 로그인하거나 config.toml 의 [sync] github_token 을 채우세요.")
         return
     gist = _request(
         "POST", API, token, {"description": "LLM Deck usage sync", "public": False, "files": {FILE: {"content": "{}"}}}
@@ -51,6 +61,12 @@ def newest(a: dict | None, b: dict | None) -> dict | None:
     if not a or not b:
         return a or b
     return a if a.get("as_of", 0) >= b.get("as_of", 0) else b
+
+
+def _worth_pushing(new: dict, old: dict | None) -> bool:
+    if not old or new.get("windows") != old.get("windows"):
+        return True
+    return new.get("as_of", 0) - old.get("as_of", 0) >= PUSH_INTERVAL
 
 
 class Sync:
@@ -96,7 +112,7 @@ class Sync:
         self._fetch()
         merged = {k: newest(local.get(k), self.remote.get(k)) for k in {*local, *self.remote}}
         merged = {k: v for k, v in merged.items() if v}
-        if merged != self.remote:
+        if any(_worth_pushing(v, self.remote.get(k)) for k, v in merged.items()):
             if self._call("PATCH", {"files": {FILE: {"content": json.dumps(merged, indent=1)}}}) is not None:
                 self.remote = merged
                 print(f"[sync] 새 값을 올렸습니다 ({', '.join(sorted(merged))})")

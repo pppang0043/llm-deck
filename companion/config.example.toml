@@ -27,7 +27,8 @@ admin_key = ""
 
 [sync]
 # 한도 사용률을 여러 PC 가 함께 쓰기 위한 비공개 GitHub gist. 비워 두면 이 PC 의 값만 씁니다.
-# github_token: github.com > Settings > Developer settings > Personal access tokens 에서 gist 권한만 준 토큰
+# github_token: 비워 두면 GitHub CLI 로그인(`gh auth login -s gist`)을 씁니다.
+#   gh 가 없는 PC 에서는 github.com > Settings > Developer settings > Personal access tokens 에서 gist 권한만 준 토큰을 적습니다.
 # gist_id: 처음 한 번 `uv run main.py --setup-sync` 로 만들고, 모든 PC 에 같은 값을 적습니다.
 github_token = ""
 gist_id = ""
