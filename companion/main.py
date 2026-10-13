@@ -47,7 +47,7 @@ _sync: sync.Sync | None = None
 
 
 def collect_limits(cfg: dict) -> list:
-    """구독 한도 페이지들. 이 PC 의 값과 다른 PC 가 올려 둔 값 중 최근 것을 쓴다."""
+    """구독 한도 페이지들. 이 PC 에 값이 있으면 그것을 보여주고, 없을 때만 다른 PC 가 올려 둔 값을 쓴다."""
     global _sync
     if _sync is None:
         _sync = sync.Sync(cfg.get("sync", {}))
@@ -58,11 +58,13 @@ def collect_limits(cfg: dict) -> list:
             local[section] = module.snapshot(cfg.get(section, {}))
         except Exception as e:
             print(f"[{section}] 수집 실패: {e}")
-    merged = _sync.merge(local)
+    # 공유 저장소에는 여러 PC 의 값을 합친 것을 올린다 (화면에 무엇을 보여주는지와는 별개)
+    shared = _sync.merge(local)
     pages = []
     for section, module in enabled:
-        if section in merged:
-            pages.append(limits_page(module.NAME, merged[section]))
+        snapshot = local.get(section) or shared.get(section)
+        if snapshot:
+            pages.append(limits_page(module.NAME, snapshot))
         elif hasattr(module, "hint") and module.hint():
             pages.append(module.hint())
     return pages
