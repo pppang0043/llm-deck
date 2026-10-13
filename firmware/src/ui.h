@@ -2,8 +2,8 @@
 
 #include <ArduinoJson.h>
 
-// 화면 구성: 위쪽 상태줄 / 가운데 서비스별 페이지(좌우로 넘김) / 아래쪽 마이크 버튼
-void ui_init(void (*on_mic_toggle)());
+// 화면 구성: 위쪽 상태줄(오른쪽 끝에 화면 돌리기 버튼) / 가운데 서비스별 페이지(좌우로 넘김) / 마이크 버튼
+void ui_init(void (*on_mic_toggle)(), void (*on_rotate)());
 
 // 상태줄 왼쪽 글자 (현재 연결 방식)
 void ui_set_status(const char *text);

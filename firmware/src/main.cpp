@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Preferences.h>
 
 #include "ble_link.h"
 #include "cloud.h"
@@ -38,7 +39,28 @@ static bool boot_button_pressed() {
   return false;
 }
 
+// 화면 방향 = 기울기로 알아낸 방향 + 버튼으로 더 돌린 횟수.
+// 버튼으로 돌린 횟수는 저장해 두므로, 기울기 방향이 맞지 않으면 버튼으로 한 번 맞춰 두면 된다.
+static Preferences prefs;
+static uint8_t rotate_offset = 0;
+static int tilt = 0;
+
+static void apply_rotation() {
+  uint8_t rotation = (tilt + rotate_offset) & 3;
+  if (rotation == display_rotation()) return;
+  display_set_rotation(rotation);
+  ui_layout();
+  Serial.printf("[main] screen rotation %d (tilt %d + button %d)\n", rotation, tilt, rotate_offset);
+}
+
+static void rotate_by_button() {
+  rotate_offset = (rotate_offset + 1) & 3;
+  prefs.putUChar("rot_offset", rotate_offset);
+  apply_rotation();
+}
+
 // 기기를 돌려 세우면 화면도 따라 돈다. 같은 방향이 잠깐 유지되어야 바꾼다 (흔들림에 반응하지 않도록).
+// 눕혀 놓았거나 애매하게 기울어 있으면 마지막 방향을 유지한다.
 static void follow_tilt() {
   static uint32_t checked_ms = 0;
   static int candidate = -1;
@@ -46,18 +68,17 @@ static void follow_tilt() {
 
   if (millis() - checked_ms < 150) return;
   checked_ms = millis();
-  int rotation = imu_rotation();
-  if (rotation < 0 || rotation == display_rotation()) {
+  int now = imu_rotation();
+  if (now < 0 || now == tilt) {
     candidate = -1;
     return;
   }
-  count = rotation == candidate ? count + 1 : 1;
-  candidate = rotation;
+  count = now == candidate ? count + 1 : 1;
+  candidate = now;
   if (count >= 4) {
-    display_set_rotation(rotation);
-    ui_layout();
-    Serial.printf("[main] screen rotation %d\n", rotation);
+    tilt = now;
     candidate = -1;
+    apply_rotation();
   }
 }
 
@@ -67,8 +88,17 @@ void setup() {
   pinMode(BTN_BOOT, INPUT_PULLUP);
 
   display_init();
-  ui_init(toggle_mic);
+  ui_init(toggle_mic, rotate_by_button);
   imu_init();
+  prefs.begin("llm-deck");
+  rotate_offset = prefs.getUChar("rot_offset", 0) & 3;
+  delay(50);  // 센서가 첫 값을 낼 때까지 잠깐 기다린다
+  int start = imu_rotation();
+  if (start >= 0) tilt = start;
+  float ax = 0, ay = 0, az = 0;
+  imu_read(&ax, &ay, &az);
+  Serial.printf("[main] tilt %d (accel %.2f %.2f %.2f), button %d\n", start, ax, ay, az, rotate_offset);
+  apply_rotation();
   link_init(set_mic);
   mic_init();
   net_init();

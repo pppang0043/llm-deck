@@ -24,6 +24,8 @@ static lv_obj_t *level_bar;
 static lv_obj_t *mic_btn;
 static lv_obj_t *mic_lbl;
 static void (*mic_toggle_cb)();
+static void (*rotate_cb)();
+static lv_obj_t *rotate_btn;
 static bool waiting = true;
 static bool mic_on = false;
 // 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
@@ -96,8 +98,13 @@ static void mic_btn_event(lv_event_t *e) {
   if (mic_toggle_cb) mic_toggle_cb();
 }
 
-void ui_init(void (*on_mic_toggle)()) {
+static void rotate_btn_event(lv_event_t *e) {
+  if (rotate_cb) rotate_cb();
+}
+
+void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   mic_toggle_cb = on_mic_toggle;
+  rotate_cb = on_rotate;
 
   lv_disp_t *disp = lv_disp_get_default();
   lv_disp_set_theme(disp, lv_theme_default_init(disp, COLOR_ACCENT, COLOR_DIM, true, LV_FONT_DEFAULT));
@@ -108,6 +115,16 @@ void ui_init(void (*on_mic_toggle)()) {
 
   status_lbl = add_label(scr, "Starting...", &lv_font_montserrat_14, COLOR_DIM);
   lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, 4);
+
+  // 화면 돌리기 버튼: 상태줄 오른쪽 끝에 작게. 누르기 쉽도록 반응 영역만 넓힌다.
+  rotate_btn = lv_btn_create(scr);
+  lv_obj_set_size(rotate_btn, 36, STATUS_H - 2);
+  lv_obj_set_style_bg_color(rotate_btn, COLOR_MIC_OFF, 0);
+  lv_obj_set_style_shadow_width(rotate_btn, 0, 0);
+  lv_obj_set_style_pad_all(rotate_btn, 0, 0);
+  lv_obj_set_ext_click_area(rotate_btn, 10);
+  lv_obj_add_event_cb(rotate_btn, rotate_btn_event, LV_EVENT_CLICKED, NULL);
+  lv_obj_center(add_label(rotate_btn, LV_SYMBOL_REFRESH, &lv_font_montserrat_14, lv_color_white()));
 
   tiles = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
@@ -131,6 +148,7 @@ static void render_usage();
 
 void ui_layout() {
   int w = display_width(), h = display_height();
+  lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 1);
   if (w > h) {
     // 가로: 왼쪽에 페이지, 오른쪽에 마이크 버튼
     lv_obj_set_size(tiles, w - MIC_W, h - STATUS_H);

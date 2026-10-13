@@ -13,10 +13,10 @@
 // +-4g 범위에서 1g 에 해당하는 값
 #define LSB_PER_G 8192.0f
 
-// 이 축으로 이만큼(g) 이상 기울어야 세운 것으로 본다
-#define TILT_ON 0.6f
-// 다른 축은 이보다 작아야 한다 (대각선으로 들고 있을 때 오락가락하지 않도록)
-#define TILT_OFF 0.45f
+// 이 축으로 이만큼(g) 이상 기울어야 세운 것으로 본다 (눕혀 놓으면 두 축 모두 작다)
+#define TILT_MIN 0.5f
+// 두 축의 차이가 이보다 커야 한다 (대각선으로 들고 있을 때 오락가락하지 않도록)
+#define TILT_MARGIN 0.2f
 
 static bool present = false;
 
@@ -62,7 +62,8 @@ int imu_rotation() {
   float x, y, z;
   if (!imu_read(&x, &y, &z)) return -1;
   // 센서가 보드에 붙은 방향에 따른 대응. 중력이 향하는 쪽이 화면의 아래가 된다.
-  if (fabsf(y) > TILT_ON && fabsf(x) < TILT_OFF) return y > 0 ? IMU_ROT_Y_POS : IMU_ROT_Y_NEG;
-  if (fabsf(x) > TILT_ON && fabsf(y) < TILT_OFF) return x > 0 ? IMU_ROT_X_POS : IMU_ROT_X_NEG;
+  float ax = fabsf(x), ay = fabsf(y);
+  if (ay > TILT_MIN && ay - ax > TILT_MARGIN) return y > 0 ? IMU_ROT_Y_POS : IMU_ROT_Y_NEG;
+  if (ax > TILT_MIN && ax - ay > TILT_MARGIN) return x > 0 ? IMU_ROT_X_POS : IMU_ROT_X_NEG;
   return -1;
 }
