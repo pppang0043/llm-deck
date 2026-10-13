@@ -37,8 +37,13 @@ static void wifi_task(void *) {
       station = true;
     }
     xSemaphoreGive(lock);
-    if (station && WiFi.status() != WL_CONNECTED) multi.run(8000);
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    // Wi-Fi 를 찾는 동안에는 같은 안테나를 쓰는 블루투스가 끊길 수 있다.
+    // 블루투스로 PC 와 연결되어 있으면 찾지 않고, 못 찾았을 때는 한동안 쉬었다가 다시 찾는다.
+    bool searched = false;
+    if (station && WiFi.status() != WL_CONNECTED && link_active() != LINK_BLE) {
+      searched = multi.run(8000) != WL_CONNECTED;
+    }
+    vTaskDelay(pdMS_TO_TICKS(searched ? 30000 : 3000));
   }
 }
 

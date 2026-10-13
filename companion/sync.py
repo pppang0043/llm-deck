@@ -1,6 +1,7 @@
 """한도 사용률을 비공개 GitHub gist 에 올려 여러 PC 가 함께 쓴다.
 
 Claude Code / Codex 가 있는 PC 는 새 값을 올리고, 없는 PC 는 내려받아 보여준다.
+올리려면 GitHub 로그인이 필요하고, 내려받기는 gist_id 만 있으면 된다.
 서비스의 구간마다 더 최근 값이 이긴다 (combine 참고). config.toml 의 [sync] 가 비어 있으면 아무것도 하지 않는다.
 """
 
@@ -14,6 +15,8 @@ import urllib.request
 API = "https://api.github.com/gists"
 FILE = "llm-deck.json"
 FETCH_INTERVAL = 60
+# 로그인 없이 읽을 때는 GitHub 가 시간당 60번까지만 허용하므로 더 드물게 읽는다
+FETCH_INTERVAL_ANONYMOUS = 180
 # 숫자는 그대로이고 시각만 바뀐 경우, 이만큼 지나야 다시 올린다 (쓸 때마다 올리지 않도록)
 PUSH_INTERVAL = 300
 
@@ -24,7 +27,7 @@ def _request(method: str, url: str, token: str, body: dict | None = None) -> dic
         data=json.dumps(body).encode() if body is not None else None,
         method=method,
         headers={
-            "Authorization": f"Bearer {token}",
+            **({"Authorization": f"Bearer {token}"} if token else {}),
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "llm-deck",
@@ -101,7 +104,8 @@ class Sync:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.gist_id and self.token)
+        # GitHub 로그인(토큰)이 없어도 읽기는 된다. 올리기만 못 한다.
+        return bool(self.gist_id)
 
     def _call(self, method: str, body: dict | None = None) -> dict | None:
         try:
@@ -115,7 +119,7 @@ class Sync:
             return None
 
     def _fetch(self) -> None:
-        if time.time() - self.fetched_at < FETCH_INTERVAL:
+        if time.time() - self.fetched_at < (FETCH_INTERVAL if self.token else FETCH_INTERVAL_ANONYMOUS):
             return
         self.fetched_at = time.time()
         gist = self._call("GET")
@@ -142,7 +146,7 @@ class Sync:
         self._fetch()
         merged = {k: combine(local.get(k), self.remote.get(k)) for k in [*local, *(k for k in self.remote if k not in local)]}
         merged = {k: v for k, v in merged.items() if v}
-        if any(_worth_pushing(v, self.remote.get(k)) for k, v in merged.items()):
+        if self.token and any(_worth_pushing(v, self.remote.get(k)) for k, v in merged.items()):
             if self._call("PATCH", {"files": {FILE: {"content": json.dumps(merged, indent=1)}}}) is not None:
                 self.remote = merged
                 print(f"[sync] 새 값을 올렸습니다 ({', '.join(sorted(merged))})")
