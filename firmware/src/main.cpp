@@ -89,12 +89,12 @@ static void show_clock() {
   if (millis() - checked_ms < 1000) return;
   checked_ms = millis();
 
-  char text[16] = "";
+  char text[32] = "";
   time_t now = time(nullptr);
   if (now > 1700000000) {
     struct tm local;
     localtime_r(&now, &local);
-    strftime(text, sizeof(text), "%m/%d %H:%M", &local);
+    snprintf(text, sizeof(text), "%d월 %d일 %02d:%02d", local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min);
   }
   ui_set_clock(text);
 }

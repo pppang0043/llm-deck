@@ -100,3 +100,9 @@ uv run main.py --clear-wifi   # 추가로 등록한 것을 모두 지운다
 PC 에서 마이크로 쓰려면 가상 오디오 장치가 필요하다 (Mac: [BlackHole](https://existential.audio/blackhole/) 2ch, Windows: VB-CABLE).
 도우미가 기기의 소리를 그 장치로 내보내므로, 다른 프로그램에서는 입력 장치로 BlackHole 을 고르면 된다.
 가상 장치 없이 수신만 확인하려면 `uv run main.py --mic on --record test.wav` (10초간 녹음해 파일로 저장).
+
+## 화면 글꼴
+
+화면의 한글은 나눔고딕(SIL Open Font License)으로 만든 글꼴 파일(`firmware/src/fonts/`)로 그린다.
+자주 쓰는 한글 2,350자와 영문/숫자가 들어 있다 (가장 큰 28 크기에는 화면에 쓰는 글자만 들어 있다).
+글자를 추가하려면 `lv_font_conv` 로 다시 만든다. 이 파일들 때문에 첫 빌드가 몇 분 걸린다.

@@ -1,4 +1,4 @@
-"""화면에 보여줄 숫자 형식. 기기 글꼴에 영문/숫자만 있으므로 ASCII 만 쓴다."""
+"""화면에 보여줄 글자 형식. 기기 글꼴에는 영문/숫자와 자주 쓰는 한글이 들어 있다."""
 
 import time
 from datetime import datetime
@@ -23,15 +23,20 @@ def fmt_when(ts: float) -> str:
     when = datetime.fromtimestamp(ts)
     if when.date() == datetime.now().date():
         return when.strftime("%H:%M")
-    return when.strftime("%b %d %H:%M")
+    return f"{when.month}월 {when.day}일 {when:%H:%M}"
+
+
+# 저장소에 적는 구간 이름(여러 PC 가 같은 이름으로 맞춰 쓴다) -> 화면에 보일 이름
+WINDOW_LABELS = {"5h": "5시간", "Week": "주간"}
 
 
 def limit_bar(label: str, used_pct: float, resets_at: float | None) -> dict:
     """구독 한도 한 구간(5시간/주간)을 막대 하나로 만든다. 초기화 시각이 지났으면 0% 로 본다."""
     if resets_at and resets_at <= time.time():
-        return {"label": label, "note": "", "text": "0%", "pct": 0}
+        return {"label": WINDOW_LABELS.get(label, label), "note": "", "text": "0%", "pct": 0}
     pct = max(0, min(100, round(used_pct)))
-    return {"label": label, "note": fmt_when(resets_at) if resets_at else "", "text": f"{pct}%", "pct": pct}
+    note = fmt_when(resets_at) if resets_at else ""
+    return {"label": WINDOW_LABELS.get(label, label), "note": note, "text": f"{pct}%", "pct": pct}
 
 
 def limits_page(name: str, snapshot: dict) -> dict:

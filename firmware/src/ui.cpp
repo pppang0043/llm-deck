@@ -4,6 +4,11 @@
 
 #include "display.h"
 
+// 한글이 들어 있는 글꼴 (src/fonts, 나눔고딕). 큰 숫자(48)는 기본 글꼴을 쓴다.
+LV_FONT_DECLARE(font_ko_14);
+LV_FONT_DECLARE(font_ko_20);
+LV_FONT_DECLARE(font_ko_28);
+
 #define STATUS_H 24
 #define MIC_H 56
 // 가로 화면에서는 마이크 버튼이 오른쪽에 세로로 놓인다
@@ -31,7 +36,7 @@ static bool waiting = true;
 static bool mic_on = false;
 // 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
 static JsonDocument last_usage;
-static char wifi_info[48] = "starting...";
+static char wifi_info[48] = "시작 중...";
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
@@ -59,8 +64,8 @@ static void add_gauge(lv_obj_t *parent, JsonObjectConst bar) {
   lv_obj_t *row = lv_obj_create(parent);
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-  lv_obj_align(add_label(row, bar["label"] | "", &lv_font_montserrat_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
-  lv_obj_align(add_label(row, bar["note"] | "", &lv_font_montserrat_14, COLOR_DIM), LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_align(add_label(row, bar["label"] | "", &font_ko_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_align(add_label(row, bar["note"] | "", &font_ko_14, COLOR_DIM), LV_ALIGN_BOTTOM_LEFT, 0, 0);
   lv_obj_align(add_label(row, bar["text"] | "", &lv_font_montserrat_48, color), LV_ALIGN_RIGHT_MID, 0, 0);
 
   lv_obj_t *b = lv_bar_create(parent);
@@ -81,8 +86,8 @@ static lv_obj_t *add_page(uint8_t index) {
 static void show_placeholder(const char *title, const char *body) {
   lv_obj_clean(tiles);
   lv_obj_t *page = add_page(0);
-  add_label(page, title, &lv_font_montserrat_20, COLOR_ACCENT);
-  lv_obj_t *lbl = add_label(page, body, &lv_font_montserrat_14, COLOR_DIM);
+  add_label(page, title, &font_ko_20, COLOR_ACCENT);
+  lv_obj_t *lbl = add_label(page, body, &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(lbl, lv_pct(100));
 }
@@ -91,7 +96,7 @@ static void show_placeholder(const char *title, const char *body) {
 static void show_waiting() {
   char body[200];
   snprintf(body, sizeof(body),
-           "Waiting for the PC companion app.\n\nUSB: plug in the cable\nBluetooth: " "LLM-Deck" "\nWi-Fi: %s", wifi_info);
+           "PC 도우미를 기다리는 중\n\nUSB: 케이블 연결\n블루투스: LLM-Deck\nWi-Fi: %s", wifi_info);
   show_placeholder("LLM Deck", body);
 }
 
@@ -114,7 +119,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_set_style_bg_color(scr, COLOR_BG, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-  status_lbl = add_label(scr, "Starting...", &lv_font_montserrat_14, COLOR_DIM);
+  status_lbl = add_label(scr, "시작 중...", &font_ko_14, COLOR_DIM);
   lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, 4);
 
   // 화면 돌리기 버튼: 상태줄 오른쪽 끝에 작게. 누르기 쉽도록 반응 영역만 넓힌다.
@@ -125,9 +130,9 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_set_style_pad_all(rotate_btn, 0, 0);
   lv_obj_set_ext_click_area(rotate_btn, 10);
   lv_obj_add_event_cb(rotate_btn, rotate_btn_event, LV_EVENT_CLICKED, NULL);
-  lv_obj_center(add_label(rotate_btn, LV_SYMBOL_REFRESH, &lv_font_montserrat_14, lv_color_white()));
+  lv_obj_center(add_label(rotate_btn, LV_SYMBOL_REFRESH, &font_ko_14, lv_color_white()));
 
-  clock_lbl = add_label(scr, "", &lv_font_montserrat_14, COLOR_DIM);
+  clock_lbl = add_label(scr, "", &font_ko_14, COLOR_DIM);
 
   tiles = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
@@ -140,7 +145,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   mic_btn = lv_btn_create(scr);
   lv_obj_set_style_radius(mic_btn, 0, 0);
   lv_obj_add_event_cb(mic_btn, mic_btn_event, LV_EVENT_CLICKED, NULL);
-  mic_lbl = add_label(mic_btn, "", &lv_font_montserrat_20, lv_color_white());
+  mic_lbl = add_label(mic_btn, "", &font_ko_20, lv_color_white());
   lv_obj_set_style_text_align(mic_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
   ui_layout();
@@ -210,7 +215,7 @@ static void render_usage() {
 
   size_t count = services.size();
   if (count == 0) {
-    show_placeholder("No services", "The companion app sent no usage data. Check its config.");
+    show_placeholder("표시할 내용 없음", "PC 도우미가 보낸 사용량이 없습니다.");
     return;
   }
 
@@ -220,14 +225,14 @@ static void render_usage() {
     lv_obj_t *page = add_page(index);
 
     // 제목 오른쪽의 작은 글자는 이 값이 언제 것인지(시각)를 나타낸다
-    add_row(page, svc["name"] | "?", &lv_font_montserrat_28, COLOR_ACCENT, svc["note"] | "", &lv_font_montserrat_14,
+    add_row(page, svc["name"] | "?", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14,
             COLOR_DIM);
 
     if (svc["headline"].is<const char *>()) {
       add_label(page, svc["headline"], &lv_font_montserrat_48, lv_color_white());
     }
     if (svc["sub"].is<const char *>()) {
-      lv_obj_t *sub = add_label(page, svc["sub"], &lv_font_montserrat_14, COLOR_DIM);
+      lv_obj_t *sub = add_label(page, svc["sub"], &font_ko_14, COLOR_DIM);
       lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
       lv_obj_set_width(sub, lv_pct(100));
     }
@@ -235,7 +240,7 @@ static void render_usage() {
       add_gauge(page, bar);
     }
     for (JsonArrayConst row : svc["rows"].as<JsonArrayConst>()) {
-      add_row(page, row[0] | "", &lv_font_montserrat_20, COLOR_DIM, row[1] | "", &lv_font_montserrat_20,
+      add_row(page, row[0] | "", &font_ko_20, COLOR_DIM, row[1] | "", &font_ko_20,
               lv_color_white());
     }
     index++;
@@ -250,9 +255,9 @@ void ui_set_mic(bool on) {
   lv_obj_set_style_bg_color(mic_btn, on ? COLOR_MIC_ON : COLOR_MIC_OFF, 0);
   // 가로 화면의 버튼은 좁아서 두 줄로 쓴다
   if (wide) {
-    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "\nMIC\nON" : LV_SYMBOL_MUTE "\nMIC\nOFF");
+    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "\n마이크\n켜짐" : LV_SYMBOL_MUTE "\n마이크\n꺼짐");
   } else {
-    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "  MIC ON" : LV_SYMBOL_MUTE "  MIC OFF");
+    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "  마이크 켜짐" : LV_SYMBOL_MUTE "  마이크 꺼짐");
   }
   lv_obj_center(mic_lbl);
   if (!on) ui_set_level(0);

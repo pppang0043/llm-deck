@@ -42,10 +42,10 @@ static void save_if_due() {
 static const char *link_name(Link link) {
   switch (link) {
     case LINK_USB: return "USB";
-    case LINK_BLE: return "Bluetooth";
+    case LINK_BLE: return "블루투스";
     case LINK_WIFI: return "Wi-Fi";
-    case LINK_CLOUD: return "Cloud";
-    default: return "No PC";
+    case LINK_CLOUD: return "클라우드";
+    default: return "PC 없음";
   }
 }
 
@@ -63,11 +63,22 @@ static void set_clock(int64_t now, int32_t utc_offset) {
   settimeofday(&tv, nullptr);
 }
 
+// 로그용 영어 이름
+static const char *link_tag(Link link) {
+  switch (link) {
+    case LINK_USB: return "USB";
+    case LINK_BLE: return "Bluetooth";
+    case LINK_WIFI: return "Wi-Fi";
+    case LINK_CLOUD: return "Cloud";
+    default: return "No PC";
+  }
+}
+
 static void set_active(Link link) {
   if (link == active) return;
   active = link;
   ui_set_status(link_name(link));
-  Serial.printf("[link] active: %s\n", link_name(link));
+  Serial.printf("[link] active: %s\n", link_tag(link));
 }
 
 void link_init(void (*set_mic)(bool on)) {
@@ -103,7 +114,7 @@ void link_loop() {
   if (!message.empty()) {
     JsonDocument doc;
     if (deserializeJson(doc, message)) {
-      Serial.printf("[link] bad json from %s (%u bytes)\n", link_name(from), (unsigned)message.size());
+      Serial.printf("[link] bad json from %s (%u bytes)\n", link_tag(from), (unsigned)message.size());
     } else {
       last_ms = millis();
       set_active(from);
@@ -117,7 +128,7 @@ void link_loop() {
         ui_set_usage(services);
         shown.clear();
         serializeJson(services, shown);
-        Serial.printf("[link] usage via %s: %u services\n", link_name(from), (unsigned)services.size());
+        Serial.printf("[link] usage via %s: %u services\n", link_tag(from), (unsigned)services.size());
       }
     }
   }

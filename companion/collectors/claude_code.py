@@ -53,4 +53,4 @@ def hint() -> dict | None:
     """값이 어디에도 없을 때 보여줄 안내. Claude Code 를 쓰는 PC 에서만 보여준다."""
     if not SETTINGS.parent.is_dir():
         return None
-    return {"name": NAME, "headline": "No data", "sub": "run main.py --install-statusline"}
+    return {"name": NAME, "headline": "-", "sub": "값이 없습니다. PC 에서 main.py --install-statusline 을 실행하세요."}

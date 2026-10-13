@@ -32,14 +32,25 @@ static void format_when(time_t when, char *out, size_t len) {
   localtime_r(&now, &now_tm);
   localtime_r(&when, &when_tm);
   bool today = now_tm.tm_year == when_tm.tm_year && now_tm.tm_yday == when_tm.tm_yday;
-  strftime(out, len, today ? "%H:%M" : "%b %d %H:%M", &when_tm);
+  if (today) {
+    snprintf(out, len, "%02d:%02d", when_tm.tm_hour, when_tm.tm_min);
+  } else {
+    snprintf(out, len, "%d월 %d일 %02d:%02d", when_tm.tm_mon + 1, when_tm.tm_mday, when_tm.tm_hour, when_tm.tm_min);
+  }
 }
 
 // 공유 저장소의 내용을 화면 페이지 형식으로 바꾼다 (PC 도우미의 collectors/fmt.py 와 같은 규칙)
 //   {"claude_code": {"name": "Claude Code", "as_of": 시각, "windows": [[이름, 사용률, 초기화 시각], ...]}, ...}
+// 저장소에 적힌 구간 이름(여러 PC 가 같은 이름으로 맞춰 쓴다)을 화면에 보일 이름으로 바꾼다
+static const char *window_label(const char *key) {
+  if (strcmp(key, "5h") == 0) return "5시간";
+  if (strcmp(key, "Week") == 0) return "주간";
+  return key;
+}
+
 static void build_pages(JsonObjectConst shared, JsonArray services) {
   time_t now = time(nullptr);
-  char text[24];
+  char text[32];
   for (JsonPairConst item : shared) {
     JsonObjectConst snapshot = item.value();
     JsonObject page = services.add<JsonObject>();
@@ -53,7 +64,7 @@ static void build_pages(JsonObjectConst shared, JsonArray services) {
       bool reset = resets_at != 0 && resets_at <= now;
       int pct = reset ? 0 : constrain((int)lround(window[1] | 0.0), 0, 100);
       JsonObject bar = bars.add<JsonObject>();
-      bar["label"] = window[0] | "";
+      bar["label"] = window_label(window[0] | "");
       bar["pct"] = pct;
       snprintf(text, sizeof(text), "%d%%", pct);
       bar["text"] = text;

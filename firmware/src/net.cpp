@@ -95,7 +95,7 @@ void net_init() {
     station = true;
   }
   Serial.printf("[net] %u saved wifi networks%s\n", (unsigned)saved.size(), strlen(WIFI_SSID) > 0 ? " + secrets.h" : "");
-  ui_set_wifi_info(station ? "connecting..." : "not set up");
+  ui_set_wifi_info(station ? "연결 중..." : "설정 안 됨");
   xTaskCreatePinnedToCore(wifi_task, "wifi", 4096, NULL, 1, NULL, 1);
 }
 
@@ -133,7 +133,7 @@ void net_loop() {
     ui_set_wifi_info(WiFi.localIP().toString().c_str());
   } else if (!connected && was_connected) {
     Serial.println("[net] wifi lost");
-    ui_set_wifi_info("reconnecting...");
+    ui_set_wifi_info("다시 연결 중...");
   }
   was_connected = connected;
   if (connected) server.handleClient();
