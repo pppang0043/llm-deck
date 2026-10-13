@@ -37,7 +37,19 @@ uv run main.py --link wifi   # Wi-Fi
 | 블루투스 | Mac 은 시스템 설정 > 개인정보 보호 및 보안 > Bluetooth 에서 터미널 앱 허용 | 1/4 로 압축 (ADPCM) |
 | Wi-Fi | `firmware/include/secrets.h` 에 공유기 Wi-Fi 이름/비밀번호(2.4GHz)를 적고 펌웨어를 다시 올린다. PC 와 같은 공유기여야 한다 | 원본 그대로 |
 
-API 사용량까지 보려면 `companion/config.example.toml` 을 `config.toml` 로 복사해 키를 채운다.
+## 사용량 페이지
+
+| 페이지 | 보여주는 것 | 준비할 것 |
+|---|---|---|
+| Claude Code | 구독 한도 사용률 (5시간 / 주간) | PC 마다 한 번 `uv run main.py --install-statusline` |
+| Codex | ChatGPT 구독 한도 사용률 (5시간 / 주간) | 없음 (그 PC 에서 Codex CLI 를 쓴 적이 있으면 나온다) |
+| Anthropic API / OpenAI API | 비용, 토큰 | `companion/config.example.toml` 을 `config.toml` 로 복사해 Admin 키를 채운다 |
+
+한도 사용률은 계정 기준 값이라 다른 PC 에서 쓴 양도 포함된다. 다만 도우미가 도는 PC 에서
+Claude Code / Codex 가 마지막으로 응답한 시점의 값이며, 그 시각이 페이지의 "As of" 에 나온다.
+
+`--install-statusline` 은 Claude Code 설정(`~/.claude/settings.json`)의 상태줄 명령 앞에 값을 저장하는
+스크립트를 끼워 넣는다. 원래 상태줄 명령은 그대로 이어서 실행된다. 되돌리려면 `--uninstall-statusline`.
 
 ## 사용법
 

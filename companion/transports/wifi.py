@@ -6,11 +6,14 @@ import struct
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 SERVICE_TYPE = "_llm-deck._tcp.local."
 HOSTNAME = "llm-deck.local"
 UDP_PORT = 4010
 HEADER = struct.Struct("<I")
+# 기기 찾기(mDNS)가 가끔 실패하므로 마지막으로 연결된 주소를 기억해 둔다
+LAST_ADDRESS = Path.home() / ".llm-deck" / "device-address"
 
 
 class WifiTransport:
@@ -22,35 +25,49 @@ class WifiTransport:
         self.address = None
         self.sock = None
 
-    def _find(self) -> str | None:
-        """기기의 IP 를 찾는다. 설정에 적힌 주소 > mDNS 서비스 검색 > llm-deck.local 순."""
+    def _candidates(self):
+        """기기 주소 후보. 설정에 적힌 주소 > 지난번에 연결된 주소 > mDNS 서비스 검색 > llm-deck.local 순."""
         if self.host:
-            return self.host
+            yield self.host
+            return
+        try:
+            yield LAST_ADDRESS.read_text().strip()
+        except OSError:
+            pass
 
         from zeroconf import Zeroconf
 
         zc = Zeroconf()
         try:
-            info = zc.get_service_info(SERVICE_TYPE, f"llm-deck.{SERVICE_TYPE}", timeout=3000)
+            info = zc.get_service_info(SERVICE_TYPE, f"llm-deck.{SERVICE_TYPE}", timeout=5000)
             if info and info.parsed_addresses():
-                return info.parsed_addresses()[0]
+                yield info.parsed_addresses()[0]
         finally:
             zc.close()
         try:
-            return socket.gethostbyname(HOSTNAME)
+            yield socket.gethostbyname(HOSTNAME)
         except OSError:
-            return None
+            pass
+
+    @staticmethod
+    def _is_device(address: str) -> bool:
+        # 엉뚱한 서버가 대답할 수도 있으므로 기기의 응답 형식인지 확인한다
+        try:
+            with urllib.request.urlopen(f"http://{address}/status", timeout=3) as res:
+                return "mic" in json.load(res)
+        except (urllib.error.URLError, OSError, ValueError, TypeError):
+            return False
 
     def open(self) -> bool:
-        address = self._find()
+        address = next((a for a in self._candidates() if a and self._is_device(a)), None)
         if not address:
             return False
-        try:
-            with urllib.request.urlopen(f"http://{address}/status", timeout=3):
-                pass
-        except (urllib.error.URLError, OSError):
-            return False
         self.address = address
+        try:
+            LAST_ADDRESS.parent.mkdir(exist_ok=True)
+            LAST_ADDRESS.write_text(address)
+        except OSError:
+            pass
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

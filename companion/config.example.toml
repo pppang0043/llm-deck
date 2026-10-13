@@ -10,6 +10,11 @@ host = ""
 port = ""
 
 [claude_code]
+# 구독 한도 사용률. PC 마다 한 번 `uv run main.py --install-statusline` 을 실행해야 값이 들어옵니다.
+enabled = true
+
+[codex]
+# Codex(ChatGPT 구독) 한도 사용률. Codex CLI 를 쓴 적이 있으면 자동으로 나옵니다.
 enabled = true
 
 [anthropic_api]

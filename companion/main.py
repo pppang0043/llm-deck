@@ -5,6 +5,7 @@
     uv run main.py --dry-run        기기로 보내지 않고, 보낼 내용만 출력한다
     uv run main.py --record a.wav   마이크 소리를 10초간 WAV 로 저장하고 끝낸다 (수신 확인용)
     uv run main.py --mic on         기기의 마이크를 PC 에서 켠다 (off 로 끈다)
+    uv run main.py --install-statusline    Claude Code 한도 사용률을 받아오도록 설정한다 (PC 마다 한 번)
 """
 
 import argparse
@@ -15,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 import audio
+import statusline
 from collectors import COLLECTORS
 from transports import TRANSPORTS
 
@@ -66,7 +68,13 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="기기로 보내지 않고 보낼 내용만 출력")
     parser.add_argument("--record", metavar="WAV", help=f"마이크 소리를 {RECORD_SECONDS}초간 WAV 파일로 저장하고 종료")
     parser.add_argument("--mic", choices=["on", "off"], help="기기의 마이크를 켜거나 끈다")
+    parser.add_argument("--install-statusline", action="store_true", help="Claude Code 한도 사용률을 받아오도록 설정")
+    parser.add_argument("--uninstall-statusline", action="store_true", help="위 설정을 원래대로 되돌린다")
     args = parser.parse_args()
+    if args.install_statusline:
+        return statusline.install()
+    if args.uninstall_statusline:
+        return statusline.uninstall()
     cfg = load_config()
 
     if args.dry_run:
