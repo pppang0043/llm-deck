@@ -1,7 +1,7 @@
 """한도 사용률을 비공개 GitHub gist 에 올려 여러 PC 가 함께 쓴다.
 
 Claude Code / Codex 가 있는 PC 는 새 값을 올리고, 없는 PC 는 내려받아 보여준다.
-서비스마다 가장 최근 시각(as_of)의 값이 이긴다. config.toml 의 [sync] 가 비어 있으면 아무것도 하지 않는다.
+서비스의 구간마다 더 최근 값이 이긴다 (combine 참고). config.toml 의 [sync] 가 비어 있으면 아무것도 하지 않는다.
 """
 
 import json
@@ -57,10 +57,31 @@ def create(cfg: dict) -> None:
     print(f'[sync] gist 를 만들었습니다. 모든 PC 의 config.toml [sync] 에 적으세요:\n    gist_id = "{gist["id"]}"')
 
 
-def newest(a: dict | None, b: dict | None) -> dict | None:
+def combine(a: dict | None, b: dict | None) -> dict | None:
+    """같은 서비스의 두 값을 합친다. 구간(5시간/주간)마다 더 최근 것을 고른다.
+
+    기록된 시각은 믿을 수 없다. 쉬고 있는 Claude Code 세션이 며칠 전 값을 방금 것처럼 다시 내보내기 때문이다.
+    대신 사용률은 한 구간 안에서 늘기만 하므로, 초기화 시각이 더 늦은 쪽(새 구간)이 최근이고,
+    초기화 시각이 같으면 사용률이 높은 쪽이 최근이다. 초기화 시각이 지난 구간은 버린다.
+    """
     if not a or not b:
         return a or b
-    return a if a.get("as_of", 0) >= b.get("as_of", 0) else b
+    now = time.time()
+    best: dict[str, list] = {}
+    for snapshot in (a, b):
+        for window in snapshot.get("windows", []):
+            label, pct, resets_at = window[0], window[1] or 0, window[2] or 0
+            if resets_at and resets_at <= now:
+                continue
+            old = best.get(label)
+            if old is None or (resets_at, pct) > (old[2] or 0, old[1] or 0):
+                best[label] = window
+    # 짧은 구간(먼저 초기화되는 쪽)이 앞에 오게 한다: 5시간, 주간 순
+    windows = sorted(best.values(), key=lambda w: w[2] or 0)
+    # 합친 결과와 값이 같은 쪽의 시각을 쓴다
+    same = [x["as_of"] for x in (a, b) if x.get("windows") == windows]
+    as_of = max(same) if same else max(a.get("as_of", 0), b.get("as_of", 0))
+    return {**a, **b, "as_of": as_of, "windows": windows}
 
 
 def _worth_pushing(new: dict, old: dict | None) -> bool:
@@ -119,7 +140,7 @@ class Sync:
         if not self.enabled:
             return {k: v for k, v in local.items() if v}
         self._fetch()
-        merged = {k: newest(local.get(k), self.remote.get(k)) for k in [*local, *(k for k in self.remote if k not in local)]}
+        merged = {k: combine(local.get(k), self.remote.get(k)) for k in [*local, *(k for k in self.remote if k not in local)]}
         merged = {k: v for k, v in merged.items() if v}
         if any(_worth_pushing(v, self.remote.get(k)) for k, v in merged.items()):
             if self._call("PATCH", {"files": {FILE: {"content": json.dumps(merged, indent=1)}}}) is not None:

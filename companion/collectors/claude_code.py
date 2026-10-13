@@ -7,14 +7,16 @@ Claude Code 는 상태줄을 그릴 때마다 한도 사용률을 스크립트�
 
 import json
 
-from statusline import SETTINGS, SNAPSHOT
+import sync
+from statusline import DATA_DIR, SETTINGS, SNAPSHOT
 
 NAME = "Claude Code"
 WINDOWS = [("five_hour", "5h"), ("seven_day", "Week")]
+# 여러 세션이 번갈아 덮어쓰는 SNAPSHOT 에서 지금까지 본 가장 최근 값을 모아 둔 파일
+STATE = DATA_DIR / "claude-limits.json"
 
 
-def snapshot(cfg: dict) -> dict | None:
-    """{"name": 제목, "as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
+def _read_snapshot() -> dict | None:
     try:
         limits = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["rate_limits"]
         as_of = SNAPSHOT.stat().st_mtime
@@ -25,7 +27,26 @@ def snapshot(cfg: dict) -> dict | None:
         for key, label in WINDOWS
         if isinstance(limits.get(key), dict)
     ]
-    return {"name": NAME, "as_of": as_of, "windows": windows} if windows else None
+    return {"name": NAME, "as_of": as_of, "windows": windows}
+
+
+def snapshot(cfg: dict) -> dict | None:
+    """{"name": 제목, "as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None.
+
+    상태줄 파일은 마지막에 그려진 세션의 값일 뿐이라(쉬고 있는 세션은 옛 값을 내보낸다),
+    지금까지 본 값과 합쳐서 가장 최근 것을 돌려준다.
+    """
+    try:
+        state = json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = None
+    merged = sync.combine(state, _read_snapshot())
+    if merged and merged != state:
+        try:
+            STATE.write_text(json.dumps(merged), encoding="utf-8")
+        except OSError:
+            pass
+    return merged if merged and merged["windows"] else None
 
 
 def hint() -> dict | None:
