@@ -11,8 +11,6 @@
 #include "ui.h"
 
 #define HOSTNAME "llm-deck"
-#define AP_SSID "LLM-Deck"
-#define AP_PASSWORD "llmdeck1234"
 
 static WebServer server(80);
 static bool station = false;
@@ -46,33 +44,28 @@ void net_init() {
   WiFi.setHostname(HOSTNAME);
 
   station = strlen(WIFI_SSID) > 0;
-  if (station) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    ui_set_wifi_info("connecting...");
+  if (!station) {
+    WiFi.mode(WIFI_OFF);
+    Serial.println("[net] wifi not configured (secrets.h)");
+    ui_set_wifi_info("not set up");
     return;
   }
-
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-  start_services();
-  Serial.printf("[net] access point %s, ip %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
-  ui_set_wifi_info("join " AP_SSID " / " AP_PASSWORD);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  ui_set_wifi_info("connecting...");
 }
 
 void net_loop() {
-  if (station) {
-    bool connected = WiFi.status() == WL_CONNECTED;
-    if (connected && !was_connected) {
-      Serial.printf("[net] connected, ip %s\n", WiFi.localIP().toString().c_str());
-      start_services();
-      ui_set_wifi_info(WiFi.localIP().toString().c_str());
-    } else if (!connected && was_connected) {
-      Serial.println("[net] wifi lost");
-      ui_set_wifi_info("reconnecting...");
-    }
-    was_connected = connected;
-    if (!connected) return;
+  if (!station) return;
+  bool connected = WiFi.status() == WL_CONNECTED;
+  if (connected && !was_connected) {
+    Serial.printf("[net] connected, ip %s\n", WiFi.localIP().toString().c_str());
+    start_services();
+    ui_set_wifi_info(WiFi.localIP().toString().c_str());
+  } else if (!connected && was_connected) {
+    Serial.println("[net] wifi lost");
+    ui_set_wifi_info("reconnecting...");
   }
-  server.handleClient();
+  was_connected = connected;
+  if (connected) server.handleClient();
 }

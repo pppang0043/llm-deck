@@ -35,12 +35,7 @@ uv run main.py --link wifi   # Wi-Fi
 |---|---|---|
 | USB | 케이블만 연결 | 원본 그대로 |
 | 블루투스 | Mac 은 시스템 설정 > 개인정보 보호 및 보안 > Bluetooth 에서 터미널 앱 허용 | 1/4 로 압축 (ADPCM) |
-| Wi-Fi | 아래 둘 중 하나 | 원본 그대로 |
-
-Wi-Fi 는 두 가지로 쓸 수 있다.
-
-- **기기가 만든 Wi-Fi 에 PC 가 접속** (기본): PC 에서 `LLM-Deck` (비밀번호 `llmdeck1234`) 에 접속한다. 이 Wi-Fi 에는 인터넷이 없으므로, PC 가 유선 등 다른 경로로 인터넷에 연결되어 있어야 API 사용량을 가져올 수 있다
-- **같은 공유기에 접속**: `firmware/include/secrets.h` 에 Wi-Fi 이름/비밀번호(2.4GHz)를 적고 펌웨어를 다시 올린다
+| Wi-Fi | `firmware/include/secrets.h` 에 공유기 Wi-Fi 이름/비밀번호(2.4GHz)를 적고 펌웨어를 다시 올린다. PC 와 같은 공유기여야 한다 | 원본 그대로 |
 
 API 사용량까지 보려면 `companion/config.example.toml` 을 `config.toml` 로 복사해 키를 채운다.
 
