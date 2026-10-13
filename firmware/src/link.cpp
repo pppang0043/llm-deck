@@ -5,6 +5,7 @@
 #include <string>
 
 #include "cloud.h"
+#include "net.h"
 #include "ui.h"
 
 // 이 시간 동안 PC 에서 소식이 없으면 연결이 끊긴 것으로 본다
@@ -93,6 +94,8 @@ void link_loop() {
       set_active(from);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
+      if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
+      if (doc["wifi_clear"] | false) net_clear_wifi();
       if (doc["services"].is<JsonArrayConst>()) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);

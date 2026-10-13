@@ -5,12 +5,15 @@
     uv run main.py --dry-run        기기로 보내지 않고, 보낼 내용만 출력한다
     uv run main.py --record a.wav   마이크 소리를 10초간 WAV 로 저장하고 끝낸다 (수신 확인용)
     uv run main.py --mic on         기기의 마이크를 PC 에서 켠다 (off 로 끈다)
+    uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
+    uv run main.py --clear-wifi     추가로 등록한 Wi-Fi 를 모두 지운다
     uv run main.py --sync-only      기기 없이, 이 PC 의 한도 사용률을 다른 PC 와 공유만 한다
     uv run main.py --setup-sync     공유에 쓸 비공개 gist 를 만든다 (처음 한 번)
     uv run main.py --install-statusline    Claude Code 한도 사용률을 받아오도록 설정한다 (PC 마다 한 번)
 """
 
 import argparse
+import getpass
 import json
 import time
 import tomllib
@@ -92,6 +95,26 @@ def connect(names: list[str], cfg: dict, on_audio):
     return None
 
 
+def wifi_setup(cfg: dict, add: bool) -> None:
+    """기기에 Wi-Fi 를 등록하거나 지운다. 비밀번호가 무선으로 새지 않도록 USB 로만 보낸다."""
+    if add:
+        ssid = input("Wi-Fi 이름 (2.4GHz): ").strip()
+        password = getpass.getpass("비밀번호 (입력해도 화면에 보이지 않습니다): ")
+        if not ssid:
+            return
+        message = {"wifi_add": {"ssid": ssid, "password": password}}
+    else:
+        message = {"wifi_clear": True}
+    transport = TRANSPORTS["usb"](cfg.get("device", {}), lambda seq, pcm: None)
+    if not transport.open():
+        print("[device] USB 로 연결된 기기를 찾지 못했습니다.")
+        return
+    transport.send(message)
+    time.sleep(1)
+    transport.close()
+    print("[device] 등록했습니다. 최대 5개까지 기억합니다." if add else "[device] 지웠습니다. 기기를 다시 켜면 적용됩니다.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM Deck PC companion")
     parser.add_argument("--link", choices=["auto", *TRANSPORTS], help="연결 방식 (기본: 설정 파일 값 또는 auto)")
@@ -100,6 +123,8 @@ def main() -> None:
     parser.add_argument("--mic", choices=["on", "off"], help="기기의 마이크를 켜거나 끈다")
     parser.add_argument("--install-statusline", action="store_true", help="Claude Code 한도 사용률을 받아오도록 설정")
     parser.add_argument("--uninstall-statusline", action="store_true", help="위 설정을 원래대로 되돌린다")
+    parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
+    parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     args = parser.parse_args()
@@ -109,6 +134,8 @@ def main() -> None:
         return statusline.uninstall()
     cfg = load_config()
 
+    if args.add_wifi or args.clear_wifi:
+        return wifi_setup(cfg, add=args.add_wifi)
     if args.setup_sync:
         return sync.create(cfg.get("sync", {}))
     if args.sync_only:

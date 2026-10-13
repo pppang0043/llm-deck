@@ -63,6 +63,16 @@ Claude Code / Codex 를 쓰는 PC 에서 도우미가 돌고 있으면 새 값�
 기기는 도우미가 한 번 알려준 공유 주소를 기억한다. 그 뒤로는 PC 도우미가 없어도, Wi-Fi 만 연결되어 있으면
 기기가 직접 값을 읽어 온다 (화면 왼쪽 위에 "Cloud"). 이때 PC 는 전원만 주면 되고 아무 설정도 필요 없다.
 공유 저장소 반영이 최대 5분 늦을 수 있다.
+
+### Wi-Fi 여러 곳 등록
+
+다른 장소의 Wi-Fi 나 휴대폰 핫스팟을 추가로 등록하면, 기기가 그중 잡히는 곳에 알아서 접속한다 (최대 5개, 2.4GHz 만).
+기기를 USB 로 연결한 상태에서 실행한다. 펌웨어를 다시 올릴 필요는 없다.
+
+```sh
+uv run main.py --add-wifi     # 이름과 비밀번호를 물어본다
+uv run main.py --clear-wifi   # 추가로 등록한 것을 모두 지운다
+```
 기기를 연결하지 않는 PC(예: 항상 켜 둔 미니 PC)에서는 `uv run main.py --sync-only` 로 공유만 한다.
 
 `--install-statusline` 은 Claude Code 설정(`~/.claude/settings.json`)의 상태줄 명령 앞에 값을 저장하는

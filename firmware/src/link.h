@@ -13,6 +13,7 @@ void link_init(void (*set_mic)(bool on));
 //   {"services": [...], "updated": "12:34"}  사용량 화면 갱신
 //   {"mic": true}                            마이크 켜기/끄기
 //   {"sync_url": "https://..."}              공유 저장소 주소 (기기가 기억한다)
+//   {"wifi_add": {"ssid", "password"}}       Wi-Fi 추가 등록 / {"wifi_clear": true} 추가한 것 모두 삭제
 void link_submit(Link from, const char *data, size_t len);
 
 void link_loop();
