@@ -34,6 +34,10 @@ def limit_bar(label: str, used_pct: float, resets_at: float | None) -> dict:
     return {"label": label, "note": fmt_when(resets_at) if resets_at else "", "text": f"{pct}%", "pct": pct}
 
 
-def limits_page(name: str, windows: list[tuple[str, float, float | None]], as_of: float) -> dict:
-    """한도 사용률 페이지. windows 는 (이름, 사용률 %, 초기화 시각) 목록. 화면이 작아 글자를 최소로 한다."""
-    return {"name": name, "note": fmt_when(as_of), "bars": [limit_bar(*w) for w in windows]}
+def limits_page(name: str, snapshot: dict) -> dict:
+    """한도 사용률 페이지. snapshot 은 {"as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}."""
+    return {
+        "name": name,
+        "note": fmt_when(snapshot["as_of"]),
+        "bars": [limit_bar(*w) for w in snapshot["windows"]],
+    }

@@ -45,8 +45,21 @@ uv run main.py --link wifi   # Wi-Fi
 | Codex | ChatGPT 구독 한도 사용률 (5시간 / 주간) | 없음 (그 PC 에서 Codex CLI 를 쓴 적이 있으면 나온다) |
 | Anthropic API / OpenAI API | 비용, 토큰 | `companion/config.example.toml` 을 `config.toml` 로 복사해 Admin 키를 채운다 |
 
-한도 사용률은 계정 기준 값이라 다른 PC 에서 쓴 양도 포함된다. 다만 도우미가 도는 PC 에서
-Claude Code / Codex 가 마지막으로 응답한 시점의 값이며, 그 시각이 페이지의 "As of" 에 나온다.
+한도 사용률은 계정 기준 값이라 다른 PC 에서 쓴 양도 포함된다. 다만 Claude Code / Codex 가
+마지막으로 응답한 시점의 값이며, 그 시각이 페이지 제목 옆에 나온다.
+
+기기는 마지막으로 받은 값을 기억한다. PC 없이 전원만 연결해도 그 값을 보여준다.
+
+### 여러 PC 에서 쓰기
+
+Claude Code / Codex 가 없는 PC 에 연결해도 최신 값을 보려면, 값을 비공개 GitHub gist 로 공유한다.
+
+1. github.com > Settings > Developer settings > Personal access tokens 에서 gist 권한만 있는 토큰을 만든다
+2. `companion/config.toml` 의 `[sync] github_token` 에 적고 `uv run main.py --setup-sync` 를 한 번 실행한다
+3. 출력된 `gist_id` 를 모든 PC 의 `config.toml` 에 토큰과 함께 적는다
+
+Claude Code / Codex 를 쓰는 PC 에서 도우미가 돌고 있으면 새 값이 올라간다.
+기기를 연결하지 않는 PC(예: 항상 켜 둔 미니 PC)에서는 `uv run main.py --sync-only` 로 공유만 한다.
 
 `--install-statusline` 은 Claude Code 설정(`~/.claude/settings.json`)의 상태줄 명령 앞에 값을 저장하는
 스크립트를 끼워 넣는다. 원래 상태줄 명령은 그대로 이어서 실행된다. 되돌리려면 `--uninstall-statusline`.

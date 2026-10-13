@@ -7,30 +7,29 @@ Claude Code 는 상태줄을 그릴 때마다 한도 사용률을 스크립트�
 
 import json
 
-from statusline import SNAPSHOT
+from statusline import SETTINGS, SNAPSHOT
 
-from .fmt import limits_page
-
+NAME = "Claude Code"
 WINDOWS = [("five_hour", "5h"), ("seven_day", "Week")]
 
 
-def collect(cfg: dict) -> dict | None:
-    if not cfg.get("enabled", True):
-        return None
+def snapshot(cfg: dict) -> dict | None:
+    """{"as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
     try:
         limits = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["rate_limits"]
         as_of = SNAPSHOT.stat().st_mtime
     except (OSError, ValueError, KeyError):
-        return {
-            "name": "Claude Code",
-            "headline": "No data",
-            "sub": "run main.py --install-statusline",
-        }
+        return None
     windows = [
-        (label, limits[key].get("used_percentage", 0), limits[key].get("resets_at"))
+        [label, limits[key].get("used_percentage", 0), limits[key].get("resets_at")]
         for key, label in WINDOWS
         if isinstance(limits.get(key), dict)
     ]
-    if not windows:
+    return {"as_of": as_of, "windows": windows} if windows else None
+
+
+def hint() -> dict | None:
+    """값이 어디에도 없을 때 보여줄 안내. Claude Code 를 쓰는 PC 에서만 보여준다."""
+    if not SETTINGS.parent.is_dir():
         return None
-    return limits_page("Claude Code", windows, as_of)
+    return {"name": NAME, "headline": "No data", "sub": "run main.py --install-statusline"}

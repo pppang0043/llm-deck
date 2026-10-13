@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from .fmt import limits_page
+NAME = "Codex"
 
 # 최근 파일 몇 개만 본다 (가장 최근 세션에 기록이 아직 없을 수 있다)
 MAX_FILES = 5
@@ -42,9 +42,8 @@ def _latest(path: Path) -> tuple[float, dict] | None:
     return found
 
 
-def collect(cfg: dict) -> dict | None:
-    if not cfg.get("enabled", True):
-        return None
+def snapshot(cfg: dict) -> dict | None:
+    """{"as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
     root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "sessions"
     if not root.is_dir():
         return None
@@ -55,9 +54,9 @@ def collect(cfg: dict) -> dict | None:
             continue
         as_of, limits = latest
         windows = [
-            (_label(w), w.get("used_percent", 0), w.get("resets_at"))
+            [_label(w), w.get("used_percent", 0), w.get("resets_at")]
             for w in (limits.get("primary"), limits.get("secondary"))
             if isinstance(w, dict)
         ]
-        return limits_page("Codex", windows, as_of)
+        return {"as_of": as_of, "windows": windows}
     return None

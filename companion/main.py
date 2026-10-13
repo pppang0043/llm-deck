@@ -5,6 +5,8 @@
     uv run main.py --dry-run        기기로 보내지 않고, 보낼 내용만 출력한다
     uv run main.py --record a.wav   마이크 소리를 10초간 WAV 로 저장하고 끝낸다 (수신 확인용)
     uv run main.py --mic on         기기의 마이크를 PC 에서 켠다 (off 로 끈다)
+    uv run main.py --sync-only      기기 없이, 이 PC 의 한도 사용률을 다른 PC 와 공유만 한다
+    uv run main.py --setup-sync     공유에 쓸 비공개 gist 를 만든다 (처음 한 번)
     uv run main.py --install-statusline    Claude Code 한도 사용률을 받아오도록 설정한다 (PC 마다 한 번)
 """
 
@@ -17,7 +19,9 @@ from pathlib import Path
 
 import audio
 import statusline
-from collectors import COLLECTORS
+import sync
+from collectors import COLLECTORS, LIMITS
+from collectors.fmt import limits_page
 from transports import TRANSPORTS
 
 INTERVAL = 30
@@ -36,8 +40,33 @@ def load_config() -> dict:
 _last: dict[str, tuple[float, dict | None]] = {}
 
 
+_sync: sync.Sync | None = None
+
+
+def collect_limits(cfg: dict) -> list:
+    """구독 한도 페이지들. 이 PC 의 값과 다른 PC 가 올려 둔 값 중 최근 것을 쓴다."""
+    global _sync
+    if _sync is None:
+        _sync = sync.Sync(cfg.get("sync", {}))
+    enabled = [(section, module) for section, module in LIMITS if cfg.get(section, {}).get("enabled", True)]
+    local = {}
+    for section, module in enabled:
+        try:
+            local[section] = module.snapshot(cfg.get(section, {}))
+        except Exception as e:
+            print(f"[{section}] 수집 실패: {e}")
+    merged = _sync.merge(local)
+    pages = []
+    for section, module in enabled:
+        if section in merged:
+            pages.append(limits_page(module.NAME, merged[section]))
+        elif hasattr(module, "hint") and module.hint():
+            pages.append(module.hint())
+    return pages
+
+
 def collect_all(cfg: dict) -> dict:
-    services = []
+    services = collect_limits(cfg)
     for section, module, min_interval in COLLECTORS:
         called_at, result = _last.get(section, (0.0, None))
         if time.time() - called_at >= min_interval:
@@ -70,12 +99,22 @@ def main() -> None:
     parser.add_argument("--mic", choices=["on", "off"], help="기기의 마이크를 켜거나 끈다")
     parser.add_argument("--install-statusline", action="store_true", help="Claude Code 한도 사용률을 받아오도록 설정")
     parser.add_argument("--uninstall-statusline", action="store_true", help="위 설정을 원래대로 되돌린다")
+    parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
+    parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     args = parser.parse_args()
     if args.install_statusline:
         return statusline.install()
     if args.uninstall_statusline:
         return statusline.uninstall()
     cfg = load_config()
+
+    if args.setup_sync:
+        return sync.create(cfg.get("sync", {}))
+    if args.sync_only:
+        print("[sync] 이 PC 의 한도 사용률을 공유합니다. (Ctrl+C 로 종료)")
+        while True:
+            collect_limits(cfg)
+            time.sleep(INTERVAL)
 
     if args.dry_run:
         print(json.dumps(collect_all(cfg), indent=2, ensure_ascii=False))
