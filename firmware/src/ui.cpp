@@ -26,6 +26,7 @@ static lv_obj_t *mic_lbl;
 static void (*mic_toggle_cb)();
 static void (*rotate_cb)();
 static lv_obj_t *rotate_btn;
+static lv_obj_t *clock_lbl;
 static bool waiting = true;
 static bool mic_on = false;
 // 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
@@ -126,6 +127,8 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_add_event_cb(rotate_btn, rotate_btn_event, LV_EVENT_CLICKED, NULL);
   lv_obj_center(add_label(rotate_btn, LV_SYMBOL_REFRESH, &lv_font_montserrat_14, lv_color_white()));
 
+  clock_lbl = add_label(scr, "", &lv_font_montserrat_14, COLOR_DIM);
+
   tiles = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
 
@@ -149,6 +152,7 @@ static void render_usage();
 void ui_layout() {
   int w = display_width(), h = display_height();
   lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 1);
+  lv_obj_align(clock_lbl, LV_ALIGN_TOP_RIGHT, -44, 4);
   if (w > h) {
     // 가로: 왼쪽에 페이지, 오른쪽에 마이크 버튼
     lv_obj_set_size(tiles, w - MIC_W, h - STATUS_H);
@@ -177,6 +181,12 @@ void ui_layout() {
 
 void ui_set_status(const char *text) {
   lv_label_set_text(status_lbl, text);
+}
+
+void ui_set_clock(const char *text) {
+  if (strcmp(lv_label_get_text(clock_lbl), text) == 0) return;
+  lv_label_set_text(clock_lbl, text);
+  lv_obj_align(clock_lbl, LV_ALIGN_TOP_RIGHT, -44, 4);
 }
 
 void ui_set_wifi_info(const char *text) {

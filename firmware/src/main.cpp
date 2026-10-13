@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Preferences.h>
+#include <time.h>
 
 #include "ble_link.h"
 #include "cloud.h"
@@ -82,6 +83,22 @@ static void follow_tilt() {
   }
 }
 
+// 상태줄의 날짜와 시각. 시각은 Wi-Fi(인터넷) 또는 PC 도우미에게서 받으며, 받기 전에는 비워 둔다.
+static void show_clock() {
+  static uint32_t checked_ms = 0;
+  if (millis() - checked_ms < 1000) return;
+  checked_ms = millis();
+
+  char text[16] = "";
+  time_t now = time(nullptr);
+  if (now > 1700000000) {
+    struct tm local;
+    localtime_r(&now, &local);
+    strftime(text, sizeof(text), "%m/%d %H:%M", &local);
+  }
+  ui_set_clock(text);
+}
+
 void setup() {
   usb_link_init();
   Serial.begin(115200);
@@ -116,6 +133,7 @@ void loop() {
   link_loop();
   if (boot_button_pressed()) toggle_mic();
   follow_tilt();
+  show_clock();
 
   if (mic_is_on() && millis() - level_ms > 50) {
     level_ms = millis();

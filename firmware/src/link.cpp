@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <sys/time.h>
 #include <string>
 
 #include "cloud.h"
@@ -48,6 +49,20 @@ static const char *link_name(Link link) {
   }
 }
 
+// PC 도우미가 알려준 시각으로 시계를 맞춘다. Wi-Fi 가 없는 곳(블루투스만 쓰는 곳)에서도 시계가 나오게 한다.
+static void set_clock(int64_t now, int32_t utc_offset) {
+  // 시간대 표기는 부호가 반대다: 한국(UTC+9)은 "UTC-9"
+  char tz[24];
+  int minutes = abs(utc_offset) / 60;
+  snprintf(tz, sizeof(tz), "UTC%c%d:%02d", utc_offset >= 0 ? '-' : '+', minutes / 60, minutes % 60);
+  setenv("TZ", tz, 1);
+  tzset();
+  // 이미 거의 맞으면 건드리지 않는다
+  if (llabs((int64_t)time(nullptr) - now) < 2) return;
+  struct timeval tv = {(time_t)now, 0};
+  settimeofday(&tv, nullptr);
+}
+
 static void set_active(Link link) {
   if (link == active) return;
   active = link;
@@ -92,6 +107,7 @@ void link_loop() {
     } else {
       last_ms = millis();
       set_active(from);
+      if (doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
       if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");

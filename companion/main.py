@@ -83,7 +83,9 @@ def collect_all(cfg: dict) -> dict:
             _last[section] = (time.time(), result)
         if result:
             services.append(result)
-    return {"updated": datetime.now().strftime("%H:%M"), "services": services, **extra}
+    # 기기에는 시계가 없어서(Wi-Fi 가 없으면 시각을 모른다) 보낼 때마다 현재 시각을 알려준다
+    clock = {"now": int(time.time()), "utc_offset": time.localtime().tm_gmtoff}
+    return {"updated": datetime.now().strftime("%H:%M"), "services": services, **clock, **extra}
 
 
 def connect(names: list[str], cfg: dict, on_audio):

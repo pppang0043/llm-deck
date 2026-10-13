@@ -11,6 +11,7 @@ void link_init(void (*set_mic)(bool on));
 
 // PC 가 보낸 JSON 메시지 하나를 넘긴다. 어느 태스크에서 불러도 된다 (처리는 link_loop 에서).
 //   {"services": [...], "updated": "12:34"}  사용량 화면 갱신
+//   {"now": 1700000000, "utc_offset": 32400} 현재 시각(UTC 초)과 시간대(초). 기기 시계를 맞춘다
 //   {"mic": true}                            마이크 켜기/끄기
 //   {"sync_url": "https://..."}              공유 저장소 주소 (기기가 기억한다)
 //   {"wifi_add": {"ssid", "password"}}       Wi-Fi 추가 등록 / {"wifi_clear": true} 추가한 것 모두 삭제
