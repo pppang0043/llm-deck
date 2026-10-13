@@ -43,7 +43,7 @@ def _latest(path: Path) -> tuple[float, dict] | None:
 
 
 def snapshot(cfg: dict) -> dict | None:
-    """{"as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
+    """{"name": 제목, "as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
     root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "sessions"
     if not root.is_dir():
         return None
@@ -58,5 +58,5 @@ def snapshot(cfg: dict) -> dict | None:
             for w in (limits.get("primary"), limits.get("secondary"))
             if isinstance(w, dict)
         ]
-        return {"as_of": as_of, "windows": windows}
+        return {"name": NAME, "as_of": as_of, "windows": windows}
     return None

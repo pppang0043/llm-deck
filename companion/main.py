@@ -67,6 +67,7 @@ def collect_limits(cfg: dict) -> list:
 
 def collect_all(cfg: dict) -> dict:
     services = collect_limits(cfg)
+    extra = {"sync_url": _sync.public_url} if _sync.public_url else {}
     for section, module, min_interval in COLLECTORS:
         called_at, result = _last.get(section, (0.0, None))
         if time.time() - called_at >= min_interval:
@@ -77,7 +78,7 @@ def collect_all(cfg: dict) -> dict:
             _last[section] = (time.time(), result)
         if result:
             services.append(result)
-    return {"updated": datetime.now().strftime("%H:%M"), "services": services}
+    return {"updated": datetime.now().strftime("%H:%M"), "services": services, **extra}
 
 
 def connect(names: list[str], cfg: dict, on_audio):

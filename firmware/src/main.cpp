@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include "ble_link.h"
+#include "cloud.h"
 #include "display.h"
 #include "link.h"
 #include "mic.h"
@@ -47,6 +48,7 @@ void setup() {
   mic_init();
   net_init();
   ble_link_init();
+  cloud_init();
   Serial.println("[main] setup done");
 }
 

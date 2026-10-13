@@ -14,7 +14,7 @@ WINDOWS = [("five_hour", "5h"), ("seven_day", "Week")]
 
 
 def snapshot(cfg: dict) -> dict | None:
-    """{"as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
+    """{"name": 제목, "as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
     try:
         limits = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["rate_limits"]
         as_of = SNAPSHOT.stat().st_mtime
@@ -25,7 +25,7 @@ def snapshot(cfg: dict) -> dict | None:
         for key, label in WINDOWS
         if isinstance(limits.get(key), dict)
     ]
-    return {"as_of": as_of, "windows": windows} if windows else None
+    return {"name": NAME, "as_of": as_of, "windows": windows} if windows else None
 
 
 def hint() -> dict | None:

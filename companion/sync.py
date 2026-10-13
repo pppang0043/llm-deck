@@ -64,7 +64,7 @@ def newest(a: dict | None, b: dict | None) -> dict | None:
 
 
 def _worth_pushing(new: dict, old: dict | None) -> bool:
-    if not old or new.get("windows") != old.get("windows"):
+    if not old or {**new, "as_of": 0} != {**old, "as_of": 0}:
         return True
     return new.get("as_of", 0) - old.get("as_of", 0) >= PUSH_INTERVAL
 
@@ -73,6 +73,7 @@ class Sync:
     def __init__(self, cfg: dict):
         self.gist_id = cfg.get("gist_id", "")
         self.token = _token(cfg)
+        self.owner = ""
         self.remote: dict = {}
         self.fetched_at = 0.0
         self.failed = False
@@ -99,18 +100,26 @@ class Sync:
         gist = self._call("GET")
         if gist is None:
             return
+        self.owner = (gist.get("owner") or {}).get("login", "")
         try:
             remote = json.loads(gist["files"][FILE]["content"])
             self.remote = remote if isinstance(remote, dict) else {}
         except (KeyError, ValueError, TypeError):
             self.remote = {}
 
+    @property
+    def public_url(self) -> str:
+        """로그인 없이 읽을 수 있는 주소. 기기가 PC 없이 직접 읽을 때 쓴다."""
+        if not self.owner:
+            return ""
+        return f"https://gist.githubusercontent.com/{self.owner}/{self.gist_id}/raw/{FILE}"
+
     def merge(self, local: dict[str, dict | None]) -> dict[str, dict]:
         """이 PC 의 값과 공유된 값을 합쳐 돌려준다. 이 PC 의 값이 더 새로우면 올린다."""
         if not self.enabled:
             return {k: v for k, v in local.items() if v}
         self._fetch()
-        merged = {k: newest(local.get(k), self.remote.get(k)) for k in {*local, *self.remote}}
+        merged = {k: newest(local.get(k), self.remote.get(k)) for k in [*local, *(k for k in self.remote if k not in local)]}
         merged = {k: v for k, v in merged.items() if v}
         if any(_worth_pushing(v, self.remote.get(k)) for k, v in merged.items()):
             if self._call("PATCH", {"files": {FILE: {"content": json.dumps(merged, indent=1)}}}) is not None:

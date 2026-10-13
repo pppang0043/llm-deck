@@ -59,6 +59,10 @@ Claude Code / Codex 가 없는 PC 에 연결해도 최신 값을 보려면, 값�
 3. 출력된 `gist_id` 를 모든 PC 의 `config.toml` 에 토큰과 함께 적는다
 
 Claude Code / Codex 를 쓰는 PC 에서 도우미가 돌고 있으면 새 값이 올라간다.
+
+기기는 도우미가 한 번 알려준 공유 주소를 기억한다. 그 뒤로는 PC 도우미가 없어도, Wi-Fi 만 연결되어 있으면
+기기가 직접 값을 읽어 온다 (화면 왼쪽 위에 "Cloud"). 이때 PC 는 전원만 주면 되고 아무 설정도 필요 없다.
+공유 저장소 반영이 최대 5분 늦을 수 있다.
 기기를 연결하지 않는 PC(예: 항상 켜 둔 미니 PC)에서는 `uv run main.py --sync-only` 로 공유만 한다.
 
 `--install-statusline` 은 Claude Code 설정(`~/.claude/settings.json`)의 상태줄 명령 앞에 값을 저장하는

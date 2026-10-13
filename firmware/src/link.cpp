@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <string>
 
+#include "cloud.h"
 #include "ui.h"
 
 // 이 시간 동안 PC 에서 소식이 없으면 연결이 끊긴 것으로 본다
@@ -41,6 +42,7 @@ static const char *link_name(Link link) {
     case LINK_USB: return "USB";
     case LINK_BLE: return "Bluetooth";
     case LINK_WIFI: return "Wi-Fi";
+    case LINK_CLOUD: return "Cloud";
     default: return "No PC";
   }
 }
@@ -90,6 +92,7 @@ void link_loop() {
       last_ms = millis();
       set_active(from);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
+      if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
       if (doc["services"].is<JsonArrayConst>()) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);
