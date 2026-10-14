@@ -26,7 +26,8 @@ def fmt_when(ts: float) -> str:
     return f"{when.month}월 {when.day}일 {when:%H:%M}"
 
 
-# 저장소에 적는 구간 이름(여러 PC 가 같은 이름으로 맞춰 쓴다) -> 화면에 보일 이름
+# 저장소에 적는 구간 이름(여러 PC 가 같은 이름으로 맞춰 쓴다) -> 화면에 보일 이름.
+# 이 구간들은 값이 없어도(초기화된 뒤 아직 안 썼으면 서버가 알려주지 않는다) 0% 로 항상 보여준다.
 WINDOW_LABELS = {"5h": "5시간", "Week": "주간"}
 
 
@@ -39,10 +40,17 @@ def limit_bar(label: str, used_pct: float, resets_at: float | None) -> dict:
     return {"label": WINDOW_LABELS.get(label, label), "note": note, "text": f"{pct}%", "pct": pct}
 
 
+def _with_all_windows(windows: list) -> list:
+    """빠진 구간을 0% 로 채우고 5시간, 주간 순서로 맞춘다."""
+    by_label = {w[0]: w for w in windows}
+    filled = [by_label.get(label, [label, 0, None]) for label in WINDOW_LABELS]
+    return filled + [w for w in windows if w[0] not in WINDOW_LABELS]
+
+
 def limits_page(name: str, snapshot: dict) -> dict:
     """한도 사용률 페이지. snapshot 은 {"as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}."""
     return {
         "name": name,
         "note": fmt_when(snapshot["as_of"]),
-        "bars": [limit_bar(*w) for w in snapshot["windows"]],
+        "bars": [limit_bar(*w) for w in _with_all_windows(snapshot["windows"])],
     }

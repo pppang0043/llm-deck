@@ -58,13 +58,19 @@ static void build_pages(JsonObjectConst shared, JsonArray services) {
     format_when((time_t)(snapshot["as_of"] | 0.0), text, sizeof(text));
     page["note"] = text;
 
+    // 5시간, 주간은 값이 없어도(초기화된 뒤 아직 안 썼으면 서버가 알려주지 않는다) 0% 로 보여준다
     JsonArray bars = page["bars"].to<JsonArray>();
-    for (JsonArrayConst window : snapshot["windows"].as<JsonArrayConst>()) {
-      time_t resets_at = (time_t)(window[2] | 0.0);
+    static const char *const ALWAYS[] = {"5h", "Week"};
+    for (const char *key : ALWAYS) {
+      JsonArrayConst window;
+      for (JsonArrayConst w : snapshot["windows"].as<JsonArrayConst>()) {
+        if (strcmp(w[0] | "", key) == 0) window = w;
+      }
+      time_t resets_at = window.isNull() ? 0 : (time_t)(window[2] | 0.0);
       bool reset = resets_at != 0 && resets_at <= now;
       int pct = reset ? 0 : constrain((int)lround(window[1] | 0.0), 0, 100);
       JsonObject bar = bars.add<JsonObject>();
-      bar["label"] = window_label(window[0] | "");
+      bar["label"] = window_label(key);
       bar["pct"] = pct;
       snprintf(text, sizeof(text), "%d%%", pct);
       bar["text"] = text;
