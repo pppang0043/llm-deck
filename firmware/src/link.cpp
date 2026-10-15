@@ -11,6 +11,7 @@
 #include "ble_link.h"
 #include "cloud.h"
 #include "camera.h"
+#include "camera_ui.h"
 #include "mic.h"
 #include "photo.h"
 #include "usb_link.h"
@@ -129,6 +130,7 @@ void link_loop() {
       if (doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
+      if (doc["camera"].is<const char *>()) camera_ui_command(doc["camera"]);
       if (doc["photo_test"] == true) {
         uint8_t *jpg;
         size_t len;

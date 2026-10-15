@@ -7,3 +7,5 @@ void camera_ui_loop();
 // 화면 방향이 바뀌었을 때
 void camera_ui_layout();
 bool camera_ui_open();
+// PC 에서 카메라 화면을 다룬다: "open" / "shoot" / "close"
+void camera_ui_command(const char *cmd);

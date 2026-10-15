@@ -139,6 +139,13 @@ void camera_ui_loop() {
   frame_ms = millis();
   int w, h;
   if (!camera_preview(frame_buf, PREVIEW_MAX_PIXELS, &w, &h)) return;
+  static uint32_t frames = 0, counted_ms = 0;
+  frames++;
+  if (millis() - counted_ms >= 5000) {
+    if (counted_ms) Serial.printf("[camera] preview %dx%d, %.1f fps\n", w, h, frames * 1000.0f / (millis() - counted_ms));
+    counted_ms = millis();
+    frames = 0;
+  }
   if (frame_dsc.header.w != w || frame_dsc.header.h != h) {
     frame_dsc.header.w = w;
     frame_dsc.header.h = h;
@@ -148,4 +155,15 @@ void camera_ui_loop() {
   }
   lv_obj_clear_flag(preview, LV_OBJ_FLAG_HIDDEN);
   lv_obj_invalidate(preview);
+}
+
+void camera_ui_command(const char *cmd) {
+  if (strcmp(cmd, "open") == 0) {
+    open_camera();
+  } else if (strcmp(cmd, "shoot") == 0) {
+    open_camera();
+    take_photo();
+  } else if (strcmp(cmd, "close") == 0) {
+    close_camera();
+  }
 }
