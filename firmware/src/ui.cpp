@@ -556,10 +556,12 @@ void ui_show(const char *name) {
     view = VIEW_USAGE;
   } else if (strcmp(name, "info") == 0) {
     view = VIEW_INFO;
-  } else if (strcmp(name, "settings") == 0) {
+  } else if (strcmp(name, "settings") == 0 || strcmp(name, "settings_end") == 0) {
     view = VIEW_SETTINGS;
   }
   apply_view();
+  // 진단용: 설정 화면 아래쪽까지 보려고 끝으로 내린다
+  if (strcmp(name, "settings_end") == 0) lv_obj_scroll_to_y(settings_panel, LV_COORD_MAX, LV_ANIM_OFF);
 }
 
 bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
