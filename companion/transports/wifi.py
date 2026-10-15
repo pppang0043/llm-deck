@@ -3,6 +3,7 @@
 import json
 import socket
 import struct
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -78,16 +79,23 @@ class WifiTransport:
             pass
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("0.0.0.0", UDP_PORT))
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Windows 에서 SO_REUSEADDR 는 다른 프로그램이 같은 포트를 함께 잡게 해 버리므로 Mac/Linux 에서만 쓴다
+        if sys.platform != "win32":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("0.0.0.0", UDP_PORT))
+            # 동영상은 양이 많아 기기가 TCP 로 접속해 보낸다
+            server.bind(("0.0.0.0", VIDEO_TCP_PORT))
+            server.listen(1)
+        except OSError as e:
+            sock.close()
+            server.close()
+            print(f"[Wi-Fi] 포트 {UDP_PORT}/{VIDEO_TCP_PORT} 를 다른 프로그램이 쓰고 있어 Wi-Fi 연결을 건너뜁니다 ({e})")
+            return False
         self.sock = sock
         threading.Thread(target=self._receive, args=(sock,), daemon=True).start()
-
-        # 동영상은 양이 많아 기기가 TCP 로 접속해 보낸다
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("0.0.0.0", VIDEO_TCP_PORT))
-        server.listen(1)
         self.server = server
         threading.Thread(target=self._accept, args=(server,), daemon=True).start()
         return True

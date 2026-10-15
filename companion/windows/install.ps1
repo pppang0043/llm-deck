@@ -16,6 +16,35 @@ function Find-Uv {
     return $null
 }
 
+# Wi-Fi 로 연결했을 때 기기가 PC 로 보내는 것(알림·사진 알림·마이크 소리는 UDP 4010, 동영상은 TCP 4011)을
+# Windows 방화벽이 막지 않도록, 같은 공유기 안에서 오는 것만 허용하는 규칙을 둔다. 관리자 권한이 필요하다.
+$FirewallScript = @'
+Get-NetFirewallRule -DisplayName 'LLM Deck *' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+if ($args[0] -ne 'remove') {
+    New-NetFirewallRule -DisplayName 'LLM Deck UDP 4010' -Direction Inbound -Protocol UDP -LocalPort 4010 -RemoteAddress LocalSubnet -Action Allow -Profile Any | Out-Null
+    New-NetFirewallRule -DisplayName 'LLM Deck TCP 4011' -Direction Inbound -Protocol TCP -LocalPort 4011 -RemoteAddress LocalSubnet -Action Allow -Profile Any | Out-Null
+}
+'@
+
+function Set-Firewall([string]$mode) {
+    $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $file = Join-Path $env:TEMP 'llm-deck-firewall.ps1'
+    Set-Content -Path $file -Value $FirewallScript -Encoding UTF8
+    try {
+        if ($admin) {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $file $mode
+        } else {
+            # 관리자 확인 창(UAC)이 뜬다
+            Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$file`"", $mode)
+        }
+        return $true
+    } catch {
+        return $false
+    } finally {
+        Remove-Item $file -ErrorAction SilentlyContinue
+    }
+}
+
 function Stop-Companion {
     # 이 폴더의 도우미만 끈다
     Get-CimInstance Win32_Process |
@@ -26,6 +55,7 @@ function Stop-Companion {
 if ($Uninstall) {
     Stop-Companion
     Remove-ItemProperty -Path $RunKey -Name $Name -ErrorAction SilentlyContinue
+    Set-Firewall 'remove' | Out-Null
     $uv = Find-Uv
     if ($uv -and (Test-Path (Join-Path $env:USERPROFILE '.claude'))) {
         & $uv run --directory $Dir main.py --uninstall-statusline
@@ -34,7 +64,7 @@ if ($Uninstall) {
     return
 }
 
-Write-Host '[1/5] Python 도구(uv) 확인'
+Write-Host '[1/6] Python 도구(uv) 확인'
 $uv = Find-Uv
 if (-not $uv) {
     Write-Host '      uv 를 설치합니다 (https://astral.sh/uv)'
@@ -44,11 +74,11 @@ if (-not $uv) {
 }
 $uvw = Join-Path (Split-Path $uv) 'uvw.exe'
 
-Write-Host '[2/5] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
+Write-Host '[2/6] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
 & $uv sync --directory $Dir --quiet
 if ($LASTEXITCODE -ne 0) { throw '도우미 준비에 실패했습니다.' }
 
-Write-Host '[3/5] 설정 파일'
+Write-Host '[3/6] 설정 파일'
 $config = Join-Path $Dir 'config.toml'
 if (-not (Test-Path $config)) {
     Copy-Item (Join-Path $Dir 'config.example.toml') $config
@@ -57,14 +87,29 @@ if (-not (Test-Path $config)) {
     Write-Host '      기존 config.toml 을 그대로 씁니다.'
 }
 
-Write-Host '[4/5] Claude Code 한도 사용률 읽기'
+Write-Host '[4/6] Claude Code 한도 사용률 읽기'
 if (Test-Path (Join-Path $env:USERPROFILE '.claude')) {
     & $uv run --directory $Dir main.py --install-statusline
 } else {
     Write-Host '      이 PC 에는 Claude Code 가 없어 건너뜁니다. (다른 PC 값은 gist 로 받아 옵니다)'
 }
 
-Write-Host '[5/5] 로그인할 때 자동 실행'
+Write-Host '[5/6] Windows 방화벽 (Wi-Fi 연결용, 관리자 확인 창이 뜨면 [예])'
+if (Set-Firewall 'add') {
+    $rules = @(Get-NetFirewallRule -DisplayName 'LLM Deck *' -ErrorAction SilentlyContinue)
+    Write-Host "      허용 규칙 $($rules.Count)개를 두었습니다."
+} else {
+    Write-Host '      건너뜁니다. USB·블루투스는 상관없고, Wi-Fi 로 쓸 때 사진·동영상·알림이 안 올 수 있습니다.'
+}
+# 예전에 방화벽 창에서 [취소]를 누르면 python.exe 를 막는 규칙이 생긴다. 막는 규칙이 허용보다 앞선다.
+$blocked = Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like '*python*' }
+if ($blocked) {
+    Write-Host '      주의: python 을 막는 방화벽 규칙이 있습니다. Wi-Fi 로 쓸 때 문제가 되면'
+    Write-Host '            Windows 보안 > 방화벽 및 네트워크 보호 > 고급 설정 > 인바운드 규칙에서 지우세요.'
+}
+
+Write-Host '[6/6] 로그인할 때 자동 실행'
 Stop-Companion
 # 예전 방식(공유만 하는 도우미)이 등록되어 있으면 지운다. 이제 이 도우미가 공유도 함께 한다.
 Remove-ItemProperty -Path $RunKey -Name 'LLMDeckSync' -ErrorAction SilentlyContinue

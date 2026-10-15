@@ -26,6 +26,7 @@ import socket
 import sys
 import time
 import tomllib
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -234,87 +235,99 @@ def main() -> None:
     transport = None
     first = True
     while True:
-        if transport is None:
-            transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
-        if transport:
-            message = collect_all(cfg)
-            if first and args.mic:
-                message["mic"] = args.mic == "on"
-            if first and args.test_photo:
-                message["photo_test"] = True
-            if first and args.camera:
-                message["camera"] = args.camera
-            if first and args.links:
-                message["links"] = {k: v == "on" for k, v in (item.split("=") for item in args.links.split(","))}
-            if first and args.view:
-                message["view"] = args.view
-            if first and args.screenshot:
-                message["screenshot"] = True
-            if first and args.test_video:
-                message["camera"] = "record"
-            if first and args.camera_mount:
-                rot = int(args.camera_mount[0])
-                message["camera_mount"] = {"rot": rot, "mirror": args.camera_mount.endswith("m")}
-            if first and args.battery is not None:
-                message["battery_mv"] = round(args.battery * 1000)
-            try:
-                transport.send(message)
-                print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
-                first = False
-            except OSError as e:
-                print(f"[device] 전송 실패: {e}")
-                transport.close()
-                transport = None
-            # 블루투스·Wi-Fi 로 붙어 있는데 USB 케이블이 꽂히면 USB 로 갈아탄다 (더 빠르고, 기기도 USB 를 우선한다)
-            if transport and link == "auto" and transport.name != "USB" and usb_plugged(cfg):
-                print(f"[device] USB 케이블이 연결되어 {transport.name} 에서 USB 로 바꿉니다.")
-                transport.close()
-                transport = None
-                continue
-        else:
-            # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
-            collect_limits(cfg)
-        if args.test_video and transport and not first:
-            # 정해진 초만큼 녹화하고 멈춘 뒤, 파일이 다 쓰일 때까지 기다린다
-            time.sleep(args.test_video)
-            transport.send({"camera": "record"})
-            for _ in range(30):
-                time.sleep(1)
-                if movies.writer is None:
-                    break
-            transport.send({"camera": "close"})
-            time.sleep(1)
-            transport.close()
-            return
-        if (args.camera in ("open", "close") or args.camera_mount or args.links) and transport and not first:
-            time.sleep(2)
-            transport.close()
-            return
-        if args.view and not args.screenshot and transport and not first:
-            time.sleep(1)
-            transport.close()
-            return
-        if (args.test_photo or args.screenshot or args.camera in ("shoot", "dump")) and transport and not first:
-            # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
-            for _ in range(60):
-                time.sleep(1)
-                if receiver.buf is None and receiver.name:
-                    break
-            transport.close()
-            return
-        if args.battery is not None and transport and not first:
-            print(f"[device] 배터리 전압 {args.battery:.3f}V 로 보정했습니다." if args.battery else "[device] 배터리 보정을 지웠습니다.")
-            time.sleep(1)
-            transport.close()
-            return
-        if args.record:
+        try:
+            if transport is None:
+                transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
             if transport:
-                print(f"[audio] {RECORD_SECONDS}초간 녹음합니다. 기기의 마이크가 켜져 있어야 합니다.")
-                time.sleep(RECORD_SECONDS)
+                message = collect_all(cfg)
+                if first and args.mic:
+                    message["mic"] = args.mic == "on"
+                if first and args.test_photo:
+                    message["photo_test"] = True
+                if first and args.camera:
+                    message["camera"] = args.camera
+                if first and args.links:
+                    message["links"] = {k: v == "on" for k, v in (item.split("=") for item in args.links.split(","))}
+                if first and args.view:
+                    message["view"] = args.view
+                if first and args.screenshot:
+                    message["screenshot"] = True
+                if first and args.test_video:
+                    message["camera"] = "record"
+                if first and args.camera_mount:
+                    rot = int(args.camera_mount[0])
+                    message["camera_mount"] = {"rot": rot, "mirror": args.camera_mount.endswith("m")}
+                if first and args.battery is not None:
+                    message["battery_mv"] = round(args.battery * 1000)
+                try:
+                    transport.send(message)
+                    print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
+                    first = False
+                except OSError as e:
+                    print(f"[device] 전송 실패: {e}")
+                    transport.close()
+                    transport = None
+                # 블루투스·Wi-Fi 로 붙어 있는데 USB 케이블이 꽂히면 USB 로 갈아탄다 (더 빠르고, 기기도 USB 를 우선한다)
+                if transport and link == "auto" and transport.name != "USB" and usb_plugged(cfg):
+                    print(f"[device] USB 케이블이 연결되어 {transport.name} 에서 USB 로 바꿉니다.")
+                    transport.close()
+                    transport = None
+                    continue
+            else:
+                # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
+                collect_limits(cfg)
+            if args.test_video and transport and not first:
+                # 정해진 초만큼 녹화하고 멈춘 뒤, 파일이 다 쓰일 때까지 기다린다
+                time.sleep(args.test_video)
+                transport.send({"camera": "record"})
+                for _ in range(30):
+                    time.sleep(1)
+                    if movies.writer is None:
+                        break
+                transport.send({"camera": "close"})
+                time.sleep(1)
                 transport.close()
-            sink.close()
-            return
-        time.sleep(INTERVAL if transport else 5)
+                return
+            if (args.camera in ("open", "close") or args.camera_mount or args.links) and transport and not first:
+                time.sleep(2)
+                transport.close()
+                return
+            if args.view and not args.screenshot and transport and not first:
+                time.sleep(1)
+                transport.close()
+                return
+            if (args.test_photo or args.screenshot or args.camera in ("shoot", "dump")) and transport and not first:
+                # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
+                for _ in range(60):
+                    time.sleep(1)
+                    if receiver.buf is None and receiver.name:
+                        break
+                transport.close()
+                return
+            if args.battery is not None and transport and not first:
+                print(f"[device] 배터리 전압 {args.battery:.3f}V 로 보정했습니다." if args.battery else "[device] 배터리 보정을 지웠습니다.")
+                time.sleep(1)
+                transport.close()
+                return
+            if args.record:
+                if transport:
+                    print(f"[audio] {RECORD_SECONDS}초간 녹음합니다. 기기의 마이크가 켜져 있어야 합니다.")
+                    time.sleep(RECORD_SECONDS)
+                    transport.close()
+                sink.close()
+                return
+            time.sleep(INTERVAL if transport else 5)
+        except Exception:
+            # 예상하지 못한 오류로 도우미가 꺼지지 않게 한다. Windows 의 자동 시작은 꺼지면 다음 로그인까지 다시 켜지지 않는다.
+            print("[device] 오류가 나서 10초 뒤 다시 시작합니다:")
+            traceback.print_exc()
+            if transport:
+                try:
+                    transport.close()
+                except Exception:
+                    pass
+            transport = None
+            time.sleep(10)
 
 
 if __name__ == "__main__":
