@@ -84,3 +84,13 @@ void usb_send_frame(uint8_t kind, const uint8_t *head, size_t head_len, const ui
   if (len) memcpy(frame + 5 + head_len, data, len);
   Serial.write(frame, 5 + body);
 }
+
+bool usb_host_present() {
+  static uint32_t lost_ms = 0;
+  if (Serial.isPlugged()) {
+    lost_ms = 0;
+    return true;
+  }
+  if (!lost_ms) lost_ms = millis() ? millis() : 1;
+  return millis() - lost_ms < 3000;
+}

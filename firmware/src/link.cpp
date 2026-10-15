@@ -109,7 +109,7 @@ static bool alive(Link link) {
   if (!settings_link_allowed(link)) return false;
   if (!heard_ms[link] || millis() - heard_ms[link] > LINK_FRESH_MS) return false;
   // 케이블을 뽑거나 블루투스가 끊기면 기다리지 않고 바로 내려놓는다
-  if (link == LINK_USB && !Serial.isPlugged()) return false;
+  if (link == LINK_USB && !usb_host_present()) return false;
   if (link == LINK_BLE && !ble_link_connected()) return false;
   return true;
 }

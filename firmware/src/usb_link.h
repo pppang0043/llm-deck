@@ -13,6 +13,8 @@
 
 void usb_link_init();
 void usb_link_loop();
+// PC 의 USB 에 꽂혀 있는지. USB 신호가 아주 잠깐 끊겼다 이어지는 일이 있어, 3초 넘게 계속 끊겨야 false.
+bool usb_host_present();
 void usb_send_audio(uint32_t seq, const int16_t *pcm, size_t samples);
 void usb_send_event(const char *json);
 void usb_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len);

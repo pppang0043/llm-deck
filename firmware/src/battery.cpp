@@ -3,6 +3,7 @@
 #include <Preferences.h>
 
 #include "pins.h"
+#include "usb_link.h"
 
 // 리튬 배터리 전압(mV) → 남은 양(%). 전압이 % 에 정비례하지 않아서 표로 잇는다.
 static const int CURVE[][2] = {
@@ -182,7 +183,7 @@ static void update(int mv) {
   }
   bool was_charging = charging;
   detect_charger(mv);
-  charging = Serial.isPlugged() || charger_by_voltage;
+  charging = usb_host_present() || charger_by_voltage;
   // 충전기를 꽂거나 뽑으면 전압이 한 번에 바뀌므로 다듬은 값도 새로 시작한다
   if (charging != was_charging) {
     smooth_mv = 0;
