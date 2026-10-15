@@ -131,6 +131,9 @@ void link_loop() {
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
       if (doc["camera"].is<const char *>()) camera_ui_command(doc["camera"]);
+      if (doc["camera_mount"].is<JsonObjectConst>()) {
+        camera_set_mount(doc["camera_mount"]["rot"] | 0, doc["camera_mount"]["mirror"] | false);
+      }
       if (doc["photo_test"] == true) {
         uint8_t *jpg;
         size_t len;

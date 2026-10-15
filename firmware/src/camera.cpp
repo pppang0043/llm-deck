@@ -1,13 +1,20 @@
 #include "camera.h"
 
+#include <Preferences.h>
 #include <esp_camera.h>
 #include <img_converters.h>
 
 #include "pins.h"
 
 static bool running = false;
-static bool landscape_now = true;
 static char model[16] = "";
+static Preferences prefs;
+// 처음 꽂은 카메라(OV5640)로 찍어 보고 정한 기본값. 다르면 PC 도우미로 바꿀 수 있다.
+static uint8_t mount_rot = 1;
+static bool mount_mirror = false;
+static framesize_t preview_size = FRAMESIZE_QVGA;
+// JPEG 미리보기를 풀어 놓는 곳 (돌리기 전)
+static uint8_t *decoded = nullptr;
 
 static camera_config_t base_config() {
   camera_config_t config = {};
@@ -36,10 +43,23 @@ static camera_config_t base_config() {
   return config;
 }
 
-static bool init_preview() {
+static void load_mount() {
+  static bool loaded = false;
+  if (loaded) return;
+  loaded = true;
+  prefs.begin("llm-deck");
+  mount_rot = prefs.getUChar("cam_rot", mount_rot) & 3;
+  mount_mirror = prefs.getBool("cam_mirror", mount_mirror);
+}
+
+bool camera_start() {
+  if (running) return true;
+  load_mount();
   camera_config_t config = base_config();
-  config.pixel_format = PIXFORMAT_RGB565;
-  config.frame_size = FRAMESIZE_QVGA;
+  // 버퍼는 가장 큰 사진 크기로 잡아 두고, 미리보기 동안에는 작게 찍는다
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_UXGA;
+  config.jpeg_quality = 10;
   config.fb_count = 2;
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
@@ -47,29 +67,15 @@ static bool init_preview() {
     return false;
   }
   sensor_t *s = esp_camera_sensor_get();
-  if (!landscape_now) s->set_framesize(s, FRAMESIZE_HQVGA);
   camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
   strlcpy(model, info ? info->name : "?", sizeof(model));
-  return true;
-}
-
-bool camera_start(bool landscape) {
-  landscape_now = landscape;
-  if (running) {
-    camera_set_landscape(landscape);
-    return true;
-  }
-  if (!init_preview()) return false;
+  s->set_hmirror(s, mount_mirror);
+  preview_size = FRAMESIZE_QVGA;
+  s->set_framesize(s, preview_size);
+  if (!decoded) decoded = (uint8_t *)ps_malloc(320 * 240 * 2);
   running = true;
-  Serial.printf("[camera] %s preview on\n", model);
+  Serial.printf("[camera] %s on (mount rot %d, mirror %d)\n", model, mount_rot, mount_mirror);
   return true;
-}
-
-void camera_set_landscape(bool landscape) {
-  landscape_now = landscape;
-  if (!running) return;
-  sensor_t *s = esp_camera_sensor_get();
-  s->set_framesize(s, landscape ? FRAMESIZE_QVGA : FRAMESIZE_HQVGA);
 }
 
 void camera_stop() {
@@ -87,53 +93,110 @@ const char *camera_model() {
   return model;
 }
 
-bool camera_preview(uint16_t *out, size_t max_pixels, int *w, int *h) {
-  if (!running) return false;
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) return false;
-  size_t pixels = fb->width * fb->height;
-  bool ok = fb->format == PIXFORMAT_RGB565 && pixels <= max_pixels && fb->len >= pixels * 2;
-  if (ok) {
-    // 카메라는 큰 쪽 바이트를 먼저 보내고, 화면(LVGL)은 작은 쪽을 먼저 쓴다
-    const uint8_t *src = fb->buf;
-    for (size_t i = 0; i < pixels; i++) out[i] = (src[2 * i] << 8) | src[2 * i + 1];
-    *w = fb->width;
-    *h = fb->height;
+void camera_set_mount(uint8_t rot, bool mirror) {
+  load_mount();
+  mount_rot = rot & 3;
+  mount_mirror = mirror;
+  prefs.putUChar("cam_rot", mount_rot);
+  prefs.putBool("cam_mirror", mount_mirror);
+  if (running) {
+    sensor_t *s = esp_camera_sensor_get();
+    s->set_hmirror(s, mount_mirror);
   }
-  esp_camera_fb_return(fb);
-  return ok;
+  Serial.printf("[camera] mount rot %d, mirror %d\n", mount_rot, mount_mirror);
 }
 
-bool camera_capture(uint8_t **jpg, size_t *len) {
-  if (!running) return false;
-  // 미리보기(RGB565)를 끄고 큰 JPEG 로 다시 켜서 찍은 뒤, 미리보기로 돌아간다
-  esp_camera_deinit();
-  camera_config_t config = base_config();
-  config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_UXGA;
-  config.jpeg_quality = 12;
-  config.fb_count = 1;
-  bool ok = false;
-  if (esp_camera_init(&config) == ESP_OK) {
-    // 처음 몇 장은 밝기 자동 조절이 덜 되어 어둡게 나오므로 버린다
-    for (int i = 0; i < 4; i++) {
-      camera_fb_t *fb = esp_camera_fb_get();
-      if (fb) esp_camera_fb_return(fb);
-    }
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (fb && fb->format == PIXFORMAT_JPEG) {
-      *jpg = (uint8_t *)ps_malloc(fb->len);
-      if (*jpg) {
-        memcpy(*jpg, fb->buf, fb->len);
-        *len = fb->len;
-        ok = true;
-      }
-    }
-    if (fb) esp_camera_fb_return(fb);
-    esp_camera_deinit();
+// 센서 영상을 시계 방향으로 몇 번 돌려야 지금 화면에서 바로 보이는지
+static uint8_t turns_for(uint8_t screen_rot) {
+  return (mount_rot - screen_rot) & 3;
+}
+
+bool camera_preview(uint16_t *out, int fit_w, int fit_h, uint8_t screen_rot, int *w, int *h) {
+  if (!running || !decoded) return false;
+  uint8_t k = turns_for(screen_rot);
+  // 돌린 뒤 화면에 들어가도록 센서 크기를 고른다: 320x240 이 안 들어가면 240x176
+  bool fits = (k & 1) ? (240 <= fit_w && 320 <= fit_h) : (320 <= fit_w && 240 <= fit_h);
+  framesize_t want = fits ? FRAMESIZE_QVGA : FRAMESIZE_HQVGA;
+  sensor_t *s = esp_camera_sensor_get();
+  if (want != preview_size) {
+    s->set_framesize(s, want);
+    preview_size = want;
   }
-  running = init_preview();
-  Serial.printf("[camera] capture %s (%u bytes)\n", ok ? "ok" : "failed", ok ? (unsigned)*len : 0);
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) return false;
+  int sw = fb->width, sh = fb->height;
+  bool ok = fb->format == PIXFORMAT_JPEG && sw * sh <= 320 * 240 &&
+            jpg2rgb565(fb->buf, fb->len, decoded, JPG_SCALE_NONE);
+  esp_camera_fb_return(fb);
+  if (!ok) return false;
+
+  // 풀어 놓은 그림(큰 쪽 바이트 먼저)을 화면 바이트 순서로 바꾸면서 k 번 돌린다
+  int ow = (k & 1) ? sh : sw, oh = (k & 1) ? sw : sh;
+  for (int y = 0; y < sh; y++) {
+    for (int x = 0; x < sw; x++) {
+      const uint8_t *p = decoded + 2 * (y * sw + x);
+      uint16_t c = (p[0] << 8) | p[1];
+      int ox, oy;
+      switch (k) {
+        case 1: ox = sh - 1 - y; oy = x; break;
+        case 2: ox = sw - 1 - x; oy = sh - 1 - y; break;
+        case 3: ox = y; oy = sw - 1 - x; break;
+        default: ox = x; oy = y; break;
+      }
+      out[oy * ow + ox] = c;
+    }
+  }
+  *w = ow;
+  *h = oh;
+  return true;
+}
+
+// JPEG 맨 앞(SOI 다음)에 회전 정보(EXIF Orientation)를 넣는다. 사진 앱들이 이 값대로 돌려서 보여준다.
+static uint8_t *add_orientation(const uint8_t *jpg, size_t len, uint8_t k, size_t *out_len) {
+  static const uint16_t ORIENT[4] = {1, 6, 3, 8};  // 시계 방향 0/90/180/270
+  const uint8_t app1[] = {
+      0xFF, 0xE1, 0x00, 34,                         // APP1, 길이 34
+      'E', 'x', 'i', 'f', 0, 0,                     // Exif 표시
+      'I', 'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, // TIFF 머리 (작은 쪽 먼저)
+      0x01, 0x00,                                   // 항목 1개
+      0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, // Orientation, SHORT, 1개
+      (uint8_t)ORIENT[k], 0x00, 0x00, 0x00,         // 값
+      0x00, 0x00, 0x00, 0x00,                       // 다음 IFD 없음
+  };
+  if (len < 2 || jpg[0] != 0xFF || jpg[1] != 0xD8) return nullptr;
+  uint8_t *out = (uint8_t *)ps_malloc(len + sizeof(app1));
+  if (!out) return nullptr;
+  out[0] = 0xFF;
+  out[1] = 0xD8;
+  memcpy(out + 2, app1, sizeof(app1));
+  memcpy(out + 2 + sizeof(app1), jpg + 2, len - 2);
+  *out_len = len + sizeof(app1);
+  return out;
+}
+
+bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len) {
+  if (!running) return false;
+  sensor_t *s = esp_camera_sensor_get();
+  s->set_framesize(s, FRAMESIZE_UXGA);
+  // 크기를 바꾼 직전 몇 장은 이전 크기가 섞여 나오므로 버린다
+  camera_fb_t *fb = nullptr;
+  for (int i = 0; i < 3; i++) {
+    fb = esp_camera_fb_get();
+    if (i < 2 && fb) {
+      esp_camera_fb_return(fb);
+      fb = nullptr;
+    }
+  }
+  bool ok = false;
+  if (fb && fb->format == PIXFORMAT_JPEG && fb->width == 1600) {
+    *jpg = add_orientation(fb->buf, fb->len, turns_for(screen_rot), len);
+    ok = *jpg != nullptr;
+  }
+  if (fb) esp_camera_fb_return(fb);
+  s->set_framesize(s, preview_size);
+  Serial.printf("[camera] capture %s (%u bytes, screen rot %d, turns %d)\n", ok ? "ok" : "failed",
+                ok ? (unsigned)*len : 0, screen_rot, turns_for(screen_rot));
   return ok;
 }
 

@@ -7,6 +7,7 @@
     uv run main.py --mic on         기기의 마이크를 PC 에서 켠다 (off 로 끈다)
     uv run main.py --battery 4.12   멀티미터로 잰 배터리 전압(V)을 알려 기기의 배터리 표시를 보정한다 (0: 보정 지움)
     uv run main.py --camera shoot   기기 카메라로 사진을 찍어 저장한다 (open / close 로 화면만 열고 닫기)
+    uv run main.py --camera-mount 1 사진이 돌아가 보이면 카메라 센서 방향을 맞춘다 (0~3, 좌우 반전이면 1m 처럼)
     uv run main.py --test-photo     카메라 없이 무늬 사진을 찍은 것처럼 해서 SD 카드·PC 저장을 시험한다
     uv run main.py --test-sound     기기가 마이크를 켜고 끌 때 PC 스피커로 나는 소리를 들어 본다
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
@@ -137,6 +138,8 @@ def main() -> None:
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
     parser.add_argument("--battery", type=float, metavar="V", help="멀티미터로 잰 배터리 전압(V)으로 기기를 보정한다")
     parser.add_argument("--camera", choices=["open", "shoot", "close"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기")
+    parser.add_argument("--camera-mount", choices=["0", "1", "2", "3", "0m", "1m", "2m", "3m"],
+                        help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
     parser.add_argument("--test-sound", action="store_true", help="마이크를 켜고 끌 때 나는 소리를 들어 본다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
@@ -192,6 +195,9 @@ def main() -> None:
                 message["photo_test"] = True
             if first and args.camera:
                 message["camera"] = args.camera
+            if first and args.camera_mount:
+                rot = int(args.camera_mount[0])
+                message["camera_mount"] = {"rot": rot, "mirror": args.camera_mount.endswith("m")}
             if first and args.battery is not None:
                 message["battery_mv"] = round(args.battery * 1000)
             try:
@@ -205,7 +211,7 @@ def main() -> None:
         else:
             # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
             collect_limits(cfg)
-        if args.camera in ("open", "close") and transport and not first:
+        if (args.camera in ("open", "close") or args.camera_mount) and transport and not first:
             time.sleep(2)
             transport.close()
             return
