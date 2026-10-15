@@ -13,6 +13,7 @@
 #include "mic.h"
 #include "net.h"
 #include "photo.h"
+#include "settings.h"
 #include "video.h"
 #include "pins.h"
 #include "ui.h"
@@ -23,7 +24,7 @@ static void set_mic(bool on) {
   mic_set_on(on);
   ui_set_mic(on);
   // 켜고 끈 것을 귀로도 알 수 있게 PC 스피커로 짧은 소리를 낸다
-  link_send_event(on ? "{\"sound\":\"mic_on\"}" : "{\"sound\":\"mic_off\"}");
+  if (settings_mic_sound()) link_send_event(on ? "{\"sound\":\"mic_on\"}" : "{\"sound\":\"mic_off\"}");
 }
 
 static void toggle_mic() {
@@ -76,7 +77,7 @@ static void follow_tilt() {
   static int candidate = -1;
   static uint8_t count = 0;
 
-  if (millis() - checked_ms < 150) return;
+  if (millis() - checked_ms < 150 || !settings_auto_rotate()) return;
   checked_ms = millis();
   int now = imu_rotation();
   if (now < 0 || now == tilt) {
@@ -93,15 +94,6 @@ static void follow_tilt() {
 }
 
 // 상태줄의 날짜와 시각. 시각은 Wi-Fi(인터넷) 또는 PC 도우미에게서 받으며, 받기 전에는 비워 둔다.
-// 홈의 밝기 아이콘: 누를 때마다 100 -> 60 -> 30 -> 100%. 기억해 둔다.
-static uint8_t brightness = 80;
-
-static void cycle_brightness() {
-  brightness = brightness > 60 ? 60 : brightness > 30 ? 30 : 100;
-  display_set_brightness(brightness);
-  prefs.putUChar("bright", brightness);
-}
-
 // 정보 화면 내용 (보이는 동안 1초마다)
 static void show_info() {
   static uint32_t checked_ms = 0;
@@ -130,7 +122,7 @@ static void show_info() {
            "메모리: 내부 %uKB, PSRAM %uKB 남음\n"
            "켜진 지: %lu분",
            LINKS[link_active()], WiFi.isConnected() ? WiFi.localIP().toString().c_str() : "연결 안 됨", bat,
-           brightness, mic_is_on() ? "켜짐" : "꺼짐", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           settings_brightness(), mic_is_on() ? "켜짐" : "꺼짐", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned long)(millis() / 60000));
   ui_set_info(text);
 }
@@ -160,13 +152,12 @@ void setup() {
   display_init();
   ui_init(toggle_mic, rotate_by_button);
   camera_ui_init();
-  ui_set_home_actions(camera_ui_show, cycle_brightness);
+  ui_set_home_actions(camera_ui_show, settings_cycle_brightness);
   imu_init();
   battery_init();
   prefs.begin("llm-deck");
   rotate_offset = prefs.getUChar("rot_offset", 0) & 3;
-  brightness = prefs.getUChar("bright", 80);
-  display_set_brightness(brightness);
+  settings_init();
   delay(50);  // 센서가 첫 값을 낼 때까지 잠깐 기다린다
   int start = imu_rotation();
   if (start >= 0) tilt = start;

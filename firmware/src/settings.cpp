@@ -1,0 +1,215 @@
+#include "settings.h"
+
+#include <Preferences.h>
+
+#include "camera.h"
+#include "display.h"
+
+LV_FONT_DECLARE(font_ko_14);
+LV_FONT_DECLARE(font_ko_20);
+
+#define COLOR_DIM lv_color_hex(0x8A939E)
+#define COLOR_ROW lv_color_hex(0x1C232B)
+#define COLOR_ACCENT lv_color_hex(0xD97757)
+
+static Preferences prefs;
+static uint8_t brightness = 80;
+static bool auto_rotate = true;
+static bool mic_sound = true;
+
+static lv_obj_t *bright_slider;
+static lv_obj_t *bright_value;
+static lv_obj_t *rotate_sw;
+static lv_obj_t *sound_sw;
+static lv_obj_t *mirror_sw;
+static lv_obj_t *cam_value;
+static lv_obj_t *restart_lbl;
+static uint32_t restart_armed_ms = 0;
+
+void settings_init() {
+  prefs.begin("llm-deck");
+  brightness = prefs.getUChar("bright", 80);
+  auto_rotate = prefs.getBool("auto_rot", true);
+  mic_sound = prefs.getBool("mic_sound", true);
+  display_set_brightness(brightness);
+}
+
+uint8_t settings_brightness() {
+  return brightness;
+}
+
+void settings_set_brightness(uint8_t pct) {
+  brightness = constrain(pct, 10, 100);
+  display_set_brightness(brightness);
+  prefs.putUChar("bright", brightness);
+}
+
+void settings_cycle_brightness() {
+  settings_set_brightness(brightness > 60 ? 60 : brightness > 30 ? 30 : 100);
+}
+
+bool settings_auto_rotate() {
+  return auto_rotate;
+}
+
+bool settings_mic_sound() {
+  return mic_sound;
+}
+
+// 한 줄: 왼쪽에 이름(과 설명), 오른쪽에 조작 도구
+static lv_obj_t *add_row(lv_obj_t *parent, const char *title, const char *desc) {
+  lv_obj_t *row = lv_obj_create(parent);
+  lv_obj_remove_style_all(row);
+  // 높이를 내용에 맞추면 오른쪽 가운데에 둔 스위치와 서로 크기를 기다리며 멈추므로 고정한다
+  lv_obj_set_size(row, lv_pct(100), desc ? 62 : 44);
+  lv_obj_set_style_bg_color(row, COLOR_ROW, 0);
+  lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(row, 8, 0);
+  lv_obj_set_style_pad_all(row, 8, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t *t = lv_label_create(row);
+  lv_label_set_text(t, title);
+  lv_obj_set_style_text_font(t, &font_ko_20, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, 0);
+  if (desc) {
+    lv_obj_t *d = lv_label_create(row);
+    lv_label_set_text(d, desc);
+    lv_obj_set_style_text_font(d, &font_ko_14, 0);
+    lv_obj_set_style_text_color(d, COLOR_DIM, 0);
+    lv_obj_align(d, LV_ALIGN_TOP_LEFT, 0, 26);
+  }
+  return row;
+}
+
+static lv_obj_t *add_switch(lv_obj_t *row, bool on, lv_event_cb_t cb) {
+  lv_obj_t *sw = lv_switch_create(row);
+  lv_obj_set_size(sw, 50, 28);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (on) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, NULL);
+  return sw;
+}
+
+static lv_obj_t *add_button(lv_obj_t *row, const char *text, lv_event_cb_t cb, lv_obj_t **label) {
+  lv_obj_t *btn = lv_btn_create(row);
+  lv_obj_set_style_shadow_width(btn, 0, 0);
+  lv_obj_set_style_pad_hor(btn, 10, 0);
+  lv_obj_set_style_pad_ver(btn, 6, 0);
+  lv_obj_align(btn, LV_ALIGN_RIGHT_MID, 0, 0);
+  lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *l = lv_label_create(btn);
+  lv_label_set_text(l, text);
+  lv_obj_set_style_text_font(l, &font_ko_14, 0);
+  lv_obj_center(l);
+  if (label) *label = l;
+  return btn;
+}
+
+static void bright_changed(lv_event_t *e) {
+  int v = lv_slider_get_value(bright_slider);
+  lv_label_set_text_fmt(bright_value, "%d%%", v);
+  display_set_brightness(v);
+  // 손을 뗐을 때만 저장한다 (끄는 동안 계속 쓰지 않도록)
+  if (lv_event_get_code(e) == LV_EVENT_RELEASED) settings_set_brightness(v);
+}
+
+static void rotate_changed(lv_event_t *e) {
+  auto_rotate = lv_obj_has_state(rotate_sw, LV_STATE_CHECKED);
+  prefs.putBool("auto_rot", auto_rotate);
+}
+
+static void sound_changed(lv_event_t *e) {
+  mic_sound = lv_obj_has_state(sound_sw, LV_STATE_CHECKED);
+  prefs.putBool("mic_sound", mic_sound);
+}
+
+static void show_camera_mount() {
+  lv_label_set_text_fmt(cam_value, "%d°", camera_mount_rot() * 90);
+}
+
+static void cam_turn_clicked(lv_event_t *e) {
+  camera_set_mount(camera_mount_rot() + 1, camera_mount_mirror());
+  show_camera_mount();
+}
+
+static void mirror_changed(lv_event_t *e) {
+  camera_set_mount(camera_mount_rot(), lv_obj_has_state(mirror_sw, LV_STATE_CHECKED));
+}
+
+static void restart_clicked(lv_event_t *e) {
+  // 실수로 누르지 않게 3초 안에 한 번 더 눌러야 재시작한다
+  if (restart_armed_ms && millis() - restart_armed_ms < 3000) {
+    Serial.println("[settings] restart");
+    delay(100);
+    ESP.restart();
+  }
+  restart_armed_ms = millis();
+  lv_label_set_text(restart_lbl, "한 번 더 누르기");
+}
+
+void settings_build(lv_obj_t *parent) {
+  lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_row(parent, 6, 0);
+  lv_obj_set_scroll_dir(parent, LV_DIR_VER);
+
+  lv_obj_t *title = lv_label_create(parent);
+  lv_label_set_text(title, "설정");
+  lv_obj_set_style_text_font(title, &font_ko_20, 0);
+  lv_obj_set_style_text_color(title, COLOR_ACCENT, 0);
+
+  lv_obj_t *row = add_row(parent, "화면 밝기", nullptr);
+  bright_value = lv_label_create(row);
+  lv_obj_set_style_text_font(bright_value, &font_ko_14, 0);
+  lv_obj_set_style_text_color(bright_value, COLOR_DIM, 0);
+  lv_obj_align(bright_value, LV_ALIGN_TOP_RIGHT, 0, 4);
+  bright_slider = lv_slider_create(row);
+  lv_obj_set_width(bright_slider, lv_pct(92));
+  lv_obj_align(bright_slider, LV_ALIGN_TOP_MID, 0, 36);
+  lv_slider_set_range(bright_slider, 10, 100);
+  // 밀어서 밝기를 바꿀 때 "오른쪽으로 밀면 홈" 이 같이 일어나지 않게 한다
+  lv_obj_clear_flag(bright_slider, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(bright_slider, bright_changed, LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_add_event_cb(bright_slider, bright_changed, LV_EVENT_RELEASED, NULL);
+  lv_obj_set_height(row, 64);
+
+  rotate_sw = add_switch(add_row(parent, "자동 회전", "기울이면 화면이 따라 돕니다"), auto_rotate, rotate_changed);
+  sound_sw = add_switch(add_row(parent, "마이크 알림음", "켜고 끌 때 PC에서 소리"), mic_sound, sound_changed);
+
+  row = add_row(parent, "카메라 방향", "사진이 누워 보이면 돌리기");
+  add_button(row, "돌리기", cam_turn_clicked, nullptr);
+  cam_value = lv_label_create(row);
+  lv_obj_set_style_text_font(cam_value, &font_ko_14, 0);
+  lv_obj_set_style_text_color(cam_value, COLOR_DIM, 0);
+  lv_obj_align(cam_value, LV_ALIGN_RIGHT_MID, -76, 0);
+
+  mirror_sw = add_switch(add_row(parent, "카메라 좌우 반전", "글자가 거꾸로 보이면 바꾸기"),
+                         camera_mount_mirror(), mirror_changed);
+
+  add_button(add_row(parent, "기기 재시작", nullptr), "재시작", restart_clicked, &restart_lbl);
+
+  settings_refresh();
+}
+
+void settings_refresh() {
+  lv_slider_set_value(bright_slider, brightness, LV_ANIM_OFF);
+  lv_label_set_text_fmt(bright_value, "%d%%", brightness);
+  if (auto_rotate) {
+    lv_obj_add_state(rotate_sw, LV_STATE_CHECKED);
+  } else {
+    lv_obj_clear_state(rotate_sw, LV_STATE_CHECKED);
+  }
+  if (mic_sound) {
+    lv_obj_add_state(sound_sw, LV_STATE_CHECKED);
+  } else {
+    lv_obj_clear_state(sound_sw, LV_STATE_CHECKED);
+  }
+  if (camera_mount_mirror()) {
+    lv_obj_add_state(mirror_sw, LV_STATE_CHECKED);
+  } else {
+    lv_obj_clear_state(mirror_sw, LV_STATE_CHECKED);
+  }
+  show_camera_mount();
+  restart_armed_ms = 0;
+  lv_label_set_text(restart_lbl, "재시작");
+}

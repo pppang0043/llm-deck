@@ -3,6 +3,7 @@
 #include <lvgl.h>
 
 #include "display.h"
+#include "settings.h"
 
 // 한글이 들어 있는 글꼴 (src/fonts, 나눔고딕). 큰 숫자(48)는 기본 글꼴을 쓴다.
 LV_FONT_DECLARE(font_ko_14);
@@ -49,13 +50,14 @@ static JsonDocument last_usage;
 static char wifi_info[48] = "시작 중...";
 
 // 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.
-enum View { VIEW_HOME, VIEW_USAGE, VIEW_INFO };
+enum View { VIEW_HOME, VIEW_USAGE, VIEW_INFO, VIEW_SETTINGS };
 static View view = VIEW_HOME;  // 켤 때 첫 화면은 홈
 static lv_obj_t *home;
 static lv_obj_t *home_icons[6];
 static lv_obj_t *mic_icon_sym;
 static lv_obj_t *info_panel;
 static lv_obj_t *info_lbl;
+static lv_obj_t *settings_panel;
 static void (*camera_cb)() = nullptr;
 static void (*brightness_cb)() = nullptr;
 static void apply_view();
@@ -155,6 +157,10 @@ static void home_icon_event(lv_event_t *e) {
       view = VIEW_INFO;
       apply_view();
       break;
+    case 5:
+      view = VIEW_SETTINGS;
+      apply_view();
+      break;
     default:
       break;
   }
@@ -198,8 +204,8 @@ static void build_home() {
   add_home_icon(1, LV_SYMBOL_IMAGE, "카메라", lv_color_hex(0x3A7BD5), true);
   add_home_icon(2, LV_SYMBOL_MUTE, "마이크", COLOR_MIC_OFF, true);
   add_home_icon(3, LV_SYMBOL_EYE_OPEN, "밝기", lv_color_hex(0xC99A2E), true);
-  add_home_icon(4, LV_SYMBOL_SETTINGS, "정보", lv_color_hex(0x4C8C6A), true);
-  add_home_icon(5, LV_SYMBOL_PLUS, "추가 예정", COLOR_MIC_OFF, false);
+  add_home_icon(4, LV_SYMBOL_FILE, "정보", lv_color_hex(0x4C8C6A), true);
+  add_home_icon(5, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
 
   // 정보 화면: 연결·배터리·메모리 같은 기기 상태 (main 이 1초마다 채운다)
   info_panel = lv_obj_create(lv_scr_act());
@@ -212,6 +218,14 @@ static void build_home() {
   info_lbl = add_label(info_panel, "", &font_ko_14, lv_color_white());
   lv_obj_set_style_text_line_space(info_lbl, 6, 0);
   lv_obj_align(info_lbl, LV_ALIGN_TOP_LEFT, 0, 34);
+
+  // 설정 화면 (settings.cpp)
+  settings_panel = lv_obj_create(lv_scr_act());
+  lv_obj_remove_style_all(settings_panel);
+  lv_obj_set_style_bg_color(settings_panel, COLOR_BG, 0);
+  lv_obj_set_style_bg_opa(settings_panel, LV_OPA_COVER, 0);
+  lv_obj_set_style_pad_all(settings_panel, 10, 0);
+  settings_build(settings_panel);
 }
 
 // 홈 아이콘 배치: 세로 화면 2x3, 가로 화면 3x2
@@ -221,6 +235,8 @@ static void layout_home() {
   lv_obj_set_pos(home, 0, STATUS_H);
   lv_obj_set_size(info_panel, w, h);
   lv_obj_set_pos(info_panel, 0, STATUS_H);
+  lv_obj_set_size(settings_panel, w, h);
+  lv_obj_set_pos(settings_panel, 0, STATUS_H);
   int cols = w > display_height() ? 3 : 2;
   int rows = 6 / cols;
   int cw = w / cols, ch = h / rows;
@@ -249,6 +265,13 @@ static void apply_view() {
     lv_obj_clear_flag(info_panel, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(info_panel, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (view == VIEW_SETTINGS) {
+    settings_refresh();
+    lv_obj_scroll_to_y(settings_panel, 0, LV_ANIM_OFF);
+    lv_obj_clear_flag(settings_panel, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(settings_panel, LV_OBJ_FLAG_HIDDEN);
   }
 }
 
@@ -532,6 +555,8 @@ void ui_show(const char *name) {
     view = VIEW_USAGE;
   } else if (strcmp(name, "info") == 0) {
     view = VIEW_INFO;
+  } else if (strcmp(name, "settings") == 0) {
+    view = VIEW_SETTINGS;
   }
   apply_view();
 }
