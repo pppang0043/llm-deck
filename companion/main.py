@@ -9,6 +9,7 @@
     uv run main.py --camera shoot   기기 카메라로 사진을 찍어 저장한다 (open / close 로 화면만 열고 닫기)
     uv run main.py --camera-mount 1 사진이 돌아가 보이면 카메라 센서 방향을 맞춘다 (0~3, 좌우 반전이면 1m 처럼)
     uv run main.py --test-video 5   기기 카메라로 5초 녹화해 MOV 로 저장한다
+    uv run main.py --screenshot     기기 화면을 찍어 저장한다 (--view home 과 함께 쓰면 그 화면으로 바꾼 뒤)
     uv run main.py --test-photo     카메라 없이 무늬 사진을 찍은 것처럼 해서 SD 카드·PC 저장을 시험한다
     uv run main.py --test-sound     기기가 마이크를 켜고 끌 때 PC 스피커로 나는 소리를 들어 본다
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
@@ -143,6 +144,8 @@ def main() -> None:
     parser.add_argument("--camera-mount", choices=["0", "1", "2", "3", "0m", "1m", "2m", "3m"],
                         help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
     parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
+    parser.add_argument("--view", choices=["home", "usage", "info"], help="기기 화면 바꾸기")
+    parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
     parser.add_argument("--test-sound", action="store_true", help="마이크를 켜고 끌 때 나는 소리를 들어 본다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
@@ -200,6 +203,10 @@ def main() -> None:
                 message["photo_test"] = True
             if first and args.camera:
                 message["camera"] = args.camera
+            if first and args.view:
+                message["view"] = args.view
+            if first and args.screenshot:
+                message["screenshot"] = True
             if first and args.test_video:
                 message["camera"] = "record"
             if first and args.camera_mount:
@@ -234,7 +241,11 @@ def main() -> None:
             time.sleep(2)
             transport.close()
             return
-        if (args.test_photo or args.camera in ("shoot", "dump")) and transport and not first:
+        if args.view and not args.screenshot and transport and not first:
+            time.sleep(1)
+            transport.close()
+            return
+        if (args.test_photo or args.screenshot or args.camera in ("shoot", "dump")) and transport and not first:
             # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
             for _ in range(60):
                 time.sleep(1)

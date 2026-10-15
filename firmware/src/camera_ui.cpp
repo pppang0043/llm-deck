@@ -6,6 +6,7 @@
 #include "camera.h"
 #include "display.h"
 #include "photo.h"
+#include "ui.h"
 #include "link.h"
 #include "video.h"
 
@@ -104,12 +105,15 @@ static void take_photo() {
   }
 }
 
-static void screen_gesture(lv_event_t *e) {
-  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_TOP) open_camera();
-}
-
 static void overlay_gesture(lv_event_t *e) {
-  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_BOTTOM) close_camera();
+  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+  // 왼쪽으로 밀면 홈으로, 아래로 밀면 닫고 보던 화면으로
+  if (dir == LV_DIR_LEFT) {
+    close_camera();
+    ui_show_home();
+  } else if (dir == LV_DIR_BOTTOM) {
+    close_camera();
+  }
 }
 
 static void shutter_clicked(lv_event_t *e) {
@@ -154,10 +158,7 @@ void camera_ui_init() {
   frame_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
   frame_dsc.data = (const uint8_t *)frame_buf;
 
-  // 사용량 화면에서 위로 밀면 열린다
-  lv_obj_add_event_cb(lv_scr_act(), screen_gesture, LV_EVENT_GESTURE, NULL);
-
-  // 사용량 화면 위에 덮는 검은 화면. 아래로 밀면 닫힌다.
+  // 화면 위에 덮는 검은 화면. 왼쪽으로 밀면 홈으로, 아래로 밀면 닫힌다.
   overlay = lv_obj_create(lv_layer_top());
   lv_obj_remove_style_all(overlay);
   lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
@@ -314,4 +315,8 @@ void camera_ui_command(const char *cmd) {
   } else if (strcmp(cmd, "close") == 0) {
     close_camera();
   }
+}
+
+void camera_ui_show() {
+  open_camera();
 }

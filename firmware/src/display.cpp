@@ -139,3 +139,8 @@ SPIClass &display_spi() {
   }
   return spi;
 }
+
+void display_set_brightness(uint8_t pct) {
+  pct = constrain(pct, 10, 100);
+  ledcWrite(LCD_BL, 1023 * pct / 100);
+}

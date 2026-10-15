@@ -10,6 +10,9 @@
 #include "battery.h"
 #include "ble_link.h"
 #include "cloud.h"
+#include <img_converters.h>
+#include <lvgl.h>
+
 #include "camera.h"
 #include "camera_ui.h"
 #include "mic.h"
@@ -131,6 +134,20 @@ void link_loop() {
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
       if (doc["camera"].is<const char *>()) camera_ui_command(doc["camera"]);
+      if (doc["view"].is<const char *>()) ui_show(doc["view"]);
+      if (doc["screenshot"] == true) {
+        // 진단용: 지금 화면을 사진처럼 PC 로 보낸다
+        uint16_t *px;
+        int w, h;
+        lv_refr_now(NULL);
+        if (ui_screenshot(&px, &w, &h)) {
+          for (int i = 0; i < w * h; i++) px[i] = (px[i] << 8) | (px[i] >> 8);
+          uint8_t *jpg;
+          size_t len;
+          if (fmt2jpg((uint8_t *)px, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len);
+          free(px);
+        }
+      }
       if (doc["camera_mount"].is<JsonObjectConst>()) {
         camera_set_mount(doc["camera_mount"]["rot"] | 0, doc["camera_mount"]["mirror"] | false);
       }

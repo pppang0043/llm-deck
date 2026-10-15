@@ -114,7 +114,7 @@ static bool enqueue_text(JobKind kind, const char *text) {
 const char *video_start(uint8_t turns) {
   if (recording) return nullptr;
   Link link = link_active();
-  if (link == LINK_BLE) return "블루투스로는 동영상을\n보낼 수 없습니다\nUSB나 Wi-Fi로 연결하세요";
+  if (link == LINK_BLE) return "동영상은 블루투스로\n보낼 수 없습니다\nUSB 케이블을 연결하세요";
   if (link != LINK_USB && link != LINK_WIFI) return "PC가 연결되어 있지 않습니다\nUSB나 Wi-Fi로 연결하세요";
 
   time_t now = time(nullptr);

@@ -25,4 +25,16 @@ void ui_set_usage(JsonArrayConst services);
 void ui_layout();
 
 void ui_set_mic(bool on);
+
+// 홈 화면 (아이콘 6개: 사용량, 카메라, 마이크, 밝기, 정보, 추가 예정). 어디서든 왼쪽으로 밀면 홈으로 온다.
+void ui_show_home();
+// 홈의 카메라·밝기 아이콘을 눌렀을 때 할 일
+void ui_set_home_actions(void (*open_camera)(), void (*cycle_brightness)());
+// 정보 화면이 보이는 중인지, 그 내용
+bool ui_info_visible();
+// 화면 바꾸기: "home" / "usage" / "info" (PC 에서 시험할 때)
+void ui_show(const char *name);
+// 지금 화면을 RGB565 로 찍는다 (진단용). *pixels 는 free 로 해제.
+bool ui_screenshot(uint16_t **pixels, int *w, int *h);
+void ui_set_info(const char *text);
 void ui_set_level(uint8_t pct);

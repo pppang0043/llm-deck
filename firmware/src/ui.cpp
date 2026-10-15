@@ -48,6 +48,18 @@ static bool mic_on = false;
 static JsonDocument last_usage;
 static char wifi_info[48] = "시작 중...";
 
+// 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.
+enum View { VIEW_HOME, VIEW_USAGE, VIEW_INFO };
+static View view = VIEW_USAGE;
+static lv_obj_t *home;
+static lv_obj_t *home_icons[6];
+static lv_obj_t *mic_icon_sym;
+static lv_obj_t *info_panel;
+static lv_obj_t *info_lbl;
+static void (*camera_cb)() = nullptr;
+static void (*brightness_cb)() = nullptr;
+static void apply_view();
+
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
   lv_label_set_text(lbl, text);
@@ -86,7 +98,8 @@ static void add_gauge(lv_obj_t *parent, JsonObjectConst bar) {
 }
 
 static lv_obj_t *add_page(uint8_t index) {
-  lv_obj_t *page = lv_tileview_add_tile(tiles, index, 0, LV_DIR_HOR);
+  // 서비스 페이지는 위아래로 넘긴다 (왼쪽으로 밀기는 홈으로 가기에 쓴다)
+  lv_obj_t *page = lv_tileview_add_tile(tiles, 0, index, LV_DIR_VER);
   lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(page, 10, 0);
   lv_obj_set_style_pad_row(page, 6, 0);
@@ -116,6 +129,145 @@ static void mic_btn_event(lv_event_t *e) {
 
 static void rotate_btn_event(lv_event_t *e) {
   if (rotate_cb) rotate_cb();
+}
+
+static void screen_gesture(lv_event_t *e) {
+  // 어디서든 왼쪽으로 밀면 홈으로
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_LEFT && view != VIEW_HOME) ui_show_home();
+}
+
+static void home_icon_event(lv_event_t *e) {
+  switch ((intptr_t)lv_event_get_user_data(e)) {
+    case 0:
+      view = VIEW_USAGE;
+      apply_view();
+      break;
+    case 1:
+      if (camera_cb) camera_cb();
+      break;
+    case 2:
+      if (mic_toggle_cb) mic_toggle_cb();
+      break;
+    case 3:
+      if (brightness_cb) brightness_cb();
+      break;
+    case 4:
+      view = VIEW_INFO;
+      apply_view();
+      break;
+    default:
+      break;
+  }
+}
+
+// 홈 아이콘: 둥근 네모 안에 그림, 아래에 이름
+static lv_obj_t *add_home_icon(intptr_t index, const char *symbol, const char *name, lv_color_t color, bool enabled) {
+  lv_obj_t *cell = lv_obj_create(home);
+  lv_obj_remove_style_all(cell);
+  lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(cell, home_icon_event, LV_EVENT_CLICKED, (void *)index);
+
+  lv_obj_t *tile = lv_obj_create(cell);
+  lv_obj_remove_style_all(tile);
+  lv_obj_set_size(tile, 56, 56);
+  lv_obj_set_style_radius(tile, 14, 0);
+  lv_obj_set_style_bg_color(tile, enabled ? color : COLOR_MIC_OFF, 0);
+  lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_opa(tile, LV_OPA_70, LV_STATE_PRESSED);
+  lv_obj_clear_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(tile, LV_OBJ_FLAG_EVENT_BUBBLE);
+  lv_obj_align(tile, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_t *sym = add_label(tile, symbol, &lv_font_montserrat_28, enabled ? lv_color_white() : COLOR_DIM);
+  lv_obj_center(sym);
+
+  lv_obj_t *lbl = add_label(cell, name, &font_ko_14, enabled ? lv_color_white() : COLOR_DIM);
+  lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, 0);
+  home_icons[index] = cell;
+  if (index == 2) mic_icon_sym = sym;
+  return tile;
+}
+
+static void build_home() {
+  home = lv_obj_create(lv_scr_act());
+  lv_obj_remove_style_all(home);
+  lv_obj_set_style_bg_color(home, COLOR_BG, 0);
+  lv_obj_set_style_bg_opa(home, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(home, LV_OBJ_FLAG_SCROLLABLE);
+  add_home_icon(0, LV_SYMBOL_LIST, "사용량", COLOR_ACCENT, true);
+  add_home_icon(1, LV_SYMBOL_IMAGE, "카메라", lv_color_hex(0x3A7BD5), true);
+  add_home_icon(2, LV_SYMBOL_MUTE, "마이크", COLOR_MIC_OFF, true);
+  add_home_icon(3, LV_SYMBOL_EYE_OPEN, "밝기", lv_color_hex(0xC99A2E), true);
+  add_home_icon(4, LV_SYMBOL_SETTINGS, "정보", lv_color_hex(0x4C8C6A), true);
+  add_home_icon(5, LV_SYMBOL_PLUS, "추가 예정", COLOR_MIC_OFF, false);
+
+  // 정보 화면: 연결·배터리·메모리 같은 기기 상태 (main 이 1초마다 채운다)
+  info_panel = lv_obj_create(lv_scr_act());
+  lv_obj_remove_style_all(info_panel);
+  lv_obj_set_style_bg_color(info_panel, COLOR_BG, 0);
+  lv_obj_set_style_bg_opa(info_panel, LV_OPA_COVER, 0);
+  lv_obj_set_style_pad_all(info_panel, 12, 0);
+  lv_obj_t *title = add_label(info_panel, "정보", &font_ko_20, COLOR_ACCENT);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+  info_lbl = add_label(info_panel, "", &font_ko_14, lv_color_white());
+  lv_obj_set_style_text_line_space(info_lbl, 6, 0);
+  lv_obj_align(info_lbl, LV_ALIGN_TOP_LEFT, 0, 34);
+}
+
+// 홈 아이콘 배치: 세로 화면 2x3, 가로 화면 3x2
+static void layout_home() {
+  int w = display_width(), h = display_height() - STATUS_H;
+  lv_obj_set_size(home, w, h);
+  lv_obj_set_pos(home, 0, STATUS_H);
+  lv_obj_set_size(info_panel, w, h);
+  lv_obj_set_pos(info_panel, 0, STATUS_H);
+  int cols = w > display_height() ? 3 : 2;
+  int rows = 6 / cols;
+  int cw = w / cols, ch = h / rows;
+  for (int i = 0; i < 6; i++) {
+    lv_obj_set_size(home_icons[i], cw, 82);
+    lv_obj_set_pos(home_icons[i], (i % cols) * cw, (i / cols) * ch + (ch - 82) / 2);
+  }
+}
+
+static void apply_view() {
+  bool usage = view == VIEW_USAGE;
+  lv_obj_t *usage_parts[] = {tiles, level_bar, mic_btn};
+  for (lv_obj_t *o : usage_parts) {
+    if (usage) {
+      lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (view == VIEW_HOME) {
+    lv_obj_clear_flag(home, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(home, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (view == VIEW_INFO) {
+    lv_obj_clear_flag(info_panel, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(info_panel, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void ui_show_home() {
+  view = VIEW_HOME;
+  apply_view();
+}
+
+bool ui_info_visible() {
+  return view == VIEW_INFO;
+}
+
+void ui_set_info(const char *text) {
+  if (strcmp(lv_label_get_text(info_lbl), text) != 0) lv_label_set_text(info_lbl, text);
+}
+
+void ui_set_home_actions(void (*open_camera)(), void (*cycle_brightness)()) {
+  camera_cb = open_camera;
+  brightness_cb = cycle_brightness;
 }
 
 void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
@@ -189,8 +341,12 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   mic_lbl = add_label(mic_btn, "", &font_ko_20, lv_color_white());
   lv_obj_set_style_text_align(mic_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
+  build_home();
+  lv_obj_add_event_cb(scr, screen_gesture, LV_EVENT_GESTURE, NULL);
+
   ui_layout();
   ui_set_mic(false);
+  apply_view();
 }
 
 static void render_usage();
@@ -242,6 +398,7 @@ void ui_layout() {
     lv_obj_set_pos(mic_btn, 0, h - MIC_H);
   }
   ui_set_mic(mic_on);
+  layout_home();
   // 페이지는 크기에 맞춰 새로 만든다
   if (waiting) {
     show_waiting();
@@ -306,8 +463,8 @@ static void render_usage() {
 
   // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다
   lv_obj_t *active = lv_tileview_get_tile_act(tiles);
-  int tile_w = lv_obj_get_width(tiles);
-  uint8_t keep = active && tile_w > 0 ? lv_obj_get_x(active) / tile_w : 0;
+  int tile_h = lv_obj_get_height(tiles);
+  uint8_t keep = active && tile_h > 0 ? lv_obj_get_y(active) / tile_h : 0;
 
   size_t count = services.size();
   if (count == 0) {
@@ -342,7 +499,7 @@ static void render_usage() {
     index++;
   }
 
-  lv_obj_set_tile_id(tiles, keep < count ? keep : count - 1, 0, LV_ANIM_OFF);
+  lv_obj_set_tile_id(tiles, 0, keep < count ? keep : count - 1, LV_ANIM_OFF);
 }
 
 void ui_set_mic(bool on) {
@@ -356,9 +513,36 @@ void ui_set_mic(bool on) {
     lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "  마이크 켜짐" : LV_SYMBOL_MUTE "  마이크 꺼짐");
   }
   lv_obj_center(mic_lbl);
+  // 홈의 마이크 아이콘도 켜짐(빨강)/꺼짐을 따라간다
+  if (mic_icon_sym) {
+    lv_label_set_text(mic_icon_sym, on ? LV_SYMBOL_AUDIO : LV_SYMBOL_MUTE);
+    lv_obj_set_style_bg_color(lv_obj_get_parent(mic_icon_sym), on ? COLOR_MIC_ON : COLOR_MIC_OFF, 0);
+  }
   if (!on) ui_set_level(0);
 }
 
 void ui_set_level(uint8_t pct) {
   lv_bar_set_value(level_bar, pct, LV_ANIM_OFF);
+}
+
+void ui_show(const char *name) {
+  if (strcmp(name, "home") == 0) {
+    view = VIEW_HOME;
+  } else if (strcmp(name, "usage") == 0) {
+    view = VIEW_USAGE;
+  } else if (strcmp(name, "info") == 0) {
+    view = VIEW_INFO;
+  }
+  apply_view();
+}
+
+bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
+  lv_img_dsc_t *snap = lv_snapshot_take(lv_scr_act(), LV_IMG_CF_TRUE_COLOR);
+  if (!snap) return false;
+  *w = snap->header.w;
+  *h = snap->header.h;
+  *pixels = (uint16_t *)ps_malloc(*w * *h * 2);
+  if (*pixels) memcpy(*pixels, snap->data, *w * *h * 2);
+  lv_snapshot_free(snap);
+  return *pixels != nullptr;
 }

@@ -17,5 +17,8 @@ uint8_t display_rotation();
 int display_width();
 int display_height();
 
+// 화면 밝기 (10~100%)
+void display_set_brightness(uint8_t pct);
+
 // 화면과 SD 카드가 같이 쓰는 SPI
 SPIClass &display_spi();
