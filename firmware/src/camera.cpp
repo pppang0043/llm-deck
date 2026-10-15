@@ -10,8 +10,8 @@ static bool running = false;
 static char model[16] = "";
 static Preferences prefs;
 // 처음 꽂은 카메라(OV5640)로 찍어 보고 정한 기본값. 다르면 PC 도우미로 바꿀 수 있다.
-static uint8_t mount_rot = 2;
-static bool mount_mirror = false;
+static uint8_t mount_rot = 1;
+static bool mount_mirror = true;
 static framesize_t preview_size = FRAMESIZE_QVGA;
 // JPEG 미리보기를 풀어 놓는 곳 (돌리기 전)
 static uint8_t *decoded = nullptr;
