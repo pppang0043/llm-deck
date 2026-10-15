@@ -110,7 +110,6 @@ static void check_full(int raw) {
     minute_n--;
   }
   minute_mv[minute_n++] = raw;
-  if (full || minute_n < FLAT_MINUTES) return;
   int lo = minute_mv[0], hi = minute_mv[0];
   long sum = 0;
   for (int i = 0; i < minute_n; i++) {
@@ -118,7 +117,16 @@ static void check_full(int raw) {
     hi = max(hi, minute_mv[i]);
     sum += minute_mv[i];
   }
-  if (hi - lo > FLAT_RANGE_MV) return;
+  if (full) {
+    // 꽂아 둔 채 시간이 지나 배터리가 조금 줄면 충전 칩이 다시 충전을 시작한다 → 전압이 오른다
+    if (raw - lo > FLAT_RANGE_MV * 2) {
+      full = false;
+      minute_n = 0;
+      Serial.println("[battery] charging again");
+    }
+    return;
+  }
+  if (minute_n < FLAT_MINUTES || hi - lo > FLAT_RANGE_MV) return;
   full = true;
   Serial.printf("[battery] charge looks complete (raw %d..%d mV)\n", lo, hi);
   if (!scale_manual) {
@@ -223,5 +231,6 @@ int battery_pct() {
 }
 
 bool battery_charging() {
-  return charging;
+  // 충전기는 꽂혀 있어도 충전이 끝났으면 충전 중이 아니다
+  return charging && !full;
 }
