@@ -50,7 +50,7 @@ static char wifi_info[48] = "시작 중...";
 
 // 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.
 enum View { VIEW_HOME, VIEW_USAGE, VIEW_INFO };
-static View view = VIEW_USAGE;
+static View view = VIEW_HOME;  // 켤 때 첫 화면은 홈
 static lv_obj_t *home;
 static lv_obj_t *home_icons[6];
 static lv_obj_t *mic_icon_sym;
