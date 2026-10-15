@@ -10,3 +10,6 @@ companion/config.toml
 __pycache__/
 .venv/
 .DS_Store
+
+# 배포용 압축 파일
+dist/

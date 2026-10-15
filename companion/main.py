@@ -22,6 +22,7 @@
 import argparse
 import getpass
 import json
+import sys
 import time
 import tomllib
 from datetime import datetime
@@ -150,7 +151,11 @@ def main() -> None:
     parser.add_argument("--test-sound", action="store_true", help="마이크를 켜고 끌 때 나는 소리를 들어 본다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
+    parser.add_argument("--log", metavar="FILE", help="출력을 파일에 덧붙여 쓴다 (창 없이 자동 실행할 때)")
     args = parser.parse_args()
+    if args.log:
+        log = open(Path(args.log).expanduser(), "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = log
     if args.install_statusline:
         return statusline.install()
     if args.uninstall_statusline:
