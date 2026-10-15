@@ -25,6 +25,7 @@ LV_FONT_DECLARE(font_ko_28);
 #define COLOR_FULL lv_color_hex(0xE0483C)
 #define COLOR_MIC_OFF lv_color_hex(0x2A3038)
 #define COLOR_MIC_ON lv_color_hex(0xC8372D)
+#define COLOR_CHARGE lv_color_hex(0x4CAF50)
 
 static lv_obj_t *status_lbl;
 static lv_obj_t *tiles;
@@ -144,6 +145,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
   // 배터리: 숫자(%) + 건전지 모양. 배터리가 없으면 숨긴다.
   bat_lbl = add_label(scr, "", &font_ko_14, COLOR_DIM);
+  lv_label_set_recolor(bat_lbl, true);
   bat_icon = lv_obj_create(scr);
   lv_obj_remove_style_all(bat_icon);
   lv_obj_set_size(bat_icon, BAT_W + 3, BAT_H);
@@ -256,20 +258,26 @@ void ui_set_clock(const char *date, const char *time) {
   layout_status_right();
 }
 
-void ui_set_battery(int pct) {
+void ui_set_battery(int pct, bool charging) {
   static int shown = -2;
-  if (pct == shown) return;
+  static bool shown_charging = false;
+  if (pct == shown && charging == shown_charging) return;
   shown = pct;
+  shown_charging = charging;
   if (pct < 0) {
     lv_obj_add_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
   } else {
-    lv_color_t color = pct <= 10 ? COLOR_FULL : pct <= 20 ? COLOR_WARN : lv_color_hex(0x4CAF50);
+    lv_color_t color = charging ? COLOR_CHARGE : pct <= 10 ? COLOR_FULL : pct <= 20 ? COLOR_WARN : COLOR_CHARGE;
     int inner = BAT_W - 4;
     lv_obj_set_size(bat_fill, pct > 0 ? LV_MAX(1, inner * pct / 100) : 0, BAT_H - 4);
     lv_obj_set_style_bg_color(bat_fill, color, 0);
-    lv_label_set_text_fmt(bat_lbl, "%d%%", pct);
-    lv_obj_set_style_text_color(bat_lbl, pct <= 20 ? color : COLOR_DIM, 0);
+    if (charging) {
+      lv_label_set_text_fmt(bat_lbl, "#E0A030 " LV_SYMBOL_CHARGE "# %d%%", pct);
+    } else {
+      lv_label_set_text_fmt(bat_lbl, "%d%%", pct);
+    }
+    lv_obj_set_style_text_color(bat_lbl, !charging && pct <= 20 ? color : COLOR_DIM, 0);
     lv_obj_clear_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
   }

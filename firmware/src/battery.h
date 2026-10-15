@@ -12,3 +12,6 @@ int battery_mv();
 
 // 남은 양 (0~100). 배터리가 없으면 -1.
 int battery_pct();
+
+// 충전기(또는 PC 의 USB)가 연결되어 충전 중인지
+bool battery_charging();

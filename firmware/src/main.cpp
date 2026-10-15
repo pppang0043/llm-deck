@@ -99,7 +99,7 @@ static void show_clock() {
     snprintf(hm, sizeof(hm), "%02d:%02d", local.tm_hour, local.tm_min);
   }
   ui_set_clock(date, hm);
-  ui_set_battery(battery_pct());
+  ui_set_battery(battery_pct(), battery_charging());
 }
 
 void setup() {

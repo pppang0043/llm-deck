@@ -15,10 +15,20 @@ static const int CURVE[][2] = {
 static float smooth_mv = 0;
 static int pct = -1;
 
+// 충전 중인지. 보드의 충전 칩 상태선은 LED 에만 연결되어 있어 직접 읽을 수 없으므로 두 가지로 짐작한다.
+//  1) USB 로 PC 에 연결되어 있음 (USB 신호가 오가는지로 안다) → 그 USB 로 전원도 들어온다
+//  2) 충전기(어댑터)만 꽂았을 때: 꽂는 순간 전압이 갑자기 오르고, 뽑는 순간 갑자기 떨어진다
+#define JUMP_MV 80
+#define WINDOW 10  // 최근 30초 (3초 x 10)
+static int recent[WINDOW];
+static int recent_n = 0;
+static bool charger_by_voltage = false;
+static bool charging = false;
+
 static int read_mv() {
   uint32_t sum = 0;
-  for (int i = 0; i < 16; i++) sum += analogReadMilliVolts(BAT_ADC);
-  return sum / 16 * BAT_DIVIDER;
+  for (int i = 0; i < 64; i++) sum += analogReadMilliVolts(BAT_ADC);
+  return sum / 64 * BAT_DIVIDER;
 }
 
 static int mv_to_pct(int mv) {
@@ -33,11 +43,45 @@ static int mv_to_pct(int mv) {
   return 0;
 }
 
+static void detect_charger(int mv) {
+  if (recent_n >= 2) {
+    int lo = recent[0], hi = recent[0];
+    for (int i = 1; i < recent_n; i++) {
+      lo = min(lo, recent[i]);
+      hi = max(hi, recent[i]);
+    }
+    int prev = recent[recent_n - 1];
+    // 한 번 튄 값에 속지 않도록 직전 값과 이번 값이 둘 다 넘어야 한다
+    if (!charger_by_voltage && mv - lo >= JUMP_MV && prev - lo >= JUMP_MV) {
+      charger_by_voltage = true;
+      recent_n = 0;
+    } else if (charger_by_voltage && hi - mv >= JUMP_MV && hi - prev >= JUMP_MV) {
+      charger_by_voltage = false;
+      recent_n = 0;
+    }
+  }
+  if (recent_n == WINDOW) {
+    memmove(recent, recent + 1, sizeof(int) * (WINDOW - 1));
+    recent_n--;
+  }
+  recent[recent_n++] = mv;
+}
+
 static void update(int mv) {
   if (mv < NO_BATTERY_MV) {
     smooth_mv = 0;
     pct = -1;
+    charging = false;
+    recent_n = 0;
     return;
+  }
+  bool was_charging = charging;
+  detect_charger(mv);
+  charging = Serial.isPlugged() || charger_by_voltage;
+  // 충전기를 꽂거나 뽑으면 전압이 한 번에 바뀌므로 다듬은 값도 새로 시작한다
+  if (charging != was_charging) {
+    smooth_mv = 0;
+    Serial.printf("[battery] %s (%d mV)\n", charging ? "charging" : "on battery", mv);
   }
   // 무선 송신 등으로 전압이 출렁이므로 천천히 따라간다
   smooth_mv = smooth_mv == 0 ? mv : smooth_mv * 0.8f + mv * 0.2f;
@@ -47,7 +91,7 @@ static void update(int mv) {
 void battery_init() {
   // 감쇠는 기본값(11dB, 약 3.1V 까지)을 그대로 쓴다
   update(read_mv());
-  Serial.printf("[battery] %d mV, %d%%\n", battery_mv(), pct);
+  Serial.printf("[battery] %d mV, %d%%, %s\n", battery_mv(), pct, charging ? "charging" : "on battery");
 }
 
 void battery_loop() {
@@ -63,4 +107,8 @@ int battery_mv() {
 
 int battery_pct() {
   return pct;
+}
+
+bool battery_charging() {
+  return charging;
 }
