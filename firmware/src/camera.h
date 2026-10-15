@@ -8,6 +8,9 @@
 
 // 부팅 때 한 번: 카메라가 켜질 때 쓸 내부 RAM 자리를 미리 잡아 둔다.
 void camera_init();
+// 카메라를 쓰지 않는 동안 잡아 둔 자리를 잠깐 내준다 (HTTPS 연결처럼 내부 RAM 이 많이 필요한 일 앞뒤로).
+// lend=true 로 내주고, 끝나면 lend=false 로 다시 잡는다.
+void camera_lend_reserve(bool lend);
 
 // 카메라를 켠다. 카메라가 없으면 false.
 bool camera_start();

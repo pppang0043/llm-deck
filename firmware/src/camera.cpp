@@ -32,6 +32,16 @@ static void release_reserve() {
   reserve = nullptr;
 }
 
+void camera_lend_reserve(bool lend) {
+  // 카메라가 켜져 있으면 자리는 이미 카메라가 쓰고 있다
+  if (running) return;
+  if (lend) {
+    release_reserve();
+  } else {
+    hold_reserve();
+  }
+}
+
 void camera_init() {
   hold_reserve();
   Serial.printf("[camera] reserved %s\n", reserve ? "ok" : "failed");

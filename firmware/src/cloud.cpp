@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "psram_json.h"
+#include "camera.h"
 #include "link.h"
 #include "settings.h"
 
@@ -83,7 +84,16 @@ static void build_pages(JsonObjectConst shared, JsonArray services) {
   }
 }
 
+static void fetch(const char *from);
+
 static void poll(const char *from) {
+  // HTTPS(mbedTLS)는 내부 RAM 에서만 수십 KB 를 쓰므로, 카메라용으로 잡아 둔 자리를 잠깐 빌린다
+  camera_lend_reserve(true);
+  fetch(from);
+  camera_lend_reserve(false);
+}
+
+static void fetch(const char *from) {
   NetworkClientSecure client;
   // 화면에 보여줄 사용률 숫자만 읽으므로 서버 인증서 검증은 생략한다
   client.setInsecure();
@@ -93,7 +103,9 @@ static void poll(const char *from) {
   if (!http.begin(client, from)) return;
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    Serial.printf("[cloud] fetch failed: %d\n", code);
+    Serial.printf("[cloud] fetch failed: %d (internal free %u, largest %u)\n", code,
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     http.end();
     return;
   }
