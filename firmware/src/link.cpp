@@ -7,6 +7,7 @@
 
 #include <WiFiUdp.h>
 
+#include "psram_json.h"
 #include "battery.h"
 #include "ble_link.h"
 #include "cloud.h"
@@ -101,7 +102,7 @@ void link_init(void (*set_mic)(bool on)) {
   prefs.begin("llm-deck");
   saved = prefs.getString("usage", "").c_str();
   shown = saved;
-  JsonDocument doc;
+  JsonDocument doc(PSRAM_JSON);
   if (!saved.empty() && !deserializeJson(doc, saved)) {
     ui_set_usage(doc.as<JsonArrayConst>());
     Serial.printf("[link] restored saved usage: %u services\n", (unsigned)doc.size());
@@ -124,7 +125,7 @@ void link_loop() {
   xSemaphoreGive(lock);
 
   if (!message.empty()) {
-    JsonDocument doc;
+    JsonDocument doc(PSRAM_JSON);
     if (deserializeJson(doc, message)) {
       Serial.printf("[link] bad json from %s (%u bytes)\n", link_tag(from), (unsigned)message.size());
     } else {

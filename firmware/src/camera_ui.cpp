@@ -88,7 +88,7 @@ static void open_camera() {
   } else {
     lv_obj_add_flag(shutter, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(record_btn, LV_OBJ_FLAG_HIDDEN);
-    show_message("카메라가 연결되어 있지 않습니다", 0);
+    show_message(camera_missing() ? "카메라가 연결되어 있지 않습니다" : "카메라를 켜지 못했습니다\n기기를 재시작해 보세요", 0);
   }
 }
 

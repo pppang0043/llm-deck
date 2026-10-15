@@ -2,6 +2,7 @@
 
 #include <lvgl.h>
 
+#include "psram_json.h"
 #include "display.h"
 #include "settings.h"
 
@@ -46,7 +47,7 @@ static char clock_time[8] = "";
 static bool waiting = true;
 static bool mic_on = false;
 // 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
-static JsonDocument last_usage;
+static JsonDocument last_usage(PSRAM_JSON);
 static char wifi_info[48] = "시작 중...";
 
 // 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.

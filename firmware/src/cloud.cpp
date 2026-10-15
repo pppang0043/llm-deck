@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include <time.h>
 
+#include "psram_json.h"
 #include "link.h"
 
 // 공유 저장소는 최대 5분 늦게 반영되므로 자주 읽을 필요가 없다
@@ -98,12 +99,12 @@ static void poll(const char *from) {
   String body = http.getString();
   http.end();
 
-  JsonDocument shared;
+  JsonDocument shared(PSRAM_JSON);
   if (deserializeJson(shared, body) || !shared.is<JsonObjectConst>()) {
     Serial.println("[cloud] bad data");
     return;
   }
-  JsonDocument message;
+  JsonDocument message(PSRAM_JSON);
   build_pages(shared.as<JsonObjectConst>(), message["services"].to<JsonArray>());
   String out;
   serializeJson(message, out);

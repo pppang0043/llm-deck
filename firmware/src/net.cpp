@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include <WiFiMulti.h>
 
+#include "psram_json.h"
 #include "link.h"
 #include "mic.h"
 #include "photo.h"
@@ -23,7 +24,7 @@ static bool station = false;
 static bool was_connected = false;
 
 // 기기에 저장된 Wi-Fi 목록: [{"s": 이름, "p": 비밀번호}, ...]
-static JsonDocument saved;
+static JsonDocument saved(PSRAM_JSON);
 // 메인 루프에서 추가한 Wi-Fi 를 접속 태스크로 넘기는 칸
 static char pending_ssid[33] = "";
 static char pending_password[65] = "";
@@ -55,7 +56,7 @@ static void store_saved() {
 }
 
 static void send_state() {
-  JsonDocument doc;
+  JsonDocument doc(PSRAM_JSON);
   doc["ok"] = true;
   doc["mic"] = mic_is_on();
   String out;

@@ -5,6 +5,7 @@
 
 #include "battery.h"
 #include "ble_link.h"
+#include "camera.h"
 #include "camera_ui.h"
 #include "cloud.h"
 #include "display.h"
@@ -151,6 +152,7 @@ void setup() {
 
   display_init();
   ui_init(toggle_mic, rotate_by_button);
+  camera_init();
   camera_ui_init();
   ui_set_home_actions(camera_ui_show, settings_cycle_brightness);
   imu_init();

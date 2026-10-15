@@ -15,6 +15,27 @@ static uint8_t mount_rot = 0;
 static bool mount_mirror = true;
 static framesize_t preview_size = FRAMESIZE_QVGA;
 static bool video_mode = false;
+static esp_err_t last_error = ESP_OK;
+
+// 카메라는 켤 때 내부 RAM 에서 16KB 짜리 연속 덩어리(DMA)가 필요하다. 오래 켜 두면 내부 RAM 이
+// 잘게 쪼개져 이 덩어리를 못 얻을 수 있으므로, 부팅 때 자리를 미리 잡아 두었다가 카메라를 켜기
+// 직전에 내놓고, 끄면 다시 잡는다.
+#define RESERVE_BYTES (20 * 1024)
+static void *reserve = nullptr;
+
+static void hold_reserve() {
+  if (!reserve) reserve = heap_caps_malloc(RESERVE_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+}
+
+static void release_reserve() {
+  heap_caps_free(reserve);
+  reserve = nullptr;
+}
+
+void camera_init() {
+  hold_reserve();
+  Serial.printf("[camera] reserved %s\n", reserve ? "ok" : "failed");
+}
 // JPEG 미리보기를 풀어 놓는 곳 (돌리기 전)
 static uint8_t *decoded = nullptr;
 
@@ -80,11 +101,16 @@ bool camera_start() {
   config.frame_size = FRAMESIZE_UXGA;
   config.jpeg_quality = 10;
   config.fb_count = 2;
+  release_reserve();
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("[camera] not found (0x%x)\n", err);
+    hold_reserve();
+    last_error = err;
+    Serial.printf("[camera] start failed (0x%x), internal largest block %u\n", err,
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
     return false;
   }
+  last_error = ESP_OK;
   sensor_t *s = esp_camera_sensor_get();
   camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
   strlcpy(model, info ? info->name : "?", sizeof(model));
@@ -94,8 +120,9 @@ bool camera_start() {
   s->set_framesize(s, preview_size);
   if (!decoded) decoded = (uint8_t *)ps_malloc(320 * 240 * 2);
   running = true;
-  Serial.printf("[camera] %s on (mount rot %d, mirror %d), internal free %u\n", model, mount_rot, mount_mirror,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  Serial.printf("[camera] %s on (mount rot %d, mirror %d), internal free %u, largest %u\n", model, mount_rot,
+                mount_mirror, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
   return true;
 }
 
@@ -104,6 +131,7 @@ void camera_stop() {
   camera_set_video(false, nullptr);
   esp_camera_deinit();
   running = false;
+  hold_reserve();
   Serial.printf("[camera] off, internal free %u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 
@@ -366,4 +394,9 @@ bool camera_test_pattern(uint8_t **jpg, size_t *len) {
   bool ok = fmt2jpg(rgb, w * h * 2, w, h, PIXFORMAT_RGB565, 85, jpg, len);
   free(rgb);
   return ok;
+}
+
+bool camera_missing() {
+  // 카메라가 응답하지 않았을 때(꽂혀 있지 않음)와 메모리가 모자랄 때를 구별한다
+  return last_error == ESP_ERR_NOT_FOUND || last_error == ESP_ERR_NOT_SUPPORTED;
 }
