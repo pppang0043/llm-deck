@@ -98,7 +98,14 @@ void battery_loop() {
   static uint32_t checked_ms = 0;
   if (millis() - checked_ms < 3000) return;
   checked_ms = millis();
-  update(read_mv());
+  int mv = read_mv();
+  update(mv);
+  // 1분마다 기록을 남긴다 (충전/방전 추세 확인용)
+  static uint32_t logged_ms = 0;
+  if (millis() - logged_ms >= 60000) {
+    logged_ms = millis();
+    Serial.printf("[battery] %d mV (now %d), %d%%, %s\n", battery_mv(), mv, pct, charging ? "charging" : "on battery");
+  }
 }
 
 int battery_mv() {

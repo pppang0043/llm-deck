@@ -184,6 +184,9 @@ def main() -> None:
                 print(f"[device] 전송 실패: {e}")
                 transport.close()
                 transport = None
+        else:
+            # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
+            collect_limits(cfg)
         if args.record:
             if transport:
                 print(f"[audio] {RECORD_SECONDS}초간 녹음합니다. 기기의 마이크가 켜져 있어야 합니다.")
