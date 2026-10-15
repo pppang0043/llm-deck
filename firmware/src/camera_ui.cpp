@@ -107,8 +107,8 @@ static void take_photo() {
 
 static void overlay_gesture(lv_event_t *e) {
   lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
-  // 왼쪽으로 밀면 홈으로, 아래로 밀면 닫고 보던 화면으로
-  if (dir == LV_DIR_LEFT) {
+  // 오른쪽으로 밀면 홈으로, 아래로 밀면 닫고 보던 화면으로
+  if (dir == LV_DIR_RIGHT) {
     close_camera();
     ui_show_home();
   } else if (dir == LV_DIR_BOTTOM) {
@@ -158,7 +158,7 @@ void camera_ui_init() {
   frame_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
   frame_dsc.data = (const uint8_t *)frame_buf;
 
-  // 화면 위에 덮는 검은 화면. 왼쪽으로 밀면 홈으로, 아래로 밀면 닫힌다.
+  // 화면 위에 덮는 검은 화면. 오른쪽으로 밀면 홈으로, 아래로 밀면 닫힌다.
   overlay = lv_obj_create(lv_layer_top());
   lv_obj_remove_style_all(overlay);
   lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);

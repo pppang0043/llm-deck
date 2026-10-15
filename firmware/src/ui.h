@@ -26,7 +26,7 @@ void ui_layout();
 
 void ui_set_mic(bool on);
 
-// 홈 화면 (아이콘 6개: 사용량, 카메라, 마이크, 밝기, 정보, 추가 예정). 어디서든 왼쪽으로 밀면 홈으로 온다.
+// 홈 화면 (아이콘 6개: 사용량, 카메라, 마이크, 밝기, 정보, 추가 예정). 어디서든 오른쪽으로 밀면 홈으로 온다.
 void ui_show_home();
 // 홈의 카메라·밝기 아이콘을 눌렀을 때 할 일
 void ui_set_home_actions(void (*open_camera)(), void (*cycle_brightness)());

@@ -98,7 +98,7 @@ static void add_gauge(lv_obj_t *parent, JsonObjectConst bar) {
 }
 
 static lv_obj_t *add_page(uint8_t index) {
-  // 서비스 페이지는 위아래로 넘긴다 (왼쪽으로 밀기는 홈으로 가기에 쓴다)
+  // 서비스 페이지는 위아래로 넘긴다 (오른쪽으로 밀기는 홈으로 가기에 쓴다)
   lv_obj_t *page = lv_tileview_add_tile(tiles, 0, index, LV_DIR_VER);
   lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(page, 10, 0);
@@ -132,8 +132,8 @@ static void rotate_btn_event(lv_event_t *e) {
 }
 
 static void screen_gesture(lv_event_t *e) {
-  // 어디서든 왼쪽으로 밀면 홈으로
-  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_LEFT && view != VIEW_HOME) ui_show_home();
+  // 어디서든 오른쪽으로 밀면 홈으로
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_RIGHT && view != VIEW_HOME) ui_show_home();
 }
 
 static void home_icon_event(lv_event_t *e) {
