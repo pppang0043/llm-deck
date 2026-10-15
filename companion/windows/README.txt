@@ -28,6 +28,8 @@ LLM Deck 기기에 사용량을 보내고, 기기의 마이크·카메라·알�
 - 사용량: 이 PC 의 Claude Code / Codex 한도 사용률. Claude Code 가 없는 PC 는 다른 PC 가 올린 값을 받아 옵니다.
 - 사진·동영상: 기기 카메라로 찍으면 이 PC 의 "사진\LLM Deck", "비디오\LLM Deck" 폴더에 저장됩니다.
   동영상(.mov)이 Windows 기본 앱에서 재생되지 않으면 VLC 플레이어로 열어 주세요.
+  폴더가 없으면 자동으로 만듭니다. Windows 보안의 "제어된 폴더 액세스"가 막으면
+  대신 C:\Users\내이름\.llm-deck\photos (동영상은 videos) 에 저장하고 기록 파일에 알려 줍니다.
 - 알림음: 기기 마이크를 켜고 끌 때 PC 스피커로 짧은 소리가 납니다.
 - 마이크: 기기에 마이크 부품을 단 뒤, VB-CABLE(https://vb-audio.com/Cable/)을 설치하면
   다른 프로그램에서 "CABLE Output" 을 마이크로 고를 수 있습니다.
