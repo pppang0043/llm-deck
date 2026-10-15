@@ -11,12 +11,14 @@
 #include "link.h"
 #include "mic.h"
 #include "photo.h"
+#include "settings.h"
 #include "secrets.h"
 #include "ui.h"
 
 #define HOSTNAME "llm-deck"
 
 static WebServer server(80);
+static volatile bool radio_on = true;
 static WiFiMulti multi;
 static Preferences prefs;
 static SemaphoreHandle_t lock;
@@ -42,7 +44,7 @@ static void wifi_task(void *) {
     // Wi-Fi 를 찾는 동안에는 같은 안테나를 쓰는 블루투스가 끊길 수 있다.
     // 블루투스로 PC 와 연결되어 있으면 찾지 않고, 못 찾았을 때는 한동안 쉬었다가 다시 찾는다.
     bool searched = false;
-    if (station && WiFi.status() != WL_CONNECTED && link_active() != LINK_BLE) {
+    if (radio_on && station && WiFi.status() != WL_CONNECTED && link_active() != LINK_BLE) {
       searched = multi.run(8000) != WL_CONNECTED;
     }
     vTaskDelay(pdMS_TO_TICKS(searched ? 30000 : 3000));
@@ -109,6 +111,8 @@ void net_init() {
     station = true;
   }
   Serial.printf("[net] %u saved wifi networks%s\n", (unsigned)saved.size(), strlen(WIFI_SSID) > 0 ? " + secrets.h" : "");
+  radio_on = settings_link_allowed(LINK_WIFI) || settings_link_allowed(LINK_CLOUD);
+  if (!radio_on) Serial.println("[net] wifi off in settings");
   ui_set_wifi_info(station ? "연결 중..." : "설정 안 됨");
   xTaskCreatePinnedToCore(wifi_task, "wifi", 4096, NULL, 1, NULL, 1);
 }
@@ -151,4 +155,18 @@ void net_loop() {
   }
   was_connected = connected;
   if (connected) server.handleClient();
+}
+
+void net_set_enabled(bool on) {
+  if (on == radio_on) return;
+  radio_on = on;
+  if (!on) {
+    WiFi.disconnect(true);
+    Serial.println("[net] wifi off in settings");
+    ui_set_wifi_info("꺼짐 (설정)");
+  } else {
+    WiFi.mode(WIFI_STA);
+    Serial.println("[net] wifi on");
+    ui_set_wifi_info("연결 중...");
+  }
 }

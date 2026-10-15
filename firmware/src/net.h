@@ -14,3 +14,5 @@ void net_add_wifi(const char *ssid, const char *password);
 
 // PC 도우미로 추가한 Wi-Fi 를 모두 지운다 (secrets.h 의 것은 남는다).
 void net_clear_wifi();
+// Wi-Fi 를 켜고 끈다 (설정에서 Wi-Fi 와 클라우드를 모두 끄면 끈다)
+void net_set_enabled(bool on);

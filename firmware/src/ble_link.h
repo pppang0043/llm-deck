@@ -12,6 +12,8 @@
 
 void ble_link_init();
 bool ble_link_connected();
+// 끄면 연결을 끊고 광고(다른 기기가 찾을 수 있게 알리기)를 멈춘다
+void ble_link_set_enabled(bool on);
 void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples);
 void ble_send_event(const char *json);
 // 한 번에 보낼 수 있는 사진 데이터 크기 (연결이 없으면 0)

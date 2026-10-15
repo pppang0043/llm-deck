@@ -9,6 +9,7 @@
 
 #include "psram_json.h"
 #include "link.h"
+#include "settings.h"
 
 // 공유 저장소는 최대 5분 늦게 반영되므로 자주 읽을 필요가 없다
 #define POLL_MS 60000
@@ -128,7 +129,7 @@ static void cloud_task(void *) {
       polled = false;
       continue;
     }
-    if (!from[0] || WiFi.status() != WL_CONNECTED || !clock_ready()) continue;
+    if (!settings_link_allowed(LINK_CLOUD) || !from[0] || WiFi.status() != WL_CONNECTED || !clock_ready()) continue;
     if (polled && millis() - last_ms < POLL_MS) continue;
     polled = true;
     last_ms = millis();

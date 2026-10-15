@@ -3,7 +3,10 @@
 #include <Preferences.h>
 
 #include "camera.h"
+#include "ble_link.h"
 #include "display.h"
+#include "link.h"
+#include "net.h"
 
 LV_FONT_DECLARE(font_ko_14);
 LV_FONT_DECLARE(font_ko_20);
@@ -16,6 +19,22 @@ static Preferences prefs;
 static uint8_t brightness = 80;
 static bool auto_rotate = true;
 static bool mic_sound = true;
+
+// 연결 방식별 허용 여부. 순서는 화면에 보이는 순서.
+struct LinkOption {
+  Link link;
+  const char *key;
+  const char *title;
+  const char *desc;
+  bool allowed;
+  lv_obj_t *sw;
+};
+static LinkOption link_options[] = {
+    {LINK_USB, "lk_usb", "USB", "케이블로 연결한 PC", true, nullptr},
+    {LINK_BLE, "lk_ble", "블루투스", "끄면 다른 기기가 찾지 못함", true, nullptr},
+    {LINK_WIFI, "lk_wifi", "Wi-Fi", "같은 공유기에 있는 PC", true, nullptr},
+    {LINK_CLOUD, "lk_cloud", "클라우드", "PC 없을 때 인터넷에서 받기", true, nullptr},
+};
 
 static lv_obj_t *bright_slider;
 static lv_obj_t *bright_value;
@@ -31,7 +50,28 @@ void settings_init() {
   brightness = prefs.getUChar("bright", 80);
   auto_rotate = prefs.getBool("auto_rot", true);
   mic_sound = prefs.getBool("mic_sound", true);
+  for (LinkOption &o : link_options) o.allowed = prefs.getBool(o.key, true);
   display_set_brightness(brightness);
+}
+
+bool settings_link_allowed(int link) {
+  for (const LinkOption &o : link_options) {
+    if (o.link == link) return o.allowed;
+  }
+  return true;
+}
+
+// 블루투스·Wi-Fi 는 끄면 무선도 실제로 끈다 (다른 기기가 찾거나 붙지 못하게)
+static void apply_links() {
+  ble_link_set_enabled(settings_link_allowed(LINK_BLE));
+  net_set_enabled(settings_link_allowed(LINK_WIFI) || settings_link_allowed(LINK_CLOUD));
+}
+
+static void link_changed(lv_event_t *e) {
+  LinkOption *o = (LinkOption *)lv_event_get_user_data(e);
+  o->allowed = lv_obj_has_state(o->sw, LV_STATE_CHECKED);
+  prefs.putBool(o->key, o->allowed);
+  apply_links();
 }
 
 uint8_t settings_brightness() {
@@ -186,6 +226,18 @@ void settings_build(lv_obj_t *parent) {
   mirror_sw = add_switch(add_row(parent, "카메라 좌우 반전", "글자가 거꾸로 보이면 바꾸기"),
                          camera_mount_mirror(), mirror_changed);
 
+  lv_obj_t *section = lv_label_create(parent);
+  lv_label_set_text(section, "연결 방식");
+  lv_obj_set_style_text_font(section, &font_ko_14, 0);
+  lv_obj_set_style_text_color(section, COLOR_DIM, 0);
+  lv_obj_set_style_pad_top(section, 6, 0);
+  for (LinkOption &o : link_options) {
+    o.sw = lv_switch_create(add_row(parent, o.title, o.desc));
+    lv_obj_set_size(o.sw, 50, 28);
+    lv_obj_align(o.sw, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(o.sw, link_changed, LV_EVENT_VALUE_CHANGED, &o);
+  }
+
   add_button(add_row(parent, "기기 재시작", nullptr), "재시작", restart_clicked, &restart_lbl);
 
   settings_refresh();
@@ -208,6 +260,13 @@ void settings_refresh() {
     lv_obj_add_state(mirror_sw, LV_STATE_CHECKED);
   } else {
     lv_obj_clear_state(mirror_sw, LV_STATE_CHECKED);
+  }
+  for (LinkOption &o : link_options) {
+    if (o.allowed) {
+      lv_obj_add_state(o.sw, LV_STATE_CHECKED);
+    } else {
+      lv_obj_clear_state(o.sw, LV_STATE_CHECKED);
+    }
   }
   show_camera_mount();
   restart_armed_ms = 0;

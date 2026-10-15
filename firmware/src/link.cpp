@@ -8,6 +8,7 @@
 #include <WiFiUdp.h>
 
 #include "psram_json.h"
+#include "settings.h"
 #include "battery.h"
 #include "ble_link.h"
 #include "cloud.h"
@@ -104,6 +105,7 @@ static int priority(Link link) {
 }
 
 static bool alive(Link link) {
+  if (!settings_link_allowed(link)) return false;
   if (!heard_ms[link] || millis() - heard_ms[link] > LINK_FRESH_MS) return false;
   // 케이블을 뽑거나 블루투스가 끊기면 기다리지 않고 바로 내려놓는다
   if (link == LINK_USB && !Serial.isPlugged()) return false;
@@ -156,6 +158,15 @@ void link_loop() {
   from = pending_from;
   xSemaphoreGive(lock);
 
+  // 설정에서 끈 연결 방식으로 온 것은 버린다
+  if (!message.empty() && !settings_link_allowed(from)) {
+    static uint32_t warned_ms = 0;
+    if (millis() - warned_ms > 60000) {
+      warned_ms = millis();
+      Serial.printf("[link] ignoring %s (turned off in settings)\n", link_tag(from));
+    }
+    message.clear();
+  }
   if (!message.empty()) {
     JsonDocument doc(PSRAM_JSON);
     if (deserializeJson(doc, message)) {
@@ -207,10 +218,9 @@ void link_loop() {
   save_if_due();
   if (active != LINK_NONE && millis() - last_ms > STALE_MS) {
     set_active(LINK_NONE);
-  } else if (active != LINK_NONE && active != LINK_CLOUD && !alive(active)) {
-    // 지금 연결이 끊겼으면 살아 있는 다음 연결로 넘어간다
-    Link best = best_link();
-    if (best != LINK_NONE) set_active(best);
+  } else if (active != LINK_NONE && !alive(active)) {
+    // 지금 연결이 끊겼거나 설정에서 껐으면 살아 있는 다음 연결로 넘어간다 (없으면 "PC 없음")
+    set_active(best_link());
   }
 }
 

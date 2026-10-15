@@ -5,6 +5,7 @@
 #include <string>
 
 #include "link.h"
+#include "settings.h"
 
 #define NUS_SERVICE "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define NUS_RX "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  // PC -> 기기
@@ -17,6 +18,7 @@ static NimBLEServer *server;
 static NimBLECharacteristic *tx;
 static std::string message;
 static volatile bool connected = false;
+static volatile bool enabled = true;
 static volatile uint16_t mtu = 23;
 
 // IMA ADPCM: 16비트 샘플을 "이전 값과의 차이" 4비트로 줄이는 표준 방식
@@ -71,7 +73,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     mtu = 23;
     message.clear();
     Serial.println("[ble] disconnected");
-    NimBLEDevice::startAdvertising();
+    if (enabled) NimBLEDevice::startAdvertising();
   }
   void onMTUChange(uint16_t value, NimBLEConnInfo &info) override {
     mtu = value;
@@ -111,8 +113,13 @@ void ble_link_init() {
   adv->addServiceUUID(NUS_SERVICE);
   adv->setName(BLE_NAME);
   adv->enableScanResponse(true);
-  adv->start();
-  Serial.println("[ble] advertising as " BLE_NAME);
+  if (settings_link_allowed(LINK_BLE)) {
+    adv->start();
+    Serial.println("[ble] advertising as " BLE_NAME);
+  } else {
+    enabled = false;
+    Serial.println("[ble] off in settings");
+  }
 }
 
 void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
@@ -176,4 +183,17 @@ bool ble_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
 
 bool ble_link_connected() {
   return connected;
+}
+
+void ble_link_set_enabled(bool on) {
+  if (on == enabled || !server) return;
+  enabled = on;
+  if (on) {
+    NimBLEDevice::startAdvertising();
+    Serial.println("[ble] on");
+  } else {
+    NimBLEDevice::stopAdvertising();
+    for (uint16_t handle : server->getPeerDevices()) server->disconnect(handle);
+    Serial.println("[ble] off");
+  }
 }

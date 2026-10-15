@@ -16,6 +16,9 @@ bool settings_auto_rotate();
 // 마이크를 켜고 끌 때 PC 스피커로 알림음을 낼지
 bool settings_mic_sound();
 
+// 연결 방식을 쓸지 (link.h 의 Link 값: USB / 블루투스 / Wi-Fi / 클라우드). 끈 방식으로 오는 데이터는 받지 않는다.
+bool settings_link_allowed(int link);
+
 // 설정 화면을 parent 안에 만든다 (ui.cpp 가 부른다)
 void settings_build(lv_obj_t *parent);
 // 설정 화면이 보일 때마다 불러 값을 다시 맞춘다
