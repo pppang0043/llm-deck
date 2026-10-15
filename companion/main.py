@@ -137,7 +137,7 @@ def main() -> None:
     parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
     parser.add_argument("--battery", type=float, metavar="V", help="멀티미터로 잰 배터리 전압(V)으로 기기를 보정한다")
-    parser.add_argument("--camera", choices=["open", "shoot", "close"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기")
+    parser.add_argument("--camera", choices=["open", "shoot", "close", "dump"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기")
     parser.add_argument("--camera-mount", choices=["0", "1", "2", "3", "0m", "1m", "2m", "3m"],
                         help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
@@ -215,7 +215,7 @@ def main() -> None:
             time.sleep(2)
             transport.close()
             return
-        if (args.test_photo or args.camera == "shoot") and transport and not first:
+        if (args.test_photo or args.camera in ("shoot", "dump")) and transport and not first:
             # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
             for _ in range(60):
                 time.sleep(1)

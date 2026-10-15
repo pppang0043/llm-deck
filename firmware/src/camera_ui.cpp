@@ -1,5 +1,6 @@
 #include "camera_ui.h"
 
+#include <img_converters.h>
 #include <lvgl.h>
 
 #include "camera.h"
@@ -16,6 +17,7 @@ static lv_obj_t *overlay;
 static lv_obj_t *preview;
 static lv_obj_t *shutter;
 static lv_obj_t *close_btn;
+static lv_obj_t *turn_btn;
 static lv_obj_t *msg_lbl;
 static lv_img_dsc_t frame_dsc;
 static uint16_t *frame_buf;
@@ -81,6 +83,27 @@ static void close_clicked(lv_event_t *e) {
   close_camera();
 }
 
+// 미리보기가 누워 보이면 눌러서 바로 세운다. 이 방향은 기억되고 사진에도 똑같이 적용된다.
+static void turn_clicked(lv_event_t *e) {
+  camera_set_mount(camera_mount_rot() + 1, camera_mount_mirror());
+}
+
+static lv_obj_t *round_button(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb) {
+  lv_obj_t *btn = lv_btn_create(parent);
+  lv_obj_set_size(btn, 36, 36);
+  lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(btn, LV_OPA_60, 0);
+  lv_obj_set_style_shadow_width(btn, 0, 0);
+  lv_obj_set_ext_click_area(btn, 8);
+  lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lbl = lv_label_create(btn);
+  lv_label_set_text(lbl, symbol);
+  lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+  lv_obj_center(lbl);
+  return btn;
+}
+
 void camera_ui_init() {
   frame_buf = (uint16_t *)ps_malloc(PREVIEW_MAX_PIXELS * 2);
   frame_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
@@ -112,19 +135,9 @@ void camera_ui_init() {
   lv_obj_set_ext_click_area(shutter, 8);
   lv_obj_add_event_cb(shutter, shutter_clicked, LV_EVENT_CLICKED, NULL);
 
-  // 닫기 버튼 (왼쪽 위)
-  close_btn = lv_btn_create(overlay);
-  lv_obj_set_size(close_btn, 36, 36);
-  lv_obj_set_style_radius(close_btn, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(close_btn, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(close_btn, LV_OPA_60, 0);
-  lv_obj_set_style_shadow_width(close_btn, 0, 0);
-  lv_obj_set_ext_click_area(close_btn, 8);
-  lv_obj_add_event_cb(close_btn, close_clicked, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *x = lv_label_create(close_btn);
-  lv_label_set_text(x, LV_SYMBOL_CLOSE);
-  lv_obj_set_style_text_color(x, lv_color_white(), 0);
-  lv_obj_center(x);
+  // 왼쪽 위: 닫기, 오른쪽 위: 미리보기 방향 돌리기
+  close_btn = round_button(overlay, LV_SYMBOL_CLOSE, close_clicked);
+  turn_btn = round_button(overlay, LV_SYMBOL_REFRESH, turn_clicked);
 
   msg_lbl = lv_label_create(overlay);
   lv_obj_set_style_text_font(msg_lbl, &font_ko_20, 0);
@@ -148,6 +161,7 @@ void camera_ui_layout() {
     lv_obj_align(shutter, LV_ALIGN_BOTTOM_MID, 0, -10);
   }
   lv_obj_align(close_btn, LV_ALIGN_TOP_LEFT, 6, 6);
+  lv_obj_align(turn_btn, LV_ALIGN_TOP_RIGHT, -6, 6);
   lv_obj_center(msg_lbl);
   lv_obj_center(preview);
 }
@@ -191,6 +205,18 @@ void camera_ui_command(const char *cmd) {
   } else if (strcmp(cmd, "shoot") == 0) {
     open_camera();
     take_photo();
+  } else if (strcmp(cmd, "dump") == 0 && frame_dsc.header.w) {
+    // 진단용: 화면에 그리고 있는 미리보기를 그대로 사진으로 보낸다 (PC: --camera dump)
+    int w = frame_dsc.header.w, h = frame_dsc.header.h;
+    uint8_t *be = (uint8_t *)ps_malloc(w * h * 2);
+    for (int i = 0; i < w * h; i++) {
+      be[2 * i] = frame_buf[i] >> 8;
+      be[2 * i + 1] = frame_buf[i] & 0xFF;
+    }
+    uint8_t *jpg;
+    size_t len;
+    if (fmt2jpg(be, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len);
+    free(be);
   } else if (strcmp(cmd, "close") == 0) {
     close_camera();
   }

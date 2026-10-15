@@ -10,7 +10,7 @@ static bool running = false;
 static char model[16] = "";
 static Preferences prefs;
 // 처음 꽂은 카메라(OV5640)로 찍어 보고 정한 기본값. 다르면 PC 도우미로 바꿀 수 있다.
-static uint8_t mount_rot = 1;
+static uint8_t mount_rot = 2;
 static bool mount_mirror = false;
 static framesize_t preview_size = FRAMESIZE_QVGA;
 // JPEG 미리보기를 풀어 놓는 곳 (돌리기 전)
@@ -106,6 +106,16 @@ void camera_set_mount(uint8_t rot, bool mirror) {
   Serial.printf("[camera] mount rot %d, mirror %d\n", mount_rot, mount_mirror);
 }
 
+uint8_t camera_mount_rot() {
+  load_mount();
+  return mount_rot;
+}
+
+bool camera_mount_mirror() {
+  load_mount();
+  return mount_mirror;
+}
+
 // 센서 영상을 시계 방향으로 몇 번 돌려야 지금 화면에서 바로 보이는지
 static uint8_t turns_for(uint8_t screen_rot) {
   return (mount_rot - screen_rot) & 3;
@@ -129,14 +139,18 @@ bool camera_preview(uint16_t *out, int fit_w, int fit_h, uint8_t screen_rot, int
   bool ok = fb->format == PIXFORMAT_JPEG && sw * sh <= 320 * 240 &&
             jpg2rgb565(fb->buf, fb->len, decoded, JPG_SCALE_NONE);
   esp_camera_fb_return(fb);
-  if (!ok) return false;
+  if (!ok) {
+    static uint32_t bad = 0;
+    if (++bad % 20 == 1) Serial.printf("[camera] preview decode failed (%dx%d, %u total)\n", sw, sh, (unsigned)bad);
+    return false;
+  }
 
-  // 풀어 놓은 그림(큰 쪽 바이트 먼저)을 화면 바이트 순서로 바꾸면서 k 번 돌린다
+  // 풀어 놓은 그림은 이미 화면과 같은 바이트 순서다. k 번 돌리기만 한다.
   int ow = (k & 1) ? sh : sw, oh = (k & 1) ? sw : sh;
   for (int y = 0; y < sh; y++) {
     for (int x = 0; x < sw; x++) {
       const uint8_t *p = decoded + 2 * (y * sw + x);
-      uint16_t c = (p[0] << 8) | p[1];
+      uint16_t c = p[0] | (p[1] << 8);
       int ox, oy;
       switch (k) {
         case 1: ox = sh - 1 - y; oy = x; break;
@@ -180,16 +194,16 @@ bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len) {
   sensor_t *s = esp_camera_sensor_get();
   s->set_framesize(s, FRAMESIZE_UXGA);
   // 크기를 바꾼 직전 몇 장은 이전 크기가 섞여 나오므로 버린다
+  // 큰 크기로 나온 첫 장을 쓴다 (보통 2~3장 뒤)
   camera_fb_t *fb = nullptr;
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 10; i++) {
     fb = esp_camera_fb_get();
-    if (i < 2 && fb) {
-      esp_camera_fb_return(fb);
-      fb = nullptr;
-    }
+    if (fb && fb->width == 1600 && i >= 1) break;
+    if (fb) esp_camera_fb_return(fb);
+    fb = nullptr;
   }
   bool ok = false;
-  if (fb && fb->format == PIXFORMAT_JPEG && fb->width == 1600) {
+  if (fb && fb->format == PIXFORMAT_JPEG) {
     *jpg = add_orientation(fb->buf, fb->len, turns_for(screen_rot), len);
     ok = *jpg != nullptr;
   }
