@@ -5,7 +5,7 @@
     uv run main.py --dry-run        기기로 보내지 않고, 보낼 내용만 출력한다
     uv run main.py --record a.wav   마이크 소리를 10초간 WAV 로 저장하고 끝낸다 (수신 확인용)
     uv run main.py --mic on         기기의 마이크를 PC 에서 켠다 (off 로 끈다)
-    uv run main.py --test-sound     기기가 마이크를 켰을 때 PC 스피커로 나는 소리를 들어 본다
+    uv run main.py --test-sound     기기가 마이크를 켜고 끌 때 PC 스피커로 나는 소리를 들어 본다
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
     uv run main.py --clear-wifi     추가로 등록한 Wi-Fi 를 모두 지운다
     uv run main.py --sync-only      기기 없이, 이 PC 의 한도 사용률을 다른 PC 와 공유만 한다
@@ -131,7 +131,7 @@ def main() -> None:
     parser.add_argument("--uninstall-statusline", action="store_true", help="위 설정을 원래대로 되돌린다")
     parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
-    parser.add_argument("--test-sound", action="store_true", help="마이크를 켰을 때 나는 소리를 들어 본다")
+    parser.add_argument("--test-sound", action="store_true", help="마이크를 켜고 끌 때 나는 소리를 들어 본다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     args = parser.parse_args()
@@ -142,8 +142,12 @@ def main() -> None:
     cfg = load_config()
 
     if args.test_sound:
-        sounds.Sounds(cfg.get("sounds", {})).play("mic_on")
-        return time.sleep(1)
+        speaker = sounds.Sounds(cfg.get("sounds", {}))
+        for name in ("mic_on", "mic_off"):
+            print(f"[sound] {name}")
+            speaker.play(name)
+            time.sleep(1)
+        return
     if args.add_wifi or args.clear_wifi:
         return wifi_setup(cfg, add=args.add_wifi)
     if args.setup_sync:

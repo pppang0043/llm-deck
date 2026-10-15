@@ -18,8 +18,8 @@ static void set_mic(bool on) {
   if (on == mic_is_on()) return;
   mic_set_on(on);
   ui_set_mic(on);
-  // 켜졌다는 걸 귀로도 알 수 있게 PC 스피커로 짧은 소리를 낸다
-  if (on) link_send_event("{\"sound\":\"mic_on\"}");
+  // 켜고 끈 것을 귀로도 알 수 있게 PC 스피커로 짧은 소리를 낸다
+  link_send_event(on ? "{\"sound\":\"mic_on\"}" : "{\"sound\":\"mic_off\"}");
 }
 
 static void toggle_mic() {
