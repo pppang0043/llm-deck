@@ -8,8 +8,11 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)());
 // 상태줄 왼쪽 글자 (현재 연결 방식)
 void ui_set_status(const char *text);
 
-// 상태줄 오른쪽(화면 돌리기 버튼 옆)의 날짜와 시각
-void ui_set_clock(const char *text);
+// 상태줄 오른쪽(배터리 옆)의 날짜와 시각. 자리가 모자라면 날짜는 빼고 시각만 보인다.
+void ui_set_clock(const char *date, const char *time);
+
+// 상태줄 오른쪽(화면 돌리기 버튼 옆)의 배터리 잔량. -1 이면 숨긴다.
+void ui_set_battery(int pct);
 
 // 대기 화면에 보여줄 Wi-Fi 안내 (IP 주소 등)
 void ui_set_wifi_info(const char *text);

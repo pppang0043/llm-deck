@@ -24,6 +24,10 @@
 #define IMU_ROT_X_POS 0
 #define IMU_ROT_X_NEG 2
 
+// 배터리 전압: 1/3 로 나눠 GPIO5 에 들어온다 (Waveshare 데모 06_lvgl_battery)
+#define BAT_ADC 5
+#define BAT_DIVIDER 3
+
 // BOOT 버튼: 누르면 LOW
 #define BTN_BOOT 0
 

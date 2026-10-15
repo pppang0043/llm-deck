@@ -14,6 +14,9 @@ LV_FONT_DECLARE(font_ko_28);
 // 가로 화면에서는 마이크 버튼이 오른쪽에 세로로 놓인다
 #define MIC_W 72
 #define LEVEL_H 4
+// 상태줄 건전지 모양 크기
+#define BAT_W 22
+#define BAT_H 11
 
 #define COLOR_BG lv_color_hex(0x101418)
 #define COLOR_DIM lv_color_hex(0x8A939E)
@@ -32,6 +35,11 @@ static void (*mic_toggle_cb)();
 static void (*rotate_cb)();
 static lv_obj_t *rotate_btn;
 static lv_obj_t *clock_lbl;
+static lv_obj_t *bat_icon;
+static lv_obj_t *bat_fill;
+static lv_obj_t *bat_lbl;
+static char clock_date[24] = "";
+static char clock_time[8] = "";
 static bool waiting = true;
 static bool mic_on = false;
 // 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
@@ -134,6 +142,32 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
   clock_lbl = add_label(scr, "", &font_ko_14, COLOR_DIM);
 
+  // 배터리: 숫자(%) + 건전지 모양. 배터리가 없으면 숨긴다.
+  bat_lbl = add_label(scr, "", &font_ko_14, COLOR_DIM);
+  bat_icon = lv_obj_create(scr);
+  lv_obj_remove_style_all(bat_icon);
+  lv_obj_set_size(bat_icon, BAT_W + 3, BAT_H);
+  lv_obj_clear_flag(bat_icon, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t *body = lv_obj_create(bat_icon);
+  lv_obj_remove_style_all(body);
+  lv_obj_set_size(body, BAT_W, BAT_H);
+  lv_obj_set_style_border_width(body, 1, 0);
+  lv_obj_set_style_border_color(body, COLOR_DIM, 0);
+  lv_obj_set_style_radius(body, 2, 0);
+  lv_obj_t *nub = lv_obj_create(bat_icon);
+  lv_obj_remove_style_all(nub);
+  lv_obj_set_size(nub, 2, BAT_H / 2);
+  lv_obj_set_style_bg_color(nub, COLOR_DIM, 0);
+  lv_obj_set_style_bg_opa(nub, LV_OPA_COVER, 0);
+  lv_obj_align(nub, LV_ALIGN_RIGHT_MID, 0, 0);
+  bat_fill = lv_obj_create(body);
+  lv_obj_remove_style_all(bat_fill);
+  lv_obj_set_style_bg_opa(bat_fill, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(bat_fill, 1, 0);
+  lv_obj_set_pos(bat_fill, 2, 2);
+  lv_obj_add_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
+
   tiles = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
 
@@ -154,10 +188,35 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
 static void render_usage();
 
+// 상태줄 오른쪽: [날짜 시각] [배터리 %] [건전지] [돌리기 버튼].
+// 왼쪽 연결 방식 글자와 겹치면 날짜를 빼고 시각만 보인다.
+static void layout_status_right() {
+  lv_obj_t *scr = lv_scr_act();
+  lv_obj_t *right = rotate_btn;
+  if (!lv_obj_has_flag(bat_icon, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_update_layout(scr);
+    lv_obj_align_to(bat_icon, rotate_btn, LV_ALIGN_OUT_LEFT_MID, -6, 0);
+    lv_obj_align_to(bat_lbl, bat_icon, LV_ALIGN_OUT_LEFT_MID, -3, 0);
+    right = bat_lbl;
+  }
+
+  char text[40];
+  snprintf(text, sizeof(text), "%s%s%s", clock_date, clock_date[0] ? " " : "", clock_time);
+  lv_label_set_text(clock_lbl, text);
+  lv_obj_update_layout(scr);
+  lv_obj_align_to(clock_lbl, right, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+  lv_obj_update_layout(scr);
+  if (clock_date[0] && lv_obj_get_x(clock_lbl) < lv_obj_get_x(status_lbl) + lv_obj_get_width(status_lbl) + 6) {
+    lv_label_set_text(clock_lbl, clock_time);
+    lv_obj_update_layout(scr);
+    lv_obj_align_to(clock_lbl, right, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+  }
+}
+
 void ui_layout() {
   int w = display_width(), h = display_height();
   lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 1);
-  lv_obj_align(clock_lbl, LV_ALIGN_TOP_RIGHT, -44, 4);
+  layout_status_right();
   if (w > h) {
     // 가로: 왼쪽에 페이지, 오른쪽에 마이크 버튼
     lv_obj_set_size(tiles, w - MIC_W, h - STATUS_H);
@@ -185,13 +244,36 @@ void ui_layout() {
 }
 
 void ui_set_status(const char *text) {
+  if (strcmp(lv_label_get_text(status_lbl), text) == 0) return;
   lv_label_set_text(status_lbl, text);
+  layout_status_right();
 }
 
-void ui_set_clock(const char *text) {
-  if (strcmp(lv_label_get_text(clock_lbl), text) == 0) return;
-  lv_label_set_text(clock_lbl, text);
-  lv_obj_align(clock_lbl, LV_ALIGN_TOP_RIGHT, -44, 4);
+void ui_set_clock(const char *date, const char *time) {
+  if (strcmp(clock_date, date) == 0 && strcmp(clock_time, time) == 0) return;
+  strlcpy(clock_date, date, sizeof(clock_date));
+  strlcpy(clock_time, time, sizeof(clock_time));
+  layout_status_right();
+}
+
+void ui_set_battery(int pct) {
+  static int shown = -2;
+  if (pct == shown) return;
+  shown = pct;
+  if (pct < 0) {
+    lv_obj_add_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_color_t color = pct <= 10 ? COLOR_FULL : pct <= 20 ? COLOR_WARN : lv_color_hex(0x4CAF50);
+    int inner = BAT_W - 4;
+    lv_obj_set_size(bat_fill, pct > 0 ? LV_MAX(1, inner * pct / 100) : 0, BAT_H - 4);
+    lv_obj_set_style_bg_color(bat_fill, color, 0);
+    lv_label_set_text_fmt(bat_lbl, "%d%%", pct);
+    lv_obj_set_style_text_color(bat_lbl, pct <= 20 ? color : COLOR_DIM, 0);
+    lv_obj_clear_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
+  }
+  layout_status_right();
 }
 
 void ui_set_wifi_info(const char *text) {

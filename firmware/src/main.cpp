@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include <time.h>
 
+#include "battery.h"
 #include "ble_link.h"
 #include "cloud.h"
 #include "display.h"
@@ -89,14 +90,16 @@ static void show_clock() {
   if (millis() - checked_ms < 1000) return;
   checked_ms = millis();
 
-  char text[32] = "";
+  char date[24] = "", hm[8] = "";
   time_t now = time(nullptr);
   if (now > 1700000000) {
     struct tm local;
     localtime_r(&now, &local);
-    snprintf(text, sizeof(text), "%d월 %d일 %02d:%02d", local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min);
+    snprintf(date, sizeof(date), "%d월 %d일", local.tm_mon + 1, local.tm_mday);
+    snprintf(hm, sizeof(hm), "%02d:%02d", local.tm_hour, local.tm_min);
   }
-  ui_set_clock(text);
+  ui_set_clock(date, hm);
+  ui_set_battery(battery_pct());
 }
 
 void setup() {
@@ -107,6 +110,7 @@ void setup() {
   display_init();
   ui_init(toggle_mic, rotate_by_button);
   imu_init();
+  battery_init();
   prefs.begin("llm-deck");
   rotate_offset = prefs.getUChar("rot_offset", 0) & 3;
   delay(50);  // 센서가 첫 값을 낼 때까지 잠깐 기다린다
@@ -133,6 +137,7 @@ void loop() {
   link_loop();
   if (boot_button_pressed()) toggle_mic();
   follow_tilt();
+  battery_loop();
   show_clock();
 
   if (mic_is_on() && millis() - level_ms > 50) {
