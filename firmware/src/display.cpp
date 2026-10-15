@@ -23,6 +23,10 @@ static lv_disp_draw_buf_t draw_buf;
 static lv_disp_drv_t disp_drv;
 static lv_indev_drv_t indev_drv;
 static uint8_t rotation = 0;
+static volatile uint32_t touched_ms = 0;
+// 화면이 꺼져(어두워져) 있을 때의 첫 터치는 깨우기만 하고 버튼으로 넘기지 않는다
+static volatile bool sleeping = false;
+static bool swallow = false;
 
 static bool touch_read_reg(uint8_t reg, uint8_t *data, uint8_t len) {
   Wire.beginTransmission(CST816_ADDR);
@@ -43,7 +47,16 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
 static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   // [0]=손가락 수, [1..2]=X, [3..4]=Y
   uint8_t raw[5];
-  if (touch_read_reg(CST816_REG_TOUCH, raw, sizeof(raw)) && raw[0] > 0) {
+  bool down = touch_read_reg(CST816_REG_TOUCH, raw, sizeof(raw)) && raw[0] > 0;
+  if (down) touched_ms = millis();
+  if (down && sleeping) swallow = true;
+  if (swallow) {
+    // 손을 뗄 때까지 눌리지 않은 것으로 알린다
+    if (!down) swallow = false;
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+  if (down) {
     // 터치 칩은 항상 세로(돌리지 않은) 기준 좌표를 주므로, 화면을 돌린 만큼 바꿔 준다
     int px = ((raw[1] & 0x0F) << 8) | raw[2];
     int py = ((raw[3] & 0x0F) << 8) | raw[4];
@@ -141,6 +154,19 @@ SPIClass &display_spi() {
 }
 
 void display_set_brightness(uint8_t pct) {
-  pct = constrain(pct, 10, 100);
+  // 0 은 절전으로 화면을 끈 상태. 그 밖에는 너무 어두워 안 보이지 않게 10% 이상
+  if (pct > 0) pct = constrain(pct, 10, 100);
   ledcWrite(LCD_BL, 1023 * pct / 100);
+}
+
+uint32_t display_last_touch_ms() {
+  return touched_ms;
+}
+
+void display_set_sleeping(bool on) {
+  sleeping = on;
+}
+
+void display_poke() {
+  touched_ms = millis();
 }

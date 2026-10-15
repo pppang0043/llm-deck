@@ -22,6 +22,8 @@ RATE = 22050
 TONES = {
     "mic_on": [(880, 0.07), (1320, 0.11)],  # 올라가는 "띠링"
     "mic_off": [(1320, 0.07), (880, 0.11)],  # 내려가는 "띠롱"
+    "limit_warn": [(988, 0.09), (0, 0.06), (988, 0.09), (0, 0.06), (988, 0.12)],  # 짧게 세 번 "삐삐삐"
+    "limit_reset": [(784, 0.08), (988, 0.08), (1175, 0.08), (1568, 0.16)],  # 올라가는 "도미솔도"
 }
 
 
@@ -33,7 +35,9 @@ def _make_wav(path: Path, tones: list[tuple[int, float]]) -> None:
         for i in range(n):
             # 끝을 부드럽게 줄여 "딱" 하는 잡음이 나지 않게 한다
             gain = min(1.0, i / fade, (n - i) / fade)
-            frames += struct.pack("<h", int(12000 * gain * math.sin(2 * math.pi * freq * i / RATE)))
+            # freq 0 은 쉼표
+            value = 12000 * gain * math.sin(2 * math.pi * freq * i / RATE) if freq else 0
+            frames += struct.pack("<h", int(value))
     path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)

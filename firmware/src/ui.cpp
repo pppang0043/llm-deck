@@ -570,5 +570,60 @@ bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
   *pixels = (uint16_t *)ps_malloc(*w * *h * 2);
   if (*pixels) memcpy(*pixels, snap->data, *w * *h * 2);
   lv_snapshot_free(snap);
-  return *pixels != nullptr;
+  if (!*pixels) return false;
+  // 위에 덮이는 층(카메라 화면, 알림)도 보이는 것만 그 자리에 겹쳐 그린다
+  for (lv_obj_t *layer : {lv_layer_top(), lv_layer_sys()}) {
+    for (uint32_t i = 0; i < lv_obj_get_child_cnt(layer); i++) {
+      lv_obj_t *child = lv_obj_get_child(layer, i);
+      if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) continue;
+      lv_img_dsc_t *part = lv_snapshot_take(child, LV_IMG_CF_TRUE_COLOR);
+      if (!part) continue;
+      lv_area_t area;
+      lv_obj_get_coords(child, &area);
+      const uint16_t *src = (const uint16_t *)part->data;
+      for (int y = 0; y < (int)part->header.h; y++) {
+        int ty = area.y1 + y;
+        if (ty < 0 || ty >= *h) continue;
+        for (int x = 0; x < (int)part->header.w; x++) {
+          int tx = area.x1 + x;
+          if (tx >= 0 && tx < *w) (*pixels)[ty * *w + tx] = src[y * part->header.w + x];
+        }
+      }
+      lv_snapshot_free(part);
+    }
+  }
+  return true;
+}
+
+static lv_obj_t *toast;
+static lv_timer_t *toast_timer;
+
+static void toast_hide(lv_timer_t *t) {
+  lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN);
+  lv_timer_pause(t);
+}
+
+void ui_toast(const char *text, uint32_t ms) {
+  if (!toast) {
+    // 모든 화면(카메라 포함) 위에 뜨는 알림
+    toast = lv_label_create(lv_layer_sys());
+    lv_obj_set_style_text_font(toast, &font_ko_20, 0);
+    lv_obj_set_style_text_color(toast, lv_color_white(), 0);
+    lv_obj_set_style_text_align(toast, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_bg_color(toast, lv_color_hex(0x2A3038), 0);
+    lv_obj_set_style_bg_opa(toast, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(toast, COLOR_ACCENT, 0);
+    lv_obj_set_style_border_width(toast, 2, 0);
+    lv_obj_set_style_radius(toast, 10, 0);
+    lv_obj_set_style_pad_all(toast, 12, 0);
+    toast_timer = lv_timer_create(toast_hide, ms, NULL);
+  }
+  lv_label_set_text(toast, text);
+  lv_obj_clear_flag(toast, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_align(toast, LV_ALIGN_CENTER, 0, 0);
+  lv_timer_set_period(toast_timer, ms);
+  lv_timer_reset(toast_timer);
+  lv_timer_resume(toast_timer);
+  // 화면이 꺼져 있었으면 켜서 보이게 한다
+  display_poke();
 }

@@ -15,6 +15,10 @@ void settings_cycle_brightness();
 bool settings_auto_rotate();
 // 마이크를 켜고 끌 때 PC 스피커로 알림음을 낼지
 bool settings_mic_sound();
+// 배터리로만 쓸 때 만지지 않으면 화면을 어둡게(1분) 하고 끄는지(3분)
+bool settings_auto_dim();
+// 사용률이 80%, 90% 를 넘거나 초기화되면 알릴지
+bool settings_limit_alerts();
 
 // 연결 방식을 쓸지 (link.h 의 Link 값: USB / 블루투스 / Wi-Fi / 클라우드). 끈 방식으로 오는 데이터는 받지 않는다.
 bool settings_link_allowed(int link);

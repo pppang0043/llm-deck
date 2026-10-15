@@ -38,7 +38,8 @@ gist_id = ""
 # 마이크 소리를 내보낼 가상 오디오 장치 이름의 일부. 비워 두면 BlackHole(Mac) / CABLE Input(Windows) 을 찾습니다.
 output = ""
 
-# 기기가 보내는 알림에 맞춰 PC 스피커로 소리를 낸다 (마이크를 켤 때 "띠링", 끌 때 "띠롱").
+# 기기가 보내는 알림에 맞춰 PC 스피커로 소리를 낸다.
+#   mic_on "띠링", mic_off "띠롱", limit_warn 한도 80%/90% 넘음 "삐삐삐", limit_reset 한도 초기화 "도미솔도"
 [sounds]
 enabled = true
 # 원하는 소리 파일(.wav)로 바꿀 수 있다. 비워 두면 기본 효과음을 쓴다.

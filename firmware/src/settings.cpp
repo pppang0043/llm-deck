@@ -19,6 +19,10 @@ static Preferences prefs;
 static uint8_t brightness = 80;
 static bool auto_rotate = true;
 static bool mic_sound = true;
+static bool auto_dim = true;
+static bool limit_alerts = true;
+static lv_obj_t *dim_sw;
+static lv_obj_t *alert_sw;
 
 // 연결 방식별 허용 여부. 순서는 화면에 보이는 순서.
 struct LinkOption {
@@ -50,6 +54,8 @@ void settings_init() {
   brightness = prefs.getUChar("bright", 80);
   auto_rotate = prefs.getBool("auto_rot", true);
   mic_sound = prefs.getBool("mic_sound", true);
+  auto_dim = prefs.getBool("auto_dim", true);
+  limit_alerts = prefs.getBool("lim_alert", true);
   for (LinkOption &o : link_options) o.allowed = prefs.getBool(o.key, true);
   display_set_brightness(brightness);
 }
@@ -111,6 +117,24 @@ bool settings_auto_rotate() {
 
 bool settings_mic_sound() {
   return mic_sound;
+}
+
+bool settings_auto_dim() {
+  return auto_dim;
+}
+
+bool settings_limit_alerts() {
+  return limit_alerts;
+}
+
+static void dim_changed(lv_event_t *e) {
+  auto_dim = lv_obj_has_state(dim_sw, LV_STATE_CHECKED);
+  prefs.putBool("auto_dim", auto_dim);
+}
+
+static void alert_changed(lv_event_t *e) {
+  limit_alerts = lv_obj_has_state(alert_sw, LV_STATE_CHECKED);
+  prefs.putBool("lim_alert", limit_alerts);
 }
 
 // 한 줄: 왼쪽에 이름(과 설명), 오른쪽에 조작 도구
@@ -230,6 +254,8 @@ void settings_build(lv_obj_t *parent) {
   lv_obj_add_event_cb(bright_slider, bright_changed, LV_EVENT_RELEASED, NULL);
   lv_obj_set_height(row, 64);
 
+  dim_sw = add_switch(add_row(parent, "배터리 절약", "안 쓰면 1분 뒤 어둡게, 3분 뒤 끄기"), auto_dim, dim_changed);
+  alert_sw = add_switch(add_row(parent, "한도 알림", "80%, 90%를 넘거나 초기화되면"), limit_alerts, alert_changed);
   rotate_sw = add_switch(add_row(parent, "자동 회전", "기울이면 화면이 따라 돕니다"), auto_rotate, rotate_changed);
   sound_sw = add_switch(add_row(parent, "마이크 알림음", "켜고 끌 때 PC에서 소리"), mic_sound, sound_changed);
 
@@ -267,6 +293,16 @@ void settings_refresh() {
     lv_obj_add_state(rotate_sw, LV_STATE_CHECKED);
   } else {
     lv_obj_clear_state(rotate_sw, LV_STATE_CHECKED);
+  }
+  if (auto_dim) {
+    lv_obj_add_state(dim_sw, LV_STATE_CHECKED);
+  } else {
+    lv_obj_clear_state(dim_sw, LV_STATE_CHECKED);
+  }
+  if (limit_alerts) {
+    lv_obj_add_state(alert_sw, LV_STATE_CHECKED);
+  } else {
+    lv_obj_clear_state(alert_sw, LV_STATE_CHECKED);
   }
   if (mic_sound) {
     lv_obj_add_state(sound_sw, LV_STATE_CHECKED);

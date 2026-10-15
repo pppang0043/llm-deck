@@ -8,6 +8,7 @@
 #include <WiFiUdp.h>
 
 #include "psram_json.h"
+#include "alerts.h"
 #include "settings.h"
 #include "battery.h"
 #include "ble_link.h"
@@ -220,6 +221,7 @@ void link_loop() {
       if (doc["services"].is<JsonArrayConst>() && from == active) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);
+        alerts_check(services);
         shown.clear();
         serializeJson(services, shown);
         Serial.printf("[link] usage via %s: %u services\n", link_tag(from), (unsigned)services.size());

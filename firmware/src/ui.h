@@ -32,6 +32,9 @@ void ui_show_home();
 void ui_set_home_actions(void (*open_camera)(), void (*cycle_brightness)());
 // 정보 화면이 보이는 중인지, 그 내용
 bool ui_info_visible();
+// 모든 화면 위에 잠깐 뜨는 알림 (ms 뒤에 사라진다)
+void ui_toast(const char *text, uint32_t ms = 4000);
+
 // 화면 바꾸기: "home" / "usage" / "info" / "settings" (PC 에서 시험할 때)
 void ui_show(const char *name);
 // 지금 화면을 RGB565 로 찍는다 (진단용). *pixels 는 free 로 해제.

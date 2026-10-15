@@ -234,3 +234,7 @@ bool battery_charging() {
   // 충전기는 꽂혀 있어도 충전이 끝났으면 충전 중이 아니다
   return charging && !full;
 }
+
+bool battery_external_power() {
+  return charging;
+}

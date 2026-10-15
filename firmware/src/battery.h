@@ -18,3 +18,5 @@ void battery_calibrate(int actual_mv);
 
 // 충전기(또는 PC 의 USB)가 연결되어 충전 중인지. 충전이 끝나면 false (잔량은 100).
 bool battery_charging();
+// 충전기나 PC 의 USB 로 전원이 들어오고 있는지 (충전이 끝났어도 true)
+bool battery_external_power();

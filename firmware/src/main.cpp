@@ -95,6 +95,24 @@ static void follow_tilt() {
 }
 
 // 상태줄의 날짜와 시각. 시각은 Wi-Fi(인터넷) 또는 PC 도우미에게서 받으며, 받기 전에는 비워 둔다.
+// 배터리 절약: 배터리로만 쓰는 동안 만지지 않으면 1분 뒤 어둡게, 3분 뒤 화면을 끈다.
+// 터치·BOOT 버튼·알림이 있으면 다시 켠다. 충전기/PC 에 꽂혀 있거나 카메라를 쓰는 중에는 하지 않는다.
+#define DIM_AFTER_MS 60000
+#define OFF_AFTER_MS 180000
+
+static void power_save() {
+  static uint8_t state = 0;  // 0 보통, 1 어둡게, 2 꺼짐
+  uint32_t idle = millis() - display_last_touch_ms();
+  bool allowed = settings_auto_dim() && battery_pct() >= 0 && !battery_external_power() && !camera_ui_open() &&
+                 !video_recording();
+  uint8_t want = !allowed ? 0 : idle > OFF_AFTER_MS ? 2 : idle > DIM_AFTER_MS ? 1 : 0;
+  if (want == state) return;
+  state = want;
+  display_set_brightness(want == 2 ? 0 : want == 1 ? 10 : settings_brightness());
+  display_set_sleeping(want != 0);
+  Serial.printf("[power] screen %s\n", want == 2 ? "off" : want == 1 ? "dim" : "on");
+}
+
 // 정보 화면 내용 (보이는 동안 1초마다)
 static void show_info() {
   static uint32_t checked_ms = 0;
@@ -121,7 +139,8 @@ static void show_info() {
            "화면 밝기: %d%%\n"
            "마이크: %s\n"
            "메모리: 내부 %uKB, PSRAM %uKB 남음\n"
-           "켜진 지: %lu분",
+           "켜진 지: %lu분\n"
+           "펌웨어: " __DATE__ " " __TIME__,
            LINKS[link_active()], WiFi.isConnected() ? WiFi.localIP().toString().c_str() : "연결 안 됨", bat,
            settings_brightness(), mic_is_on() ? "켜짐" : "꺼짐", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned long)(millis() / 60000));
@@ -184,12 +203,16 @@ void loop() {
   usb_link_loop();
   net_loop();
   link_loop();
-  if (boot_button_pressed()) toggle_mic();
+  if (boot_button_pressed()) {
+    display_poke();
+    toggle_mic();
+  }
   follow_tilt();
   battery_loop();
   show_clock();
   camera_ui_loop();
   show_info();
+  power_save();
 
   if (mic_is_on() && millis() - level_ms > 50) {
     level_ms = millis();
