@@ -1,6 +1,7 @@
 #include "ble_link.h"
 
 #include <NimBLEDevice.h>
+#include <nimble/porting/nimble/include/os/os_mbuf.h>
 #include <string>
 
 #include "link.h"
@@ -119,6 +120,8 @@ void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
   size_t size = AUDIO_HEADER + samples / 2;
   // 한 번에 보낼 수 있는 크기(MTU)가 작게 잡힌 연결에서는 보낼 수 없다
   if (!connected || size > sizeof(packet) || size > (size_t)mtu - 3) return;
+  // 보내기 칸이 모자라면 이번 20ms 는 버린다 (늦게 보내 봐야 소용없고, 실패 기록만 쌓인다)
+  if (os_msys_num_free() < 3) return;
 
   // 묶음마다 시작 상태를 함께 실어, 중간에 하나가 사라져도 다음 묶음은 정상적으로 풀린다
   packet[0] = seq & 0xFF;
@@ -137,6 +140,8 @@ void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
 void ble_send_event(const char *json) {
   size_t size = strlen(json);
   if (!connected || size > (size_t)mtu - 3) return;
+  // 알림은 짧고 드물지만 꼭 가야 하므로 칸이 빌 때까지 잠깐 기다린다
+  for (int i = 0; i < 50 && os_msys_num_free() < 2; i++) vTaskDelay(pdMS_TO_TICKS(4));
   tx->notify((const uint8_t *)json, size);
 }
 
@@ -156,12 +161,16 @@ bool ble_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
   packet[2] = (offset >> 8) & 0xFF;
   packet[3] = (offset >> 16) & 0xFF;
   memcpy(packet + 4, data, len);
-  // 보내기 버퍼가 꽉 차면 notify 가 실패한다. 잠깐 기다렸다 다시 보낸다.
-  for (int attempt = 0; attempt < 400; attempt++) {
+  // 블루투스 보내기 칸(mbuf)이 다 차면 notify 가 "ENOMEM" 오류로 실패한다. PC 가 받아 가는 속도는
+  // 연결 간격에 달려 있어(Windows 는 Mac 보다 느리다) 칸이 비기를 먼저 기다렸다가 보낸다.
+  // 마이크 소리용으로 몇 칸은 남겨 둔다.
+  uint32_t start = millis();
+  while (millis() - start < 10000) {
     if (!connected) return false;
-    if (tx->notify(packet, len + 4)) return true;
-    vTaskDelay(pdMS_TO_TICKS(5));
+    if (os_msys_num_free() >= 6 && tx->notify(packet, len + 4)) return true;
+    vTaskDelay(pdMS_TO_TICKS(4));
   }
+  Serial.println("[ble] photo chunk timed out (PC not reading)");
   return false;
 }
 
