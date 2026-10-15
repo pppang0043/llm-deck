@@ -7,6 +7,7 @@
 
 #include <WiFiUdp.h>
 
+#include "battery.h"
 #include "ble_link.h"
 #include "cloud.h"
 #include "mic.h"
@@ -125,6 +126,7 @@ void link_loop() {
       set_active(from);
       if (doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
+      if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
       if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
       if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
       if (doc["wifi_clear"] | false) net_clear_wifi();

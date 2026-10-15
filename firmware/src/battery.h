@@ -13,5 +13,8 @@ int battery_mv();
 // 남은 양 (0~100). 배터리가 없으면 -1.
 int battery_pct();
 
+// 멀티미터로 잰 실제 배터리 전압(mV)을 알려 주면 측정값을 그에 맞게 보정하고 기억한다. 0 이면 보정을 지운다.
+void battery_calibrate(int actual_mv);
+
 // 충전기(또는 PC 의 USB)가 연결되어 충전 중인지
 bool battery_charging();

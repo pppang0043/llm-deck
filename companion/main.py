@@ -5,6 +5,7 @@
     uv run main.py --dry-run        기기로 보내지 않고, 보낼 내용만 출력한다
     uv run main.py --record a.wav   마이크 소리를 10초간 WAV 로 저장하고 끝낸다 (수신 확인용)
     uv run main.py --mic on         기기의 마이크를 PC 에서 켠다 (off 로 끈다)
+    uv run main.py --battery 4.12   멀티미터로 잰 배터리 전압(V)을 알려 기기의 배터리 표시를 보정한다 (0: 보정 지움)
     uv run main.py --test-sound     기기가 마이크를 켜고 끌 때 PC 스피커로 나는 소리를 들어 본다
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
     uv run main.py --clear-wifi     추가로 등록한 Wi-Fi 를 모두 지운다
@@ -131,6 +132,7 @@ def main() -> None:
     parser.add_argument("--uninstall-statusline", action="store_true", help="위 설정을 원래대로 되돌린다")
     parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
+    parser.add_argument("--battery", type=float, metavar="V", help="멀티미터로 잰 배터리 전압(V)으로 기기를 보정한다")
     parser.add_argument("--test-sound", action="store_true", help="마이크를 켜고 끌 때 나는 소리를 들어 본다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
@@ -176,6 +178,8 @@ def main() -> None:
             message = collect_all(cfg)
             if first and args.mic:
                 message["mic"] = args.mic == "on"
+            if first and args.battery is not None:
+                message["battery_mv"] = round(args.battery * 1000)
             try:
                 transport.send(message)
                 print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
@@ -187,6 +191,11 @@ def main() -> None:
         else:
             # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
             collect_limits(cfg)
+        if args.battery is not None and transport and not first:
+            print(f"[device] 배터리 전압 {args.battery:.3f}V 로 보정했습니다." if args.battery else "[device] 배터리 보정을 지웠습니다.")
+            time.sleep(1)
+            transport.close()
+            return
         if args.record:
             if transport:
                 print(f"[audio] {RECORD_SECONDS}초간 녹음합니다. 기기의 마이크가 켜져 있어야 합니다.")
