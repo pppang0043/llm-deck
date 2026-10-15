@@ -11,6 +11,7 @@
 #define BLE_NAME "LLM-Deck"
 
 void ble_link_init();
+bool ble_link_connected();
 void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples);
 void ble_send_event(const char *json);
 // 한 번에 보낼 수 있는 사진 데이터 크기 (연결이 없으면 0)

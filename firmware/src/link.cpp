@@ -87,6 +87,38 @@ static const char *link_tag(Link link) {
   }
 }
 
+// 여러 PC 가 동시에 보내면 "현재 연결"이 30초마다 바뀌어 마이크 소리·사진이 오락가락한다.
+// 그래서 우선순위를 둔다: USB > 블루투스 > Wi-Fi > 클라우드. 높은 쪽이 살아 있으면 낮은 쪽은
+// 현재 연결을 가져가지 못하고, 그 쪽이 보낸 사용량도 화면에 쓰지 않는다 (명령은 그대로 따른다).
+#define LINK_FRESH_MS 75000
+static uint32_t heard_ms[5] = {0};
+
+static int priority(Link link) {
+  switch (link) {
+    case LINK_USB: return 4;
+    case LINK_BLE: return 3;
+    case LINK_WIFI: return 2;
+    case LINK_CLOUD: return 1;
+    default: return 0;
+  }
+}
+
+static bool alive(Link link) {
+  if (!heard_ms[link] || millis() - heard_ms[link] > LINK_FRESH_MS) return false;
+  // 케이블을 뽑거나 블루투스가 끊기면 기다리지 않고 바로 내려놓는다
+  if (link == LINK_USB && !Serial.isPlugged()) return false;
+  if (link == LINK_BLE && !ble_link_connected()) return false;
+  return true;
+}
+
+static Link best_link() {
+  Link best = LINK_NONE;
+  for (Link l : {LINK_USB, LINK_BLE, LINK_WIFI, LINK_CLOUD}) {
+    if (alive(l) && priority(l) > priority(best)) best = l;
+  }
+  return best;
+}
+
 static void set_active(Link link) {
   if (link == active) return;
   active = link;
@@ -130,7 +162,9 @@ void link_loop() {
       Serial.printf("[link] bad json from %s (%u bytes)\n", link_tag(from), (unsigned)message.size());
     } else {
       last_ms = millis();
-      set_active(from);
+      heard_ms[from] = millis();
+      Link best = best_link();
+      set_active(best == LINK_NONE ? from : best);
       if (doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
@@ -160,7 +194,7 @@ void link_loop() {
       if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
       if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
       if (doc["wifi_clear"] | false) net_clear_wifi();
-      if (doc["services"].is<JsonArrayConst>()) {
+      if (doc["services"].is<JsonArrayConst>() && from == active) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);
         shown.clear();
@@ -171,7 +205,13 @@ void link_loop() {
   }
 
   save_if_due();
-  if (active != LINK_NONE && millis() - last_ms > STALE_MS) set_active(LINK_NONE);
+  if (active != LINK_NONE && millis() - last_ms > STALE_MS) {
+    set_active(LINK_NONE);
+  } else if (active != LINK_NONE && active != LINK_CLOUD && !alive(active)) {
+    // 지금 연결이 끊겼으면 살아 있는 다음 연결로 넘어간다
+    Link best = best_link();
+    if (best != LINK_NONE) set_active(best);
+  }
 }
 
 Link link_active() {

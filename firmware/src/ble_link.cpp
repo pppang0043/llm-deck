@@ -164,3 +164,7 @@ bool ble_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
   }
   return false;
 }
+
+bool ble_link_connected() {
+  return connected;
+}
