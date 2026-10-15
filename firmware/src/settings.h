@@ -18,6 +18,7 @@ bool settings_mic_sound();
 
 // 연결 방식을 쓸지 (link.h 의 Link 값: USB / 블루투스 / Wi-Fi / 클라우드). 끈 방식으로 오는 데이터는 받지 않는다.
 bool settings_link_allowed(int link);
+void settings_set_link_allowed(int link, bool allowed);
 
 // 설정 화면을 parent 안에 만든다 (ui.cpp 가 부른다)
 void settings_build(lv_obj_t *parent);

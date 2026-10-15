@@ -173,6 +173,7 @@ def main() -> None:
     parser.add_argument("--camera-mount", choices=["0", "1", "2", "3", "0m", "1m", "2m", "3m"],
                         help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
     parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
+    parser.add_argument("--links", metavar="usb=on,ble=off", help="기기의 연결 방식 켜고 끄기 (USB 로 연결했을 때만)")
     parser.add_argument("--view", choices=["home", "usage", "info", "settings"], help="기기 화면 바꾸기")
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
@@ -243,6 +244,8 @@ def main() -> None:
                 message["photo_test"] = True
             if first and args.camera:
                 message["camera"] = args.camera
+            if first and args.links:
+                message["links"] = {k: v == "on" for k, v in (item.split("=") for item in args.links.split(","))}
             if first and args.view:
                 message["view"] = args.view
             if first and args.screenshot:
@@ -283,7 +286,7 @@ def main() -> None:
             time.sleep(1)
             transport.close()
             return
-        if (args.camera in ("open", "close") or args.camera_mount) and transport and not first:
+        if (args.camera in ("open", "close") or args.camera_mount or args.links) and transport and not first:
             time.sleep(2)
             transport.close()
             return

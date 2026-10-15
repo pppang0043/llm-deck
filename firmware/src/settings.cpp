@@ -67,6 +67,23 @@ static void apply_links() {
   net_set_enabled(settings_link_allowed(LINK_WIFI) || settings_link_allowed(LINK_CLOUD));
 }
 
+void settings_set_link_allowed(int link, bool allowed) {
+  for (LinkOption &o : link_options) {
+    if (o.link != link) continue;
+    o.allowed = allowed;
+    prefs.putBool(o.key, allowed);
+    if (o.sw) {
+      if (allowed) {
+        lv_obj_add_state(o.sw, LV_STATE_CHECKED);
+      } else {
+        lv_obj_clear_state(o.sw, LV_STATE_CHECKED);
+      }
+    }
+  }
+  apply_links();
+  Serial.printf("[settings] link %d %s\n", link, allowed ? "on" : "off");
+}
+
 static void link_changed(lv_event_t *e) {
   LinkOption *o = (LinkOption *)lv_event_get_user_data(e);
   o->allowed = lv_obj_has_state(o->sw, LV_STATE_CHECKED);

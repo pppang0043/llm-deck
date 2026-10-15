@@ -158,6 +158,18 @@ void link_loop() {
   from = pending_from;
   xSemaphoreGive(lock);
 
+  // USB 로 온 {"links": {"usb": true, "ble": false, ...}} 는 연결 방식 설정을 바꾼다. USB 를 꺼 둔 상태에서도
+  // 받는다 (케이블을 직접 꽂은 PC 이므로 믿고, USB 를 실수로 꺼도 PC 에서 되살릴 수 있게).
+  if (!message.empty() && from == LINK_USB && message.find("\"links\"") != std::string::npos) {
+    JsonDocument doc(PSRAM_JSON);
+    if (!deserializeJson(doc, message) && doc["links"].is<JsonObjectConst>()) {
+      JsonObjectConst links = doc["links"];
+      if (links["usb"].is<bool>()) settings_set_link_allowed(LINK_USB, links["usb"]);
+      if (links["ble"].is<bool>()) settings_set_link_allowed(LINK_BLE, links["ble"]);
+      if (links["wifi"].is<bool>()) settings_set_link_allowed(LINK_WIFI, links["wifi"]);
+      if (links["cloud"].is<bool>()) settings_set_link_allowed(LINK_CLOUD, links["cloud"]);
+    }
+  }
   // 설정에서 끈 연결 방식으로 온 것은 버린다
   if (!message.empty() && !settings_link_allowed(from)) {
     static uint32_t warned_ms = 0;
