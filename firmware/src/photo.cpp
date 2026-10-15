@@ -1,6 +1,7 @@
 #include "photo.h"
 
 #include <Preferences.h>
+#include <freertos/idf_additions.h>
 #include <time.h>
 
 #include "ble_link.h"
@@ -70,7 +71,7 @@ void photo_init() {
   prefs.begin("llm-deck");
   jobs = xQueueCreate(3, sizeof(Job));
   last_lock = xSemaphoreCreateMutex();
-  xTaskCreatePinnedToCore(sender_task, "photo", 4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCoreWithCaps(sender_task, "photo", 4096, NULL, 2, NULL, 1, MALLOC_CAP_SPIRAM);
 }
 
 static void make_name(char *out, size_t size) {

@@ -6,6 +6,8 @@
 #include "camera.h"
 #include "display.h"
 #include "photo.h"
+#include "link.h"
+#include "video.h"
 
 LV_FONT_DECLARE(font_ko_14);
 LV_FONT_DECLARE(font_ko_20);
@@ -18,6 +20,9 @@ static lv_obj_t *preview;
 static lv_obj_t *shutter;
 static lv_obj_t *close_btn;
 static lv_obj_t *turn_btn;
+static lv_obj_t *record_btn;
+static lv_obj_t *record_dot;
+static lv_obj_t *rec_lbl;
 static lv_obj_t *msg_lbl;
 static lv_img_dsc_t frame_dsc;
 static uint16_t *frame_buf;
@@ -30,8 +35,38 @@ static void show_message(const char *text, uint32_t ms) {
   msg_until = ms ? millis() + ms : 0;
 }
 
+static void stop_recording() {
+  if (!video_recording()) return;
+  const char *result = video_stop();
+  camera_set_video(false, nullptr);
+  // 녹화 중에는 가운데 점을 네모로 바꿔 "멈춤" 버튼처럼 보이게 했다
+  lv_obj_set_style_radius(record_dot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_size(record_dot, 22, 22);
+  lv_obj_add_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(shutter, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(turn_btn, LV_OBJ_FLAG_HIDDEN);
+  if (result) show_message(result, 2500);
+}
+
+static void start_recording() {
+  if (!camera_running() || video_recording()) return;
+  const char *error = video_start(camera_turns(display_rotation()));
+  if (error) {
+    show_message(error, 3000);
+    return;
+  }
+  camera_set_video(true, video_frame);
+  lv_obj_set_style_radius(record_dot, 3, 0);
+  lv_obj_set_size(record_dot, 18, 18);
+  lv_obj_clear_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
+  // 녹화 중에는 사진 찍기·방향 돌리기를 숨긴다
+  lv_obj_add_flag(shutter, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(turn_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void close_camera() {
   if (!is_open) return;
+  stop_recording();
   is_open = false;
   camera_stop();
   lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
@@ -48,8 +83,10 @@ static void open_camera() {
   if (camera_start()) {
     lv_obj_add_flag(msg_lbl, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(shutter, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(record_btn, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(shutter, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(record_btn, LV_OBJ_FLAG_HIDDEN);
     show_message("카메라가 연결되어 있지 않습니다", 0);
   }
 }
@@ -77,6 +114,14 @@ static void overlay_gesture(lv_event_t *e) {
 
 static void shutter_clicked(lv_event_t *e) {
   take_photo();
+}
+
+static void record_clicked(lv_event_t *e) {
+  if (video_recording()) {
+    stop_recording();
+  } else {
+    start_recording();
+  }
 }
 
 static void close_clicked(lv_event_t *e) {
@@ -135,6 +180,37 @@ void camera_ui_init() {
   lv_obj_set_ext_click_area(shutter, 8);
   lv_obj_add_event_cb(shutter, shutter_clicked, LV_EVENT_CLICKED, NULL);
 
+  // 녹화 버튼: 촬영 버튼 옆의 작은 버튼 (가운데 빨간 점, 녹화 중에는 빨간 네모)
+  record_btn = lv_btn_create(overlay);
+  lv_obj_set_size(record_btn, 44, 44);
+  lv_obj_set_style_radius(record_btn, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(record_btn, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(record_btn, LV_OPA_60, 0);
+  lv_obj_set_style_border_color(record_btn, lv_color_white(), 0);
+  lv_obj_set_style_border_width(record_btn, 3, 0);
+  lv_obj_set_style_shadow_width(record_btn, 0, 0);
+  lv_obj_set_ext_click_area(record_btn, 8);
+  lv_obj_add_event_cb(record_btn, record_clicked, LV_EVENT_CLICKED, NULL);
+  record_dot = lv_obj_create(record_btn);
+  lv_obj_remove_style_all(record_dot);
+  lv_obj_set_size(record_dot, 22, 22);
+  lv_obj_set_style_radius(record_dot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(record_dot, lv_color_hex(0xE0302A), 0);
+  lv_obj_set_style_bg_opa(record_dot, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(record_dot, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_center(record_dot);
+
+  // 녹화 시간 (위 가운데)
+  rec_lbl = lv_label_create(overlay);
+  lv_obj_set_style_text_font(rec_lbl, &font_ko_20, 0);
+  lv_obj_set_style_text_color(rec_lbl, lv_color_white(), 0);
+  lv_obj_set_style_bg_color(rec_lbl, lv_color_hex(0xC0201A), 0);
+  lv_obj_set_style_bg_opa(rec_lbl, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(rec_lbl, 4, 0);
+  lv_obj_set_style_pad_hor(rec_lbl, 6, 0);
+  lv_label_set_text(rec_lbl, "0:00");
+  lv_obj_add_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
+
   // 왼쪽 위: 닫기, 오른쪽 위: 미리보기 방향 돌리기
   close_btn = round_button(overlay, LV_SYMBOL_CLOSE, close_clicked);
   turn_btn = round_button(overlay, LV_SYMBOL_REFRESH, turn_clicked);
@@ -157,9 +233,12 @@ void camera_ui_layout() {
   // 가로 화면이면 오른쪽 가운데, 세로 화면이면 아래 가운데
   if (w > h) {
     lv_obj_align(shutter, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_align(record_btn, LV_ALIGN_RIGHT_MID, -18, 70);
   } else {
     lv_obj_align(shutter, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_align(record_btn, LV_ALIGN_BOTTOM_MID, 70, -18);
   }
+  lv_obj_align(rec_lbl, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_align(close_btn, LV_ALIGN_TOP_LEFT, 6, 6);
   lv_obj_align(turn_btn, LV_ALIGN_TOP_RIGHT, -6, 6);
   lv_obj_center(msg_lbl);
@@ -177,9 +256,17 @@ void camera_ui_loop() {
     lv_obj_add_flag(msg_lbl, LV_OBJ_FLAG_HIDDEN);
   }
   static uint32_t frame_ms = 0;
-  if (!camera_running() || millis() - frame_ms < 40) return;
+  if (!camera_running() || (!video_recording() && millis() - frame_ms < 40)) return;
   frame_ms = millis();
   int w, h;
+  if (video_recording()) {
+    char t[16];
+    uint32_t s = video_elapsed_ms() / 1000;
+    snprintf(t, sizeof(t), "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+    if (strcmp(lv_label_get_text(rec_lbl), t) != 0) lv_label_set_text(rec_lbl, t);
+    // 녹화 중 PC 연결이 끊기면 멈춘다
+    if (link_active() != LINK_USB && link_active() != LINK_WIFI) stop_recording();
+  }
   if (!camera_preview(frame_buf, display_width(), display_height(), display_rotation(), &w, &h)) return;
   static uint32_t frames = 0, counted_ms = 0;
   frames++;
@@ -217,6 +304,13 @@ void camera_ui_command(const char *cmd) {
     size_t len;
     if (fmt2jpg(be, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len);
     free(be);
+  } else if (strcmp(cmd, "record") == 0) {
+    open_camera();
+    if (video_recording()) {
+      stop_recording();
+    } else {
+      start_recording();
+    }
   } else if (strcmp(cmd, "close") == 0) {
     close_camera();
   }

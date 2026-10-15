@@ -1,10 +1,11 @@
 """기기와 통신하는 세 가지 방법 (USB / 블루투스 / Wi-Fi).
 
 모두 같은 모양을 가진다:
-    t = Transport(cfg, on_audio, on_event, on_photo)
+    t = Transport(cfg, on_audio, on_event, on_photo, on_video)
                                    on_audio(seq, pcm) 은 마이크 소리 20ms 분량이 올 때마다 불린다
                                    on_event(dict) 는 기기가 알림을 보낼 때 불린다 (예: {"sound": "mic_on"})
                                    on_photo(offset, data) 는 사진 조각이 올 때 불린다 (photos.py)
+                                   on_video(no, offset, total, ms, data) 는 동영상 조각이 올 때 (videos.py)
     t.open() -> bool               기기를 찾아 연결한다. 못 찾으면 False
     t.send(message: dict)          JSON 메시지를 보낸다. 실패하면 OSError
     t.close()

@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 #include <esp_camera.h>
+#include <freertos/idf_additions.h>
 #include <img_converters.h>
 
 #include "pins.h"
@@ -13,8 +14,26 @@ static Preferences prefs;
 static uint8_t mount_rot = 0;
 static bool mount_mirror = true;
 static framesize_t preview_size = FRAMESIZE_QVGA;
+static bool video_mode = false;
 // JPEG 미리보기를 풀어 놓는 곳 (돌리기 전)
 static uint8_t *decoded = nullptr;
+
+// JPEG 머리(SOF)에 적힌 실제 가로·세로. 카메라 크기를 바꾼 직후에는 드라이버가 알려 주는 크기와
+// 실제 그림 크기가 다를 수 있어서(이전 크기 그림이 몇 장 더 나온다) 그림에서 직접 읽는다.
+static bool jpeg_size(const uint8_t *d, size_t len, int *w, int *h) {
+  size_t i = 2;
+  while (i + 9 < len && d[i] == 0xFF) {
+    uint8_t marker = d[i + 1];
+    size_t seg = (d[i + 2] << 8) | d[i + 3];
+    if (marker >= 0xC0 && marker <= 0xC2) {
+      *h = (d[i + 5] << 8) | d[i + 6];
+      *w = (d[i + 7] << 8) | d[i + 8];
+      return true;
+    }
+    i += 2 + seg;
+  }
+  return false;
+}
 
 static camera_config_t base_config() {
   camera_config_t config = {};
@@ -71,18 +90,21 @@ bool camera_start() {
   strlcpy(model, info ? info->name : "?", sizeof(model));
   s->set_hmirror(s, mount_mirror);
   preview_size = FRAMESIZE_QVGA;
+  video_mode = false;
   s->set_framesize(s, preview_size);
   if (!decoded) decoded = (uint8_t *)ps_malloc(320 * 240 * 2);
   running = true;
-  Serial.printf("[camera] %s on (mount rot %d, mirror %d)\n", model, mount_rot, mount_mirror);
+  Serial.printf("[camera] %s on (mount rot %d, mirror %d), internal free %u\n", model, mount_rot, mount_mirror,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   return true;
 }
 
 void camera_stop() {
   if (!running) return;
+  camera_set_video(false, nullptr);
   esp_camera_deinit();
   running = false;
-  Serial.println("[camera] off");
+  Serial.printf("[camera] off, internal free %u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 
 bool camera_running() {
@@ -116,29 +138,140 @@ bool camera_mount_mirror() {
   return mount_mirror;
 }
 
+uint8_t camera_turns(uint8_t screen_rot) {
+  load_mount();
+  return (mount_rot - screen_rot) & 3;
+}
+
 // 센서 영상을 시계 방향으로 몇 번 돌려야 지금 화면에서 바로 보이는지
 static uint8_t turns_for(uint8_t screen_rot) {
   return (mount_rot - screen_rot) & 3;
 }
 
+// 녹화 중에는 따로 돌리는 태스크가 카메라에서 최대한 빨리 받아 넘기고(on_frame),
+// 화면 미리보기는 가장 최근 장(latest)을 가져다 줄여서 그린다.
+static void (*on_frame)(const uint8_t *, size_t) = nullptr;
+static volatile bool capture_run = false;
+static TaskHandle_t capture_task_handle = nullptr;
+static SemaphoreHandle_t latest_lock = nullptr;
+static uint8_t *latest = nullptr;
+static size_t latest_len = 0;
+static volatile bool latest_new = false;
+#define LATEST_MAX (200 * 1024)
+
+// 녹화 태스크는 한 번만 만들어 두고 켜고 끄기만 한다. 내부 RAM 이 빠듯해 스택은 PSRAM 에 둔다.
+static volatile bool capture_active = false;
+
+static void capture_task(void *) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    capture_active = true;
+    while (capture_run) {
+      camera_fb_t *fb = esp_camera_fb_get();
+      if (!fb) continue;
+      int jw = 0, jh = 0;
+      // 크기를 바꾼 직후에는 이전 크기 그림이 섞여 나오므로 실제로 640 인 장만 쓴다
+      if (fb->format == PIXFORMAT_JPEG && jpeg_size(fb->buf, fb->len, &jw, &jh) && jw == 640) {
+        if (on_frame) on_frame(fb->buf, fb->len);
+        // 화면이 앞 장을 그리는 중이면 이번 장은 미리보기에 쓰지 않는다
+        if (fb->len <= LATEST_MAX && xSemaphoreTake(latest_lock, 0) == pdTRUE) {
+          memcpy(latest, fb->buf, fb->len);
+          latest_len = fb->len;
+          latest_new = true;
+          xSemaphoreGive(latest_lock);
+        }
+      }
+      esp_camera_fb_return(fb);
+    }
+    capture_active = false;
+  }
+}
+
+void camera_set_video(bool on, void (*frame_cb)(const uint8_t *jpg, size_t len)) {
+  if (!running || on == video_mode) return;
+  sensor_t *s = esp_camera_sensor_get();
+  if (on) {
+    if (!latest_lock) latest_lock = xSemaphoreCreateMutex();
+    if (!latest) latest = (uint8_t *)ps_malloc(LATEST_MAX);
+    on_frame = frame_cb;
+    // 녹화 중에는 640x480 으로 찍는다
+    s->set_framesize(s, FRAMESIZE_VGA);
+    video_mode = true;
+    latest_new = false;
+    capture_run = true;
+    if (!capture_task_handle) {
+      xTaskCreatePinnedToCoreWithCaps(capture_task, "capture", 4096, NULL, 4, &capture_task_handle, 0, MALLOC_CAP_SPIRAM);
+    }
+    xTaskNotifyGive(capture_task_handle);
+  } else {
+    capture_run = false;
+    while (capture_active) delay(5);
+    on_frame = nullptr;
+    video_mode = false;
+    s->set_framesize(s, preview_size);
+  }
+}
+
 bool camera_preview(uint16_t *out, int fit_w, int fit_h, uint8_t screen_rot, int *w, int *h) {
   if (!running || !decoded) return false;
   uint8_t k = turns_for(screen_rot);
-  // 돌린 뒤 화면에 들어가도록 센서 크기를 고른다: 320x240 이 안 들어가면 240x176
+  // 돌린 뒤 화면에 들어가는지: 320x240 이 안 들어가면 더 작게
   bool fits = (k & 1) ? (240 <= fit_w && 320 <= fit_h) : (320 <= fit_w && 240 <= fit_h);
-  framesize_t want = fits ? FRAMESIZE_QVGA : FRAMESIZE_HQVGA;
   sensor_t *s = esp_camera_sensor_get();
-  if (want != preview_size) {
-    s->set_framesize(s, want);
-    preview_size = want;
+  if (!video_mode) {
+    framesize_t want = fits ? FRAMESIZE_QVGA : FRAMESIZE_HQVGA;
+    if (want != preview_size) {
+      s->set_framesize(s, want);
+      preview_size = want;
+    }
   }
 
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) return false;
-  int sw = fb->width, sh = fb->height;
-  bool ok = fb->format == PIXFORMAT_JPEG && sw * sh <= 320 * 240 &&
-            jpg2rgb565(fb->buf, fb->len, decoded, JPG_SCALE_NONE);
-  esp_camera_fb_return(fb);
+  camera_fb_t *fb = nullptr;
+  const uint8_t *jpg;
+  size_t jpg_len;
+  int sw, sh;
+  if (video_mode) {
+    // 녹화 태스크가 넣어 둔 가장 최근 장 (640x480)
+    if (!latest_new || xSemaphoreTake(latest_lock, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    latest_new = false;
+    jpg = latest;
+    jpg_len = latest_len;
+  } else {
+    fb = esp_camera_fb_get();
+    if (!fb) return false;
+    if (fb->format != PIXFORMAT_JPEG) {
+      esp_camera_fb_return(fb);
+      return false;
+    }
+    jpg = fb->buf;
+    jpg_len = fb->len;
+  }
+  bool sized = jpeg_size(jpg, jpg_len, &sw, &sh);
+  // 녹화 중(640x480)에는 풀 때 1/2 (안 들어가면 1/4) 로 줄인다
+  esp_jpeg_image_scale_t scale = JPG_SCALE_NONE;
+  if (sized && sw > 320) {
+    int div = sw / 320;  // 640 -> 2, 1600 -> 5 (안 맞으면 아래에서 거른다)
+    if (!fits) div *= 2;
+    if (div <= 2) {
+      scale = JPG_SCALE_2X;
+      div = 2;
+    } else if (div <= 4) {
+      scale = JPG_SCALE_4X;
+      div = 4;
+    } else {
+      scale = JPG_SCALE_8X;
+      div = 8;
+    }
+    sw /= div;
+    sh /= div;
+  }
+  // 다 풀었을 때 준비한 버퍼(320x240)에 들어갈 때만 푼다
+  bool ok = sized && sw * sh <= 320 * 240 && jpg2rgb565(jpg, jpg_len, decoded, scale);
+  if (fb) {
+    esp_camera_fb_return(fb);
+  } else {
+    xSemaphoreGive(latest_lock);
+  }
   if (!ok) {
     static uint32_t bad = 0;
     if (++bad % 20 == 1) Serial.printf("[camera] preview decode failed (%dx%d, %u total)\n", sw, sh, (unsigned)bad);
@@ -198,7 +331,8 @@ bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len) {
   camera_fb_t *fb = nullptr;
   for (int i = 0; i < 10; i++) {
     fb = esp_camera_fb_get();
-    if (fb && fb->width == 1600 && i >= 1) break;
+    int jw = 0, jh = 0;
+    if (fb && jpeg_size(fb->buf, fb->len, &jw, &jh) && jw == 1600 && i >= 1) break;
     if (fb) esp_camera_fb_return(fb);
     fb = nullptr;
   }

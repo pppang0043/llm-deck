@@ -8,9 +8,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import frames
+
 SERVICE_TYPE = "_llm-deck._tcp.local."
 HOSTNAME = "llm-deck.local"
 UDP_PORT = 4010
+VIDEO_TCP_PORT = 4011
 HEADER = struct.Struct("<I")
 AUDIO_SIZE = HEADER.size + 320 * 2  # 20ms 분량
 # 기기 찾기(mDNS)가 가끔 실패하므로 마지막으로 연결된 주소를 기억해 둔다
@@ -20,11 +23,13 @@ LAST_ADDRESS = Path.home() / ".llm-deck" / "device-address"
 class WifiTransport:
     name = "Wi-Fi"
 
-    def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None):
+    def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None, on_video=None):
         self.host = cfg.get("host", "")
         self.on_audio = on_audio
         self.on_event = on_event or (lambda event: None)
         self.on_photo = on_photo or (lambda offset, data: None)
+        self.on_video = on_video or (lambda no, offset, total, ms, data: None)
+        self.server = None
         self.address = None
         self.sock = None
 
@@ -77,7 +82,37 @@ class WifiTransport:
         sock.bind(("0.0.0.0", UDP_PORT))
         self.sock = sock
         threading.Thread(target=self._receive, args=(sock,), daemon=True).start()
+
+        # 동영상은 양이 많아 기기가 TCP 로 접속해 보낸다
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("0.0.0.0", VIDEO_TCP_PORT))
+        server.listen(1)
+        self.server = server
+        threading.Thread(target=self._accept, args=(server,), daemon=True).start()
         return True
+
+    def _accept(self, server) -> None:
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._read_stream, args=(conn,), daemon=True).start()
+
+    def _read_stream(self, conn) -> None:
+        buf = b""
+        with conn:
+            while True:
+                try:
+                    data = conn.recv(65536)
+                except OSError:
+                    return
+                if not data:
+                    return
+                found, buf = frames.split(buf + data)
+                for kind, body in found:
+                    frames.dispatch(self, kind, body)
 
     def _receive(self, sock) -> None:
         while True:
@@ -121,6 +156,9 @@ class WifiTransport:
             pass
 
     def close(self) -> None:
+        if self.server:
+            self.server.close()
+            self.server = None
         if self.sock:
             self.sock.close()
             self.sock = None

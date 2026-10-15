@@ -14,7 +14,7 @@ void link_init(void (*set_mic)(bool on));
 //   {"now": 1700000000, "utc_offset": 32400} 현재 시각(UTC 초)과 시간대(초). 기기 시계를 맞춘다
 //   {"mic": true}                            마이크 켜기/끄기
 //   {"sync_url": "https://..."}              공유 저장소 주소 (기기가 기억한다)
-//   {"camera": "open"}                     카메라 화면 열기 / "shoot" 촬영 / "close" 닫기
+//   {"camera": "open"}                     카메라 화면 열기 / "shoot" 촬영 / "record" 녹화 시작·멈춤 / "close" 닫기
 //   {"camera_mount": {"rot": 1, "mirror": false}}  카메라 센서가 붙은 방향 (사진이 돌아가 보이면 맞춘다)
 //   {"photo_test": true}                    카메라 없이 무늬 사진으로 저장·전송을 시험한다
 //   {"battery_mv": 4123}                     멀티미터로 잰 배터리 전압. 기기의 전압 측정을 보정한다 (0: 보정 지움)

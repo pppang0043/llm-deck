@@ -23,7 +23,14 @@ bool camera_mount_mirror();
 
 // 미리보기 한 장을 LVGL 색 형식(RGB565)으로, 화면 방향(screen_rot)에 맞게 돌려 out 에 넣는다.
 // fit_w x fit_h 안에 들어가는 크기로 만들고, 실제 크기를 w,h 로 돌려준다.
+// 녹화 중에는 녹화한 가장 최근 장을 줄여서 보여준다.
 bool camera_preview(uint16_t *out, int fit_w, int fit_h, uint8_t screen_rot, int *w, int *h);
+
+// 녹화 모드: 따로 도는 태스크가 640x480 JPEG 를 최대한 빨리 찍어 frame_cb 로 넘긴다 (그 태스크에서 불린다).
+void camera_set_video(bool on, void (*frame_cb)(const uint8_t *jpg, size_t len));
+
+// 화면 방향(screen_rot)에서 센서 영상을 시계 방향으로 몇 번(90도) 돌려야 바로 보이는지
+uint8_t camera_turns(uint8_t screen_rot);
 
 // 큰 사진(JPEG, 1600x1200)을 찍는다. 화면 방향(screen_rot)에 맞게 바로 보이도록 회전 정보(EXIF)를 넣는다.
 // 성공하면 *jpg 에 ps_malloc 한 버퍼 (free 로 해제), *len 에 크기.

@@ -12,6 +12,7 @@
 #include "mic.h"
 #include "net.h"
 #include "photo.h"
+#include "video.h"
 #include "pins.h"
 #include "ui.h"
 #include "usb_link.h"
@@ -133,6 +134,7 @@ void setup() {
   ble_link_init();
   cloud_init();
   photo_init();
+  video_init();
   Serial.println("[main] setup done");
 }
 

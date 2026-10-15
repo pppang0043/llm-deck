@@ -21,7 +21,7 @@ SCAN_SECONDS = 8
 class BleTransport:
     name = "Bluetooth"
 
-    def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None):
+    def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None, on_video=None):
         self.on_audio = on_audio
         self.on_event = on_event or (lambda event: None)
         self.on_photo = on_photo or (lambda offset, data: None)

@@ -8,6 +8,7 @@
     uv run main.py --battery 4.12   멀티미터로 잰 배터리 전압(V)을 알려 기기의 배터리 표시를 보정한다 (0: 보정 지움)
     uv run main.py --camera shoot   기기 카메라로 사진을 찍어 저장한다 (open / close 로 화면만 열고 닫기)
     uv run main.py --camera-mount 1 사진이 돌아가 보이면 카메라 센서 방향을 맞춘다 (0~3, 좌우 반전이면 1m 처럼)
+    uv run main.py --test-video 5   기기 카메라로 5초 녹화해 MOV 로 저장한다
     uv run main.py --test-photo     카메라 없이 무늬 사진을 찍은 것처럼 해서 SD 카드·PC 저장을 시험한다
     uv run main.py --test-sound     기기가 마이크를 켜고 끌 때 PC 스피커로 나는 소리를 들어 본다
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
@@ -27,6 +28,7 @@ from pathlib import Path
 
 import audio
 import photos
+import videos
 import sounds
 import statusline
 import sync
@@ -95,9 +97,9 @@ def collect_all(cfg: dict) -> dict:
     return {"updated": datetime.now().strftime("%H:%M"), "services": services, **clock, **extra}
 
 
-def connect(names: list[str], cfg: dict, on_audio, on_event, on_photo):
+def connect(names: list[str], cfg: dict, on_audio, on_event, on_photo, on_video):
     for name in names:
-        transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event, on_photo)
+        transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event, on_photo, on_video)
         if transport.open():
             print(f"[device] {transport.name} 로 연결했습니다.")
             return transport
@@ -137,9 +139,10 @@ def main() -> None:
     parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
     parser.add_argument("--battery", type=float, metavar="V", help="멀티미터로 잰 배터리 전압(V)으로 기기를 보정한다")
-    parser.add_argument("--camera", choices=["open", "shoot", "close", "dump"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기")
+    parser.add_argument("--camera", choices=["open", "shoot", "record", "close", "dump"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기")
     parser.add_argument("--camera-mount", choices=["0", "1", "2", "3", "0m", "1m", "2m", "3m"],
                         help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
+    parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
     parser.add_argument("--test-sound", action="store_true", help="마이크를 켜고 끌 때 나는 소리를 들어 본다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
@@ -177,16 +180,18 @@ def main() -> None:
     sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
     speaker = sounds.Sounds(cfg.get("sounds", {}))
     receiver = photos.PhotoReceiver(cfg.get("photos", {}))
+    movies = videos.VideoReceiver(cfg.get("videos", {}))
 
     def on_event(event: dict) -> None:
         speaker.on_event(event)
         receiver.on_event(event)
+        movies.on_event(event)
 
     transport = None
     first = True
     while True:
         if transport is None:
-            transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk)
+            transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
         if transport:
             message = collect_all(cfg)
             if first and args.mic:
@@ -195,6 +200,8 @@ def main() -> None:
                 message["photo_test"] = True
             if first and args.camera:
                 message["camera"] = args.camera
+            if first and args.test_video:
+                message["camera"] = "record"
             if first and args.camera_mount:
                 rot = int(args.camera_mount[0])
                 message["camera_mount"] = {"rot": rot, "mirror": args.camera_mount.endswith("m")}
@@ -211,6 +218,18 @@ def main() -> None:
         else:
             # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
             collect_limits(cfg)
+        if args.test_video and transport and not first:
+            # 정해진 초만큼 녹화하고 멈춘 뒤, 파일이 다 쓰일 때까지 기다린다
+            time.sleep(args.test_video)
+            transport.send({"camera": "record"})
+            for _ in range(30):
+                time.sleep(1)
+                if movies.writer is None:
+                    break
+            transport.send({"camera": "close"})
+            time.sleep(1)
+            transport.close()
+            return
         if (args.camera in ("open", "close") or args.camera_mount) and transport and not first:
             time.sleep(2)
             transport.close()

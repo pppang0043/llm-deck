@@ -69,3 +69,18 @@ void usb_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
   memcpy(frame + 9, data, len);
   Serial.write(frame, 5 + body);
 }
+
+void usb_send_frame(uint8_t kind, const uint8_t *head, size_t head_len, const uint8_t *data, size_t len) {
+  // 여러 태스크가 보내므로 프레임마다 버퍼를 따로 쓴다
+  uint8_t frame[5 + 2048];
+  size_t body = head_len + len;
+  if (5 + body > sizeof(frame)) return;
+  frame[0] = 0xA5;
+  frame[1] = 0x5A;
+  frame[2] = kind;
+  frame[3] = body & 0xFF;
+  frame[4] = body >> 8;
+  if (head_len) memcpy(frame + 5, head, head_len);
+  if (len) memcpy(frame + 5 + head_len, data, len);
+  Serial.write(frame, 5 + body);
+}

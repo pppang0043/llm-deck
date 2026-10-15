@@ -7,22 +7,20 @@ import threading
 import serial
 from serial.tools import list_ports
 
+from . import frames
+
 ESPRESSIF_VID = 0x303A
-MAGIC = b"\xa5\x5a"
-FRAME_AUDIO = 1
-FRAME_EVENT = 2
-FRAME_PHOTO = 3
-MAX_FRAME = 2048
 
 
 class UsbTransport:
     name = "USB"
 
-    def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None):
+    def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None, on_video=None):
         self.port_name = cfg.get("port", "")
         self.on_audio = on_audio
         self.on_event = on_event or (lambda event: None)
         self.on_photo = on_photo or (lambda offset, data: None)
+        self.on_video = on_video or (lambda no, offset, total, ms, data: None)
         self.ser = None
 
     def _find_port(self) -> str | None:
@@ -65,33 +63,9 @@ class UsbTransport:
                 buf += ser.read(4096)
             except (serial.SerialException, OSError, TypeError):
                 return
-            while True:
-                start = buf.find(MAGIC)
-                if start < 0:
-                    # 다음에 읽을 데이터와 이어질 수 있으니 마지막 한 바이트는 남겨 둔다
-                    buf = self._print_log(buf[:-1]) + buf[-1:]
-                    break
-                buf = self._print_log(buf[:start], flush=True) + buf[start:]
-                if len(buf) < 5:
-                    break
-                kind, length = struct.unpack_from("<BH", buf, 2)
-                if length > MAX_FRAME:
-                    buf = buf[2:]
-                    continue
-                if len(buf) < 5 + length:
-                    break
-                body, buf = buf[5 : 5 + length], buf[5 + length :]
-                if kind == FRAME_AUDIO:
-                    (seq,) = struct.unpack_from("<I", body)
-                    self.on_audio(seq, body[4:])
-                elif kind == FRAME_PHOTO:
-                    (offset,) = struct.unpack_from("<I", body)
-                    self.on_photo(offset, body[4:])
-                elif kind == FRAME_EVENT:
-                    try:
-                        self.on_event(json.loads(body))
-                    except ValueError:
-                        pass
+            found, buf = frames.split(buf, self._print_log)
+            for kind, body in found:
+                frames.dispatch(self, kind, body)
 
     @staticmethod
     def _print_log(data: bytes, flush: bool = False) -> bytes:
