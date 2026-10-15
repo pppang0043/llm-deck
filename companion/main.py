@@ -99,6 +99,11 @@ def collect_all(cfg: dict) -> dict:
     return {"updated": datetime.now().strftime("%H:%M"), "services": services, **clock, **extra}
 
 
+def usb_plugged(cfg: dict) -> bool:
+    """기기가 USB 로 꽂혀 있는지 (포트가 보이는지만 본다)."""
+    return TRANSPORTS["usb"](cfg.get("device", {}), lambda seq, pcm: None)._find_port() is not None
+
+
 def connect(names: list[str], cfg: dict, on_audio, on_event, on_photo, on_video):
     for name in names:
         transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event, on_photo, on_video)
@@ -227,6 +232,12 @@ def main() -> None:
                 print(f"[device] 전송 실패: {e}")
                 transport.close()
                 transport = None
+            # 블루투스·Wi-Fi 로 붙어 있는데 USB 케이블이 꽂히면 USB 로 갈아탄다 (더 빠르고, 기기도 USB 를 우선한다)
+            if transport and link == "auto" and transport.name != "USB" and usb_plugged(cfg):
+                print(f"[device] USB 케이블이 연결되어 {transport.name} 에서 USB 로 바꿉니다.")
+                transport.close()
+                transport = None
+                continue
         else:
             # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
             collect_limits(cfg)
