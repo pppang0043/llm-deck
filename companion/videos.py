@@ -10,11 +10,12 @@
 저장 위치는 설정의 [videos] dir (기본: Mac 은 "동영상(Movies)", Windows 는 "비디오(Videos)" 아래 "LLM Deck").
 """
 
-import re
 import struct
 import sys
 import threading
 from pathlib import Path
+
+from photos import open_new
 
 DEFAULT_DIR = Path.home() / ("Movies" if sys.platform == "darwin" else "Videos") / "LLM Deck"
 TIMESCALE = 1000  # ms 단위
@@ -40,10 +41,10 @@ def _matrix(turns: int, w: int, h: int) -> bytes:
 class MovWriter:
     """Motion JPEG 를 담는 최소한의 QuickTime MOV. 장은 바로바로 파일에 쓰고, 목차(moov)는 끝에 쓴다."""
 
-    def __init__(self, path: Path, turns: int):
+    def __init__(self, path: Path, turns: int, f=None):
         self.path = path
         self.turns = turns
-        self.f = path.open("wb")
+        self.f = f or path.open("wb")
         self.f.write(_box(b"ftyp", b"qt  ", struct.pack(">I", 0x20050300), b"qt  "))
         self.mdat_at = self.f.tell()
         # 크기가 4GB 를 넘을 수 있어 64비트 크기 칸을 쓴다
@@ -165,14 +166,12 @@ class VideoReceiver:
         with self.lock:
             if "start" in video:
                 self._finish()
-                safe = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(str(video["start"])).name) or "video.mov"
-                self.dir.mkdir(parents=True, exist_ok=True)
-                path = self.dir / safe
-                stem, n = path.stem, 1
-                while path.exists():
-                    path = self.dir / f"{stem}_{n}{path.suffix}"
-                    n += 1
-                self.writer = MovWriter(path, int(video.get("turns", 0)))
+                try:
+                    path, f = open_new(self.dir, str(video["start"]), "video.mov", "videos")
+                except OSError as e:
+                    print(f"[video] 저장할 파일을 만들지 못했습니다: {e}")
+                    return
+                self.writer = MovWriter(path, int(video.get("turns", 0)), f)
                 self.frame_no, self.got, self.lost = -1, 0, 0
                 print(f"[video] 녹화 받는 중: {path.name}")
             elif "end" in video:
