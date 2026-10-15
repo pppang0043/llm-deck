@@ -4,12 +4,14 @@
 
 #include "battery.h"
 #include "ble_link.h"
+#include "camera_ui.h"
 #include "cloud.h"
 #include "display.h"
 #include "imu.h"
 #include "link.h"
 #include "mic.h"
 #include "net.h"
+#include "photo.h"
 #include "pins.h"
 #include "ui.h"
 #include "usb_link.h"
@@ -55,6 +57,7 @@ static void apply_rotation() {
   if (rotation == display_rotation()) return;
   display_set_rotation(rotation);
   ui_layout();
+  camera_ui_layout();
   Serial.printf("[main] screen rotation %d (tilt %d + button %d)\n", rotation, tilt, rotate_offset);
 }
 
@@ -112,6 +115,7 @@ void setup() {
 
   display_init();
   ui_init(toggle_mic, rotate_by_button);
+  camera_ui_init();
   imu_init();
   battery_init();
   prefs.begin("llm-deck");
@@ -128,6 +132,7 @@ void setup() {
   net_init();
   ble_link_init();
   cloud_init();
+  photo_init();
   Serial.println("[main] setup done");
 }
 
@@ -142,6 +147,7 @@ void loop() {
   follow_tilt();
   battery_loop();
   show_clock();
+  camera_ui_loop();
 
   if (mic_is_on() && millis() - level_ms > 50) {
     level_ms = millis();

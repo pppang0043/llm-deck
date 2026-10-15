@@ -139,3 +139,28 @@ void ble_send_event(const char *json) {
   if (!connected || size > (size_t)mtu - 3) return;
   tx->notify((const uint8_t *)json, size);
 }
+
+size_t ble_photo_chunk_max() {
+  if (!connected || mtu < 30) return 0;
+  size_t packet = min((size_t)mtu - 3, (size_t)240);
+  // 소리 묶음(AUDIO_HEADER + 160)과 같은 길이면 PC 가 소리로 착각하므로 한 바이트 줄인다
+  if (packet == AUDIO_HEADER + 160) packet--;
+  return packet - 4;
+}
+
+bool ble_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
+  static uint8_t packet[244];
+  if (len + 4 > sizeof(packet)) return false;
+  packet[0] = 0xFF;
+  packet[1] = offset & 0xFF;
+  packet[2] = (offset >> 8) & 0xFF;
+  packet[3] = (offset >> 16) & 0xFF;
+  memcpy(packet + 4, data, len);
+  // 보내기 버퍼가 꽉 차면 notify 가 실패한다. 잠깐 기다렸다 다시 보낸다.
+  for (int attempt = 0; attempt < 400; attempt++) {
+    if (!connected) return false;
+    if (tx->notify(packet, len + 4)) return true;
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+  return false;
+}

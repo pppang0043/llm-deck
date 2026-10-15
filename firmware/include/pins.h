@@ -36,3 +36,23 @@
 #define MIC_SCK 18
 #define MIC_WS 43
 #define MIC_SD 44
+
+// 카메라 (24핀 커넥터, OV2640/OV5640 등). 출처: Waveshare 데모 09_lvgl_camera
+#define CAM_PWDN 17
+#define CAM_XCLK 8
+#define CAM_SIOD 21
+#define CAM_SIOC 16
+#define CAM_D7 2
+#define CAM_D6 7
+#define CAM_D5 10
+#define CAM_D4 14
+#define CAM_D3 11
+#define CAM_D2 15
+#define CAM_D1 13
+#define CAM_D0 12
+#define CAM_VSYNC 6
+#define CAM_HREF 4
+#define CAM_PCLK 9
+
+// microSD 카드 (LCD 와 같은 SPI 선을 쓰고 CS 만 따로)
+#define SD_CS 41

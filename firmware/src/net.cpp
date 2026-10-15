@@ -9,6 +9,7 @@
 
 #include "link.h"
 #include "mic.h"
+#include "photo.h"
 #include "secrets.h"
 #include "ui.h"
 
@@ -78,6 +79,18 @@ static void start_services() {
 void net_init() {
   server.on("/usage", HTTP_POST, handle_usage);
   server.on("/status", HTTP_GET, send_state);
+  // 마지막으로 찍은 사진. 사진을 찍으면 PC 에 알림을 보내고, PC 가 여기서 받아 간다.
+  server.on("/photo", HTTP_GET, [] {
+    const uint8_t *data;
+    size_t len;
+    const char *name;
+    if (!photo_last(&data, &len, &name)) {
+      server.send(404, "text/plain", "no photo");
+      return;
+    }
+    server.sendHeader("Content-Disposition", String("inline; filename=") + name);
+    server.send_P(200, "image/jpeg", (const char *)data, len);
+  });
   WiFi.setHostname(HOSTNAME);
 
   lock = xSemaphoreCreateMutex();

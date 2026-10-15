@@ -8,8 +8,10 @@
 //   [0xA5 0x5A][종류 1바이트][길이 2바이트][내용]
 #define USB_FRAME_AUDIO 1
 #define USB_FRAME_EVENT 2  // 내용은 JSON 글자 (link.h 의 link_send_event)
+#define USB_FRAME_PHOTO 3  // 사진 조각: [위치 4바이트][JPEG 데이터] (photo.h)
 
 void usb_link_init();
 void usb_link_loop();
 void usb_send_audio(uint32_t seq, const int16_t *pcm, size_t samples);
 void usb_send_event(const char *json);
+void usb_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len);

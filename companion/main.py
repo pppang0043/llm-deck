@@ -6,6 +6,7 @@
     uv run main.py --record a.wav   마이크 소리를 10초간 WAV 로 저장하고 끝낸다 (수신 확인용)
     uv run main.py --mic on         기기의 마이크를 PC 에서 켠다 (off 로 끈다)
     uv run main.py --battery 4.12   멀티미터로 잰 배터리 전압(V)을 알려 기기의 배터리 표시를 보정한다 (0: 보정 지움)
+    uv run main.py --test-photo     카메라 없이 무늬 사진을 찍은 것처럼 해서 SD 카드·PC 저장을 시험한다
     uv run main.py --test-sound     기기가 마이크를 켜고 끌 때 PC 스피커로 나는 소리를 들어 본다
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
     uv run main.py --clear-wifi     추가로 등록한 Wi-Fi 를 모두 지운다
@@ -23,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 import audio
+import photos
 import sounds
 import statusline
 import sync
@@ -91,9 +93,9 @@ def collect_all(cfg: dict) -> dict:
     return {"updated": datetime.now().strftime("%H:%M"), "services": services, **clock, **extra}
 
 
-def connect(names: list[str], cfg: dict, on_audio, on_event):
+def connect(names: list[str], cfg: dict, on_audio, on_event, on_photo):
     for name in names:
-        transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event)
+        transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event, on_photo)
         if transport.open():
             print(f"[device] {transport.name} 로 연결했습니다.")
             return transport
@@ -133,6 +135,7 @@ def main() -> None:
     parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
     parser.add_argument("--battery", type=float, metavar="V", help="멀티미터로 잰 배터리 전압(V)으로 기기를 보정한다")
+    parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
     parser.add_argument("--test-sound", action="store_true", help="마이크를 켜고 끌 때 나는 소리를 들어 본다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
@@ -168,16 +171,23 @@ def main() -> None:
     names = list(TRANSPORTS) if link == "auto" else [link]
     sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
     speaker = sounds.Sounds(cfg.get("sounds", {}))
+    receiver = photos.PhotoReceiver(cfg.get("photos", {}))
+
+    def on_event(event: dict) -> None:
+        speaker.on_event(event)
+        receiver.on_event(event)
 
     transport = None
     first = True
     while True:
         if transport is None:
-            transport = connect(names, cfg, sink.push, speaker.on_event)
+            transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk)
         if transport:
             message = collect_all(cfg)
             if first and args.mic:
                 message["mic"] = args.mic == "on"
+            if first and args.test_photo:
+                message["photo_test"] = True
             if first and args.battery is not None:
                 message["battery_mv"] = round(args.battery * 1000)
             try:
@@ -191,6 +201,14 @@ def main() -> None:
         else:
             # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
             collect_limits(cfg)
+        if args.test_photo and transport and not first:
+            # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
+            for _ in range(60):
+                time.sleep(1)
+                if receiver.buf is None and receiver.name:
+                    break
+            transport.close()
+            return
         if args.battery is not None and transport and not first:
             print(f"[device] 배터리 전압 {args.battery:.3f}V 로 보정했습니다." if args.battery else "[device] 배터리 보정을 지웠습니다.")
             time.sleep(1)

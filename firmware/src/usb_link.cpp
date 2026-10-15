@@ -55,3 +55,17 @@ void usb_send_event(const char *json) {
   memcpy(frame + 5, json, body);
   Serial.write(frame, 5 + body);
 }
+
+void usb_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
+  static uint8_t frame[5 + 4 + 1024];
+  size_t body = 4 + len;
+  if (5 + body > sizeof(frame)) return;
+  frame[0] = 0xA5;
+  frame[1] = 0x5A;
+  frame[2] = USB_FRAME_PHOTO;
+  frame[3] = body & 0xFF;
+  frame[4] = body >> 8;
+  memcpy(frame + 5, &offset, 4);
+  memcpy(frame + 9, data, len);
+  Serial.write(frame, 5 + body);
+}

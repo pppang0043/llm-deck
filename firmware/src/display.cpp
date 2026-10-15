@@ -1,6 +1,7 @@
 #include "display.h"
 
 #include <Arduino_GFX_Library.h>
+#include <SPI.h>
 #include <Wire.h>
 #include <lvgl.h>
 
@@ -13,7 +14,9 @@
 // 한 번에 그리는 줄 수. 클수록 빠르지만 메모리를 더 쓴다.
 #define DRAW_BUF_LINES 40
 
-static Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, LCD_MISO);
+// SD 카드와 같은 SPI 선(HSPI)을 함께 쓴다. 둘 다 loop 태스크에서만 쓰므로 서로 겹치지 않는다.
+static SPIClass spi(HSPI);
+static Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, LCD_MISO, HSPI, true);
 static Arduino_GFX *gfx = new Arduino_ST7789(bus, LCD_RST, 0 /* rotation */, true /* IPS */, LCD_W, LCD_H);
 
 static lv_disp_draw_buf_t draw_buf;
@@ -125,4 +128,14 @@ int display_height() {
 
 void display_loop() {
   lv_timer_handler();
+}
+
+SPIClass &display_spi() {
+  // 화면(gfx)이 먼저 SPI 를 잡은 뒤에 열어야 한다. 화면보다 먼저 열면 부팅 중에 멈춘다.
+  static bool started = false;
+  if (!started) {
+    spi.begin(LCD_SCLK, LCD_MISO, LCD_MOSI, -1);
+    started = true;
+  }
+  return spi;
 }

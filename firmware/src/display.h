@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <SPI.h>
 
 // 화면(ST7789) + 터치(CST816) + LVGL 을 초기화한다.
 void display_init();
@@ -15,3 +16,6 @@ uint8_t display_rotation();
 // 현재 방향에서의 화면 크기
 int display_width();
 int display_height();
+
+// 화면과 SD 카드가 같이 쓰는 SPI
+SPIClass &display_spi();

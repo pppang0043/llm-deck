@@ -20,10 +20,11 @@ LAST_ADDRESS = Path.home() / ".llm-deck" / "device-address"
 class WifiTransport:
     name = "Wi-Fi"
 
-    def __init__(self, cfg: dict, on_audio, on_event=None):
+    def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None):
         self.host = cfg.get("host", "")
         self.on_audio = on_audio
         self.on_event = on_event or (lambda event: None)
+        self.on_photo = on_photo or (lambda offset, data: None)
         self.address = None
         self.sock = None
 
@@ -87,12 +88,27 @@ class WifiTransport:
             # 같은 포트로 알림(JSON 글자)도 온다. 소리 묶음과 길이가 달라서 구별된다
             if packet[:1] == b"{" and len(packet) != AUDIO_SIZE:
                 try:
-                    self.on_event(json.loads(packet))
+                    event = json.loads(packet)
                 except ValueError:
-                    pass
+                    continue
+                self.on_event(event)
+                photo = event.get("photo") if isinstance(event, dict) else None
+                if isinstance(photo, dict) and photo.get("url"):
+                    threading.Thread(target=self._fetch_photo, args=(photo,), daemon=True).start()
                 continue
             (seq,) = HEADER.unpack_from(packet)
             self.on_audio(seq, packet[HEADER.size :])
+
+    def _fetch_photo(self, photo: dict) -> None:
+        """Wi-Fi 는 사진을 조각으로 보내지 않고, 알림을 받은 PC 가 기기에서 받아 간다."""
+        try:
+            with urllib.request.urlopen(f"http://{self.address}{photo['url']}", timeout=20) as res:
+                data = res.read()
+        except (urllib.error.URLError, OSError) as e:
+            print(f"[photo] Wi-Fi 로 받지 못했습니다: {e}")
+            return
+        self.on_event({"photo": {"name": photo.get("name", "photo.jpg"), "size": len(data)}})
+        self.on_photo(0, data)
 
     def send(self, message: dict) -> None:
         req = urllib.request.Request(

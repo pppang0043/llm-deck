@@ -10,7 +10,9 @@
 #include "battery.h"
 #include "ble_link.h"
 #include "cloud.h"
+#include "camera.h"
 #include "mic.h"
+#include "photo.h"
 #include "usb_link.h"
 #include "net.h"
 #include "ui.h"
@@ -127,6 +129,11 @@ void link_loop() {
       if (doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
+      if (doc["photo_test"] == true) {
+        uint8_t *jpg;
+        size_t len;
+        if (camera_test_pattern(&jpg, &len)) photo_save(jpg, len);
+      }
       if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
       if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
       if (doc["wifi_clear"] | false) net_clear_wifi();
