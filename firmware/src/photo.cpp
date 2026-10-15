@@ -18,6 +18,12 @@ struct Job {
 
 static QueueHandle_t jobs;
 static volatile bool sending = false;
+// 화면에 보여줄 진행 상황 (보내는 태스크가 쓰고 화면이 읽는다)
+static volatile size_t progress_done = 0;
+static volatile size_t progress_total = 0;
+static volatile uint32_t finished_count = 0;
+static volatile bool finished_ok = false;
+static volatile uint32_t finished_ms = 0;
 static Preferences prefs;
 
 static uint8_t *last_data = nullptr;
@@ -37,6 +43,8 @@ static void send_job(const Job &job) {
   link_send_event(event);
   uint32_t start = millis();
   bool ok = true;
+  progress_total = job.len;
+  progress_done = 0;
   for (size_t off = 0; off < job.len && ok;) {
     if (link_active() != job.link) {
       ok = false;
@@ -51,7 +59,11 @@ static void send_job(const Job &job) {
       ok = n > 0 && ble_send_photo_chunk(off, job.data + off, n);
     }
     off += n;
+    progress_done = off;
   }
+  finished_ok = ok;
+  finished_ms = millis() - start;
+  finished_count++;
   Serial.printf("[photo] sent %s to PC: %s (%lu ms)\n", job.name, ok ? "ok" : "interrupted", millis() - start);
 }
 
@@ -124,7 +136,8 @@ const char *photo_save(uint8_t *jpg, size_t len) {
 
   if (on_sd && to_pc) return "저장했습니다: SD 카드 + PC";
   if (on_sd) return "저장했습니다: SD 카드";
-  if (to_pc) return "PC로 보냈습니다";
+  // 블루투스는 수 초 걸린다. 다 보내면 화면에 따로 알린다 (camera_ui).
+  if (to_pc) return link == LINK_BLE ? "블루투스로 PC에 보내는 중" : "PC로 보냈습니다";
   return "저장할 곳이 없습니다\nSD 카드를 넣거나 PC를 연결하세요";
 }
 
@@ -138,4 +151,16 @@ bool photo_last(const uint8_t **data, size_t *len, const char **name) {
 
 bool photo_sending() {
   return sending;
+}
+
+bool photo_progress(int *pct) {
+  if (!sending || !progress_total) return false;
+  *pct = progress_done * 100 / progress_total;
+  return true;
+}
+
+uint32_t photo_finished(bool *ok, uint32_t *ms) {
+  *ok = finished_ok;
+  *ms = finished_ms;
+  return finished_count;
 }

@@ -19,3 +19,7 @@ bool photo_last(const uint8_t **data, size_t *len, const char **name);
 
 // PC 로 보내는 중인지 (블루투스는 수 초 걸린다)
 bool photo_sending();
+// 보내는 중이면 true 와 진행률(%)
+bool photo_progress(int *pct);
+// 지금까지 다 보낸(또는 실패한) 사진 수. 마지막 것의 성공 여부와 걸린 시간도 준다.
+uint32_t photo_finished(bool *ok, uint32_t *ms);

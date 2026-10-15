@@ -170,11 +170,12 @@ bool ble_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
   memcpy(packet + 4, data, len);
   // 블루투스 보내기 칸(mbuf)이 다 차면 notify 가 "ENOMEM" 오류로 실패한다. PC 가 받아 가는 속도는
   // 연결 간격에 달려 있어(Windows 는 Mac 보다 느리다) 칸이 비기를 먼저 기다렸다가 보낸다.
-  // 마이크 소리용으로 몇 칸은 남겨 둔다.
+  // 마이크 소리와, PC 가 보내오는 것(사용량·명령)을 받을 자리로 몇 칸은 남겨 둔다.
+  // (다 쓰면 PC 의 쓰기가 "Insufficient Resource" 로 거절되어 PC 쪽 연결이 끊긴다)
   uint32_t start = millis();
   while (millis() - start < 10000) {
     if (!connected) return false;
-    if (os_msys_num_free() >= 6 && tx->notify(packet, len + 4)) return true;
+    if (os_msys_num_free() >= 10 && tx->notify(packet, len + 4)) return true;
     vTaskDelay(pdMS_TO_TICKS(4));
   }
   Serial.println("[ble] photo chunk timed out (PC not reading)");

@@ -24,6 +24,7 @@ static lv_obj_t *record_btn;
 static lv_obj_t *record_dot;
 static lv_obj_t *rec_lbl;
 static lv_obj_t *msg_lbl;
+static lv_obj_t *send_lbl;
 static lv_img_dsc_t frame_dsc;
 static uint16_t *frame_buf;
 static bool is_open = false;
@@ -215,6 +216,17 @@ void camera_ui_init() {
   lv_obj_set_style_bg_opa(msg_lbl, LV_OPA_70, 0);
   lv_obj_set_style_pad_all(msg_lbl, 8, 0);
 
+  // 위쪽 가운데: PC 로 보내는 진행률
+  send_lbl = lv_label_create(overlay);
+  lv_obj_set_style_text_font(send_lbl, &font_ko_14, 0);
+  lv_obj_set_style_text_color(send_lbl, lv_color_white(), 0);
+  lv_obj_set_style_bg_color(send_lbl, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(send_lbl, LV_OPA_60, 0);
+  lv_obj_set_style_radius(send_lbl, 4, 0);
+  lv_obj_set_style_pad_hor(send_lbl, 6, 0);
+  lv_label_set_text(send_lbl, "");
+  lv_obj_add_flag(send_lbl, LV_OBJ_FLAG_HIDDEN);
+
   lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -231,6 +243,7 @@ void camera_ui_layout() {
     lv_obj_align(record_btn, LV_ALIGN_BOTTOM_MID, 70, -18);
   }
   lv_obj_align(rec_lbl, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_align(send_lbl, LV_ALIGN_TOP_MID, 0, 14);
   lv_obj_align(close_btn, LV_ALIGN_TOP_LEFT, 6, 6);
   lv_obj_center(msg_lbl);
   lv_obj_center(preview);
@@ -240,7 +253,30 @@ bool camera_ui_open() {
   return is_open;
 }
 
+// 사진을 PC 로 보내는 동안 진행률을 보이고, 오래 걸린 전송(블루투스)이 끝나면 알린다.
+// 카메라를 닫은 뒤에 끝나도 알림은 뜬다.
+static void show_send_progress() {
+  static uint32_t seen = 0;
+  bool ok;
+  uint32_t ms;
+  uint32_t count = photo_finished(&ok, &ms);
+  if (count != seen) {
+    seen = count;
+    if (ms > 2000) ui_toast(ok ? "사진을 PC에 보냈습니다" : "사진을 PC에 보내지 못했습니다", 2500);
+  }
+  int pct;
+  if (is_open && photo_progress(&pct)) {
+    char t[40];
+    snprintf(t, sizeof(t), "PC로 보내는 중 %d%%", pct);
+    if (strcmp(lv_label_get_text(send_lbl), t) != 0) lv_label_set_text(send_lbl, t);
+    lv_obj_clear_flag(send_lbl, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(send_lbl, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 void camera_ui_loop() {
+  show_send_progress();
   if (!is_open) return;
   if (msg_until && (int32_t)(millis() - msg_until) > 0) {
     msg_until = 0;

@@ -84,7 +84,17 @@ class BleTransport:
         # 한 번에 쓸 수 있는 크기가 작아서 여러 조각으로 나눠 보낸다
         chunk = self.client.mtu_size - 3
         for i in range(0, len(data), chunk):
-            await self.client.write_gatt_char(NUS_RX, data[i : i + chunk], response=True)
+            for attempt in range(10):
+                try:
+                    await self.client.write_gatt_char(NUS_RX, data[i : i + chunk], response=True)
+                    break
+                except BleakError as e:
+                    # 기기가 사진을 보내는 중이면 받을 자리가 잠깐 없어 "Insufficient Resource" 로 거절한다.
+                    # 연결을 끊지 말고 기다렸다 다시 쓴다.
+                    busy = "Insufficient Resource" in str(e) or "INSUFFICIENT_RESOURCE" in str(e)
+                    if not busy or attempt == 9:
+                        raise
+                    await asyncio.sleep(0.5)
 
     def close(self) -> None:
         if self.client:
