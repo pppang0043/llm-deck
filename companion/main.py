@@ -22,6 +22,7 @@
 import argparse
 import getpass
 import json
+import socket
 import sys
 import time
 import tomllib
@@ -39,6 +40,7 @@ from collectors.fmt import limits_page
 from transports import TRANSPORTS
 
 INTERVAL = 30
+INSTANCE_PORT = 4012  # 도우미가 하나만 돌게 하려고 잡는 PC 안쪽 포트
 RECORD_SECONDS = 10
 
 
@@ -97,6 +99,27 @@ def collect_all(cfg: dict) -> dict:
     # 기기에는 시계가 없어서(Wi-Fi 가 없으면 시각을 모른다) 보낼 때마다 현재 시각을 알려준다
     clock = {"now": int(time.time()), "utc_offset": time.localtime().tm_gmtoff}
     return {"updated": datetime.now().strftime("%H:%M"), "services": services, **clock, **extra}
+
+
+_instance_lock = None
+
+
+def claim_device() -> bool:
+    """기기에 붙는 도우미는 PC 에 하나만 돈다. 이미 돌고 있으면 False.
+
+    블루투스 연결은 기기가 하나만 받고 USB 포트도 한 프로그램만 열 수 있어서, 두 번째 도우미는
+    기기를 "찾지 못했다"고만 나온다. 그 대신 무엇이 문제인지 알려 주려고 PC 안에서만 쓰는 포트를 잡는다.
+    """
+    global _instance_lock
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", INSTANCE_PORT))
+        sock.listen(1)
+    except OSError:
+        sock.close()
+        return False
+    _instance_lock = sock
+    return True
 
 
 def usb_plugged(cfg: dict) -> bool:
@@ -188,6 +211,13 @@ def main() -> None:
         print(json.dumps(collect_all(cfg), indent=2, ensure_ascii=False))
         return
 
+    if not claim_device():
+        log = Path.home() / ".llm-deck" / "companion.log"
+        print("[device] 이 PC 에서 이미 다른 도우미가 기기에 연결되어 있습니다 (로그인할 때 자동으로 켜진 것일 수 있습니다).")
+        print(f"         그 도우미의 기록: {log}")
+        print("         여기서 직접 실행하려면 먼저 그 도우미를 끄세요.")
+        print("         Windows: 작업 관리자에서 python.exe 종료 / Mac: launchctl bootout gui/$(id -u)/com.llmdeck.companion")
+        return
     link = args.link or cfg.get("device", {}).get("link", "auto")
     names = list(TRANSPORTS) if link == "auto" else [link]
     sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
