@@ -14,14 +14,16 @@ DEVICE_NAME = "LLM-Deck"
 NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # PC -> 기기
 NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # 기기 -> PC
 AUDIO_HEADER = struct.Struct("<HhB")
+AUDIO_SIZE = AUDIO_HEADER.size + 160  # 20ms = 320샘플 x 4비트
 SCAN_SECONDS = 8
 
 
 class BleTransport:
     name = "Bluetooth"
 
-    def __init__(self, cfg: dict, on_audio):
+    def __init__(self, cfg: dict, on_audio, on_event=None):
         self.on_audio = on_audio
+        self.on_event = on_event or (lambda event: None)
         self.client = None
         # bleak 은 asyncio 방식이라, 전용 스레드에서 이벤트 루프를 돌리고 일을 맡긴다
         self.loop = asyncio.new_event_loop()
@@ -57,6 +59,13 @@ class BleTransport:
         return True
 
     def _on_notify(self, _sender, data: bytearray) -> None:
+        # 알림은 JSON 글자. 소리 묶음은 길이가 정해져 있어서(165바이트) 길이로 구별한다
+        if data[:1] == b"{" and len(data) != AUDIO_SIZE:
+            try:
+                self.on_event(json.loads(bytes(data)))
+            except ValueError:
+                pass
+            return
         seq, predictor, index = AUDIO_HEADER.unpack_from(data)
         self.on_audio(seq, adpcm.decode(bytes(data[AUDIO_HEADER.size :]), predictor, index))
 

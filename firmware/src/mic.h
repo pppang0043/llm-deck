@@ -17,3 +17,4 @@ uint8_t mic_level();
 
 // 오디오를 보낼 PC 주소
 void mic_set_target(IPAddress ip);
+IPAddress mic_target();

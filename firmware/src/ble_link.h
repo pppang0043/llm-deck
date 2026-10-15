@@ -6,7 +6,9 @@
 // PC -> 기기: JSON 을 여러 조각으로 나눠 쓰고 줄바꿈으로 끝낸다.
 // 기기 -> PC: 마이크 소리. BLE 는 느려서 ADPCM 으로 1/4 로 압축해 보낸다.
 //   [순번 2바이트][ADPCM 시작값 2바이트][ADPCM 단계 1바이트][샘플당 4비트 데이터]
+// 기기 -> PC: 알림(JSON 글자, '{' 로 시작). 소리 묶음과 길이가 달라서 구별된다.
 #define BLE_NAME "LLM-Deck"
 
 void ble_link_init();
 void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples);
+void ble_send_event(const char *json);

@@ -15,8 +15,11 @@
 #include "usb_link.h"
 
 static void set_mic(bool on) {
+  if (on == mic_is_on()) return;
   mic_set_on(on);
   ui_set_mic(on);
+  // 켜졌다는 걸 귀로도 알 수 있게 PC 스피커로 짧은 소리를 낸다
+  if (on) link_send_event("{\"sound\":\"mic_on\"}");
 }
 
 static void toggle_mic() {

@@ -42,3 +42,16 @@ void usb_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
   memcpy(frame + 9, pcm, samples * 2);
   Serial.write(frame, 5 + body);
 }
+
+void usb_send_event(const char *json) {
+  uint8_t frame[5 + 200];
+  size_t body = strlen(json);
+  if (5 + body > sizeof(frame)) return;
+  frame[0] = 0xA5;
+  frame[1] = 0x5A;
+  frame[2] = USB_FRAME_EVENT;
+  frame[3] = body & 0xFF;
+  frame[4] = body >> 8;
+  memcpy(frame + 5, json, body);
+  Serial.write(frame, 5 + body);
+}

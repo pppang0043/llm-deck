@@ -12,6 +12,7 @@ SERVICE_TYPE = "_llm-deck._tcp.local."
 HOSTNAME = "llm-deck.local"
 UDP_PORT = 4010
 HEADER = struct.Struct("<I")
+AUDIO_SIZE = HEADER.size + 320 * 2  # 20ms 분량
 # 기기 찾기(mDNS)가 가끔 실패하므로 마지막으로 연결된 주소를 기억해 둔다
 LAST_ADDRESS = Path.home() / ".llm-deck" / "device-address"
 
@@ -19,9 +20,10 @@ LAST_ADDRESS = Path.home() / ".llm-deck" / "device-address"
 class WifiTransport:
     name = "Wi-Fi"
 
-    def __init__(self, cfg: dict, on_audio):
+    def __init__(self, cfg: dict, on_audio, on_event=None):
         self.host = cfg.get("host", "")
         self.on_audio = on_audio
+        self.on_event = on_event or (lambda event: None)
         self.address = None
         self.sock = None
 
@@ -82,6 +84,13 @@ class WifiTransport:
                 packet = sock.recv(2048)
             except OSError:
                 return
+            # 같은 포트로 알림(JSON 글자)도 온다. 소리 묶음과 길이가 달라서 구별된다
+            if packet[:1] == b"{" and len(packet) != AUDIO_SIZE:
+                try:
+                    self.on_event(json.loads(packet))
+                except ValueError:
+                    pass
+                continue
             (seq,) = HEADER.unpack_from(packet)
             self.on_audio(seq, packet[HEADER.size :])
 

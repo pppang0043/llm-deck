@@ -5,7 +5,12 @@
 #include <sys/time.h>
 #include <string>
 
+#include <WiFiUdp.h>
+
+#include "ble_link.h"
 #include "cloud.h"
+#include "mic.h"
+#include "usb_link.h"
 #include "net.h"
 #include "ui.h"
 
@@ -139,4 +144,26 @@ void link_loop() {
 
 Link link_active() {
   return active;
+}
+
+void link_send_event(const char *json) {
+  static WiFiUDP udp;
+  switch (active) {
+    case LINK_USB:
+      usb_send_event(json);
+      break;
+    case LINK_BLE:
+      ble_send_event(json);
+      break;
+    case LINK_WIFI:
+      if ((uint32_t)mic_target() != 0) {
+        udp.beginPacket(mic_target(), MIC_UDP_PORT);
+        udp.write((const uint8_t *)json, strlen(json));
+        udp.endPacket();
+      }
+      break;
+    default:
+      return;
+  }
+  Serial.printf("[link] event to %s: %s\n", link_tag(active), json);
 }

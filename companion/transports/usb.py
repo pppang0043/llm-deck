@@ -10,15 +10,17 @@ from serial.tools import list_ports
 ESPRESSIF_VID = 0x303A
 MAGIC = b"\xa5\x5a"
 FRAME_AUDIO = 1
+FRAME_EVENT = 2
 MAX_FRAME = 2048
 
 
 class UsbTransport:
     name = "USB"
 
-    def __init__(self, cfg: dict, on_audio):
+    def __init__(self, cfg: dict, on_audio, on_event=None):
         self.port_name = cfg.get("port", "")
         self.on_audio = on_audio
+        self.on_event = on_event or (lambda event: None)
         self.ser = None
 
     def _find_port(self) -> str | None:
@@ -80,6 +82,11 @@ class UsbTransport:
                 if kind == FRAME_AUDIO:
                     (seq,) = struct.unpack_from("<I", body)
                     self.on_audio(seq, body[4:])
+                elif kind == FRAME_EVENT:
+                    try:
+                        self.on_event(json.loads(body))
+                    except ValueError:
+                        pass
 
     @staticmethod
     def _print_log(data: bytes, flush: bool = False) -> bytes:

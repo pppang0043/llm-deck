@@ -90,3 +90,7 @@ uint8_t mic_level() {
 void mic_set_target(IPAddress ip) {
   target = (uint32_t)ip;
 }
+
+IPAddress mic_target() {
+  return IPAddress(target);
+}

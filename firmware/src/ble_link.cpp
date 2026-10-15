@@ -133,3 +133,9 @@ void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
   }
   tx->notify(packet, size);
 }
+
+void ble_send_event(const char *json) {
+  size_t size = strlen(json);
+  if (!connected || size > (size_t)mtu - 3) return;
+  tx->notify((const uint8_t *)json, size);
+}
