@@ -15,8 +15,8 @@ LV_FONT_DECLARE(font_ko_28);
 #define MIC_W 72
 #define LEVEL_H 4
 // 상태줄 건전지 모양 크기
-#define BAT_W 22
-#define BAT_H 11
+#define BAT_W 26
+#define BAT_H 14
 
 #define COLOR_BG lv_color_hex(0x101418)
 #define COLOR_DIM lv_color_hex(0x8A939E)
@@ -38,6 +38,7 @@ static lv_obj_t *rotate_btn;
 static lv_obj_t *clock_lbl;
 static lv_obj_t *bat_icon;
 static lv_obj_t *bat_fill;
+static lv_obj_t *bat_bolt;
 static lv_obj_t *bat_lbl;
 static char clock_date[24] = "";
 static char clock_time[8] = "";
@@ -145,7 +146,6 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
   // 배터리: 숫자(%) + 건전지 모양. 배터리가 없으면 숨긴다.
   bat_lbl = add_label(scr, "", &font_ko_14, COLOR_DIM);
-  lv_label_set_recolor(bat_lbl, true);
   bat_icon = lv_obj_create(scr);
   lv_obj_remove_style_all(bat_icon);
   lv_obj_set_size(bat_icon, BAT_W + 3, BAT_H);
@@ -167,6 +167,11 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_set_style_bg_opa(bat_fill, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(bat_fill, 1, 0);
   lv_obj_set_pos(bat_fill, 2, 2);
+  // 충전 중일 때 건전지 가운데에 번개
+  lv_obj_add_flag(body, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  bat_bolt = add_label(body, LV_SYMBOL_CHARGE, &lv_font_montserrat_10, lv_color_white());
+  lv_obj_center(bat_bolt);
+  lv_obj_add_flag(bat_bolt, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
 
@@ -272,10 +277,11 @@ void ui_set_battery(int pct, bool charging) {
     int inner = BAT_W - 4;
     lv_obj_set_size(bat_fill, pct > 0 ? LV_MAX(1, inner * pct / 100) : 0, BAT_H - 4);
     lv_obj_set_style_bg_color(bat_fill, color, 0);
+    lv_label_set_text_fmt(bat_lbl, "%d%%", pct);
     if (charging) {
-      lv_label_set_text_fmt(bat_lbl, "#E0A030 " LV_SYMBOL_CHARGE "# %d%%", pct);
+      lv_obj_clear_flag(bat_bolt, LV_OBJ_FLAG_HIDDEN);
     } else {
-      lv_label_set_text_fmt(bat_lbl, "%d%%", pct);
+      lv_obj_add_flag(bat_bolt, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_set_style_text_color(bat_lbl, !charging && pct <= 20 ? color : COLOR_DIM, 0);
     lv_obj_clear_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);

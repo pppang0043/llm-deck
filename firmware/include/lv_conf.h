@@ -12,6 +12,8 @@
 #define LV_TICK_CUSTOM_INCLUDE "Arduino.h"
 #define LV_TICK_CUSTOM_SYS_TIME_EXPR (millis())
 
+// 10: 건전지 모양 안의 작은 번개 표시
+#define LV_FONT_MONTSERRAT_10 1
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_20 1
 #define LV_FONT_MONTSERRAT_28 1
