@@ -20,7 +20,6 @@ static lv_obj_t *overlay;
 static lv_obj_t *preview;
 static lv_obj_t *shutter;
 static lv_obj_t *close_btn;
-static lv_obj_t *turn_btn;
 static lv_obj_t *record_btn;
 static lv_obj_t *record_dot;
 static lv_obj_t *rec_lbl;
@@ -45,7 +44,6 @@ static void stop_recording() {
   lv_obj_set_size(record_dot, 22, 22);
   lv_obj_add_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(shutter, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(turn_btn, LV_OBJ_FLAG_HIDDEN);
   if (result) show_message(result, 2500);
 }
 
@@ -60,9 +58,8 @@ static void start_recording() {
   lv_obj_set_style_radius(record_dot, 3, 0);
   lv_obj_set_size(record_dot, 18, 18);
   lv_obj_clear_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
-  // 녹화 중에는 사진 찍기·방향 돌리기를 숨긴다
+  // 녹화 중에는 사진 찍기를 숨긴다
   lv_obj_add_flag(shutter, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_flag(turn_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void close_camera() {
@@ -130,11 +127,6 @@ static void record_clicked(lv_event_t *e) {
 
 static void close_clicked(lv_event_t *e) {
   close_camera();
-}
-
-// 미리보기가 누워 보이면 눌러서 바로 세운다. 이 방향은 기억되고 사진에도 똑같이 적용된다.
-static void turn_clicked(lv_event_t *e) {
-  camera_set_mount(camera_mount_rot() + 1, camera_mount_mirror());
 }
 
 static lv_obj_t *round_button(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb) {
@@ -212,9 +204,8 @@ void camera_ui_init() {
   lv_label_set_text(rec_lbl, "0:00");
   lv_obj_add_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
 
-  // 왼쪽 위: 닫기, 오른쪽 위: 미리보기 방향 돌리기
+  // 왼쪽 위: 닫기. (카메라 방향은 촬영 중 실수로 바뀌지 않게 설정 화면에서만 바꾼다)
   close_btn = round_button(overlay, LV_SYMBOL_CLOSE, close_clicked);
-  turn_btn = round_button(overlay, LV_SYMBOL_REFRESH, turn_clicked);
 
   msg_lbl = lv_label_create(overlay);
   lv_obj_set_style_text_font(msg_lbl, &font_ko_20, 0);
@@ -241,7 +232,6 @@ void camera_ui_layout() {
   }
   lv_obj_align(rec_lbl, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_align(close_btn, LV_ALIGN_TOP_LEFT, 6, 6);
-  lv_obj_align(turn_btn, LV_ALIGN_TOP_RIGHT, -6, 6);
   lv_obj_center(msg_lbl);
   lv_obj_center(preview);
 }
