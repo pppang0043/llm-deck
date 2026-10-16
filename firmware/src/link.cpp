@@ -17,9 +17,11 @@
 #include <lvgl.h>
 
 #include "camera.h"
+#include "display.h"
 #include "camera_ui.h"
 #include "mic.h"
 #include "photo.h"
+#include "saver.h"
 #include "usb_link.h"
 #include "net.h"
 #include "ui.h"
@@ -192,8 +194,15 @@ void link_loop() {
       if (doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
-      if (doc["camera"].is<const char *>()) camera_ui_command(doc["camera"]);
-      if (doc["view"].is<const char *>()) ui_show(doc["view"]);
+      // PC 에서 화면을 바꾸면 사람이 만진 것처럼 화면 보호기·절전을 깨운다
+      if (doc["camera"].is<const char *>()) {
+        display_poke();
+        camera_ui_command(doc["camera"]);
+      }
+      if (doc["view"].is<const char *>()) {
+        display_poke();
+        ui_show(doc["view"]);
+      }
       if (doc["screenshot"] == true) {
         // 진단용: 지금 화면을 사진처럼 PC 로 보낸다
         uint16_t *px;
@@ -210,6 +219,7 @@ void link_loop() {
       if (doc["camera_mount"].is<JsonObjectConst>()) {
         camera_set_mount(doc["camera_mount"]["rot"] | 0, doc["camera_mount"]["mirror"] | false);
       }
+      if (doc["saver"] == true) saver_demo();
       if (doc["photo_test"] == true) {
         uint8_t *jpg;
         size_t len;

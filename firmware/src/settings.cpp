@@ -21,6 +21,10 @@ static bool auto_rotate = true;
 static bool mic_sound = true;
 static bool auto_dim = true;
 static bool limit_alerts = true;
+// 화면 보호기가 켜지기까지 분 (0 이면 끔)
+static const uint8_t SAVER_CHOICES[] = {0, 1, 5, 10, 30};
+static uint8_t saver_min = 5;
+static lv_obj_t *saver_lbl;
 static lv_obj_t *dim_sw;
 static lv_obj_t *alert_sw;
 
@@ -35,9 +39,9 @@ struct LinkOption {
 };
 static LinkOption link_options[] = {
     {LINK_USB, "lk_usb", "USB", "케이블로 연결한 PC", true, nullptr},
-    {LINK_BLE, "lk_ble", "블루투스", "끄면 다른 기기가 찾지 못함", true, nullptr},
-    {LINK_WIFI, "lk_wifi", "Wi-Fi", "같은 공유기에 있는 PC", true, nullptr},
-    {LINK_CLOUD, "lk_cloud", "클라우드", "PC 없을 때 인터넷에서 받기", true, nullptr},
+    {LINK_BLE, "lk_ble", "블루투스", "끄면 검색 안 됨", true, nullptr},
+    {LINK_WIFI, "lk_wifi", "Wi-Fi", "같은 공유기의 PC", true, nullptr},
+    {LINK_CLOUD, "lk_cloud", "클라우드", "PC 없을 때 인터넷", true, nullptr},
 };
 
 static lv_obj_t *bright_slider;
@@ -56,6 +60,7 @@ void settings_init() {
   mic_sound = prefs.getBool("mic_sound", true);
   auto_dim = prefs.getBool("auto_dim", true);
   limit_alerts = prefs.getBool("lim_alert", true);
+  saver_min = prefs.getUChar("saver_min", 5);
   for (LinkOption &o : link_options) o.allowed = prefs.getBool(o.key, true);
   display_set_brightness(brightness);
 }
@@ -127,6 +132,27 @@ bool settings_limit_alerts() {
   return limit_alerts;
 }
 
+uint32_t settings_saver_ms() {
+  return saver_min * 60000UL;
+}
+
+static void show_saver() {
+  if (saver_min) {
+    lv_label_set_text_fmt(saver_lbl, "%d분", saver_min);
+  } else {
+    lv_label_set_text(saver_lbl, "끔");
+  }
+}
+
+static void saver_clicked(lv_event_t *e) {
+  // 누를 때마다 끔 -> 1분 -> 5분 -> 10분 -> 30분 -> 끔
+  size_t i = 0;
+  while (i < sizeof(SAVER_CHOICES) && SAVER_CHOICES[i] != saver_min) i++;
+  saver_min = SAVER_CHOICES[(i + 1) % sizeof(SAVER_CHOICES)];
+  prefs.putUChar("saver_min", saver_min);
+  show_saver();
+}
+
 static void dim_changed(lv_event_t *e) {
   auto_dim = lv_obj_has_state(dim_sw, LV_STATE_CHECKED);
   prefs.putBool("auto_dim", auto_dim);
@@ -158,6 +184,9 @@ static lv_obj_t *add_row(lv_obj_t *parent, const char *title, const char *desc) 
     lv_label_set_text(d, desc);
     lv_obj_set_style_text_font(d, &font_ko_14, 0);
     lv_obj_set_style_text_color(d, COLOR_DIM, 0);
+    // 오른쪽 스위치·버튼과 겹치지 않게 폭을 줄이고, 넘치면 "..." 로 줄인다
+    lv_label_set_long_mode(d, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(d, lv_pct(68));
     lv_obj_align(d, LV_ALIGN_TOP_LEFT, 0, 26);
   }
   return row;
@@ -254,19 +283,20 @@ void settings_build(lv_obj_t *parent) {
   lv_obj_add_event_cb(bright_slider, bright_changed, LV_EVENT_RELEASED, NULL);
   lv_obj_set_height(row, 64);
 
-  dim_sw = add_switch(add_row(parent, "배터리 절약", "안 쓰면 1분 뒤 어둡게, 3분 뒤 끄기"), auto_dim, dim_changed);
-  alert_sw = add_switch(add_row(parent, "한도 알림", "80%, 90%를 넘거나 초기화되면"), limit_alerts, alert_changed);
-  rotate_sw = add_switch(add_row(parent, "자동 회전", "기울이면 화면이 따라 돕니다"), auto_rotate, rotate_changed);
-  sound_sw = add_switch(add_row(parent, "마이크 알림음", "켜고 끌 때 PC에서 소리"), mic_sound, sound_changed);
+  add_button(add_row(parent, "화면 보호기", "안 쓰면 어두운 시계로"), "5분", saver_clicked, &saver_lbl);
+  dim_sw = add_switch(add_row(parent, "배터리 절약", "1분 어둡게, 3분 끄기"), auto_dim, dim_changed);
+  alert_sw = add_switch(add_row(parent, "한도 알림", "80%, 90%, 초기화 때"), limit_alerts, alert_changed);
+  rotate_sw = add_switch(add_row(parent, "자동 회전", "기울이면 따라 돌기"), auto_rotate, rotate_changed);
+  sound_sw = add_switch(add_row(parent, "마이크 알림음", "켜고 끌 때 PC 소리"), mic_sound, sound_changed);
 
-  row = add_row(parent, "카메라 방향", "사진이 누워 보이면 돌리기");
+  row = add_row(parent, "카메라 방향", "사진이 누우면");
   add_button(row, "돌리기", cam_turn_clicked, nullptr);
   cam_value = lv_label_create(row);
   lv_obj_set_style_text_font(cam_value, &font_ko_14, 0);
   lv_obj_set_style_text_color(cam_value, COLOR_DIM, 0);
   lv_obj_align(cam_value, LV_ALIGN_RIGHT_MID, -76, 0);
 
-  mirror_sw = add_switch(add_row(parent, "카메라 좌우 반전", "글자가 거꾸로 보이면 바꾸기"),
+  mirror_sw = add_switch(add_row(parent, "카메라 좌우 반전", "글자가 거꾸로면"),
                          camera_mount_mirror(), mirror_changed);
 
   lv_obj_t *section = lv_label_create(parent);
@@ -322,6 +352,7 @@ void settings_refresh() {
     }
   }
   show_camera_mount();
+  show_saver();
   restart_armed_ms = 0;
   lv_label_set_text(restart_lbl, "재시작");
 }

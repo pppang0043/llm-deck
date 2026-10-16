@@ -24,6 +24,7 @@ LLM 구독 한도 사용률을 보여주고, 카메라로 사진·동영상을 �
 | 설정 | 내용 |
 |---|---|
 | 화면 밝기 | 10~100% |
+| 화면 보호기 | 만지지 않으면 정한 시간(끔/1/5/10/30분, 기본 5분) 뒤 검은 바탕에 어두운 시계·사용률만 띄우고 30초마다 자리를 옮긴다. 화면 잔상과 백라이트 닳음을 줄인다. 첫 터치는 깨우기만 한다 |
 | 배터리 절약 | 배터리로만 쓸 때 만지지 않으면 1분 뒤 어둡게, 3분 뒤 끈다. 깨우는 첫 터치는 버튼을 누르지 않는다 |
 | 한도 알림 | 사용률이 80%·90% 를 넘거나 한도가 초기화되면 화면 알림 + PC 알림음 |
 | 자동 회전 | 기울이면 화면이 따라 돈다 |
@@ -90,6 +91,7 @@ uv run main.py --setup-sync        # 여러 PC 가 사용률을 공유할 비공
 uv run main.py --test-sound        # 알림음 들어 보기
 uv run main.py --camera shoot      # 사진 찍기 (open / record / close / dump)
 uv run main.py --test-video 5      # 5초 녹화
+uv run main.py --saver             # 화면 보호기를 지금 띄워 보기 (만지면 사라짐)
 uv run main.py --screenshot        # 기기 화면을 찍어 사진 폴더에 저장 (--view home|usage|info|settings 와 함께)
 uv run main.py --links ble=off     # 연결 방식 켜고 끄기 (USB 로만, USB 를 꺼 둬도 받는다)
 uv run main.py --camera-mount 0m   # 카메라 방향 (0~3, 좌우 반전이면 m)

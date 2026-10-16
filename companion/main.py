@@ -176,6 +176,7 @@ def main() -> None:
     parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
     parser.add_argument("--links", metavar="usb=on,ble=off", help="기기의 연결 방식 켜고 끄기 (USB 로 연결했을 때만)")
     parser.add_argument("--view", choices=["home", "usage", "info", "settings", "settings_end"], help="기기 화면 바꾸기")
+    parser.add_argument("--saver", action="store_true", help="기기의 화면 보호기를 지금 띄운다 (화면을 만지면 사라짐)")
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
     parser.add_argument("--test-sound", action="store_true", help="기기 알림에 쓰는 소리를 모두 들어 본다")
@@ -252,6 +253,8 @@ def main() -> None:
                     message["view"] = args.view
                 if first and args.screenshot:
                     message["screenshot"] = True
+                if first and args.saver:
+                    message["saver"] = True
                 if first and args.test_video:
                     message["camera"] = "record"
                 if first and args.camera_mount:
@@ -292,7 +295,7 @@ def main() -> None:
                 time.sleep(2)
                 transport.close()
                 return
-            if args.view and not args.screenshot and transport and not first:
+            if (args.view or args.saver) and not args.screenshot and transport and not first:
                 time.sleep(1)
                 transport.close()
                 return

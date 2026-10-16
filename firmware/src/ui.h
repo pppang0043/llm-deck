@@ -40,4 +40,6 @@ void ui_show(const char *name);
 // 지금 화면을 RGB565 로 찍는다 (진단용). *pixels 는 free 로 해제.
 bool ui_screenshot(uint16_t **pixels, int *w, int *h);
 void ui_set_info(const char *text);
+// 화면 보호기에 띄울 짧은 사용률 요약 (서비스마다 한 줄). 받은 사용량이 없으면 빈 글자.
+void ui_usage_summary(char *out, size_t size);
 void ui_set_level(uint8_t pct);

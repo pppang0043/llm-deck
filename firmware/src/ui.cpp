@@ -526,6 +526,26 @@ static void render_usage() {
   lv_obj_set_tile_id(tiles, 0, keep < count ? keep : count - 1, LV_ANIM_OFF);
 }
 
+void ui_usage_summary(char *out, size_t size) {
+  // 서비스마다 두 줄: "Claude Code" / "5시간 43%   주간 12%" (최대 2개)
+  out[0] = '\0';
+  size_t used = 0;
+  int lines = 0;
+  for (JsonObjectConst svc : last_usage.as<JsonArrayConst>()) {
+    JsonArrayConst bars = svc["bars"];
+    if (bars.size() == 0 || lines >= 2) continue;
+    used += snprintf(out + used, used < size ? size - used : 0, "%s%s\n", lines ? "\n" : "", svc["name"] | "");
+    bool first = true;
+    for (JsonObjectConst bar : bars) {
+      used += snprintf(out + used, used < size ? size - used : 0, "%s%s %s", first ? "" : "   ", bar["label"] | "",
+                       bar["text"] | "");
+      first = false;
+    }
+    lines++;
+  }
+  if (used >= size) out[size - 1] = '\0';
+}
+
 void ui_set_mic(bool on) {
   mic_on = on;
   bool wide = display_width() > display_height();
