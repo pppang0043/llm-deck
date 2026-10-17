@@ -19,6 +19,7 @@
 #include "camera.h"
 #include "display.h"
 #include "health.h"
+#include "pcpanel.h"
 #include "camera_ui.h"
 #include "mic.h"
 #include "photo.h"
@@ -275,6 +276,9 @@ void link_loop() {
         storage_clear("/photos");
         storage_clear("/videos");
       }
+      // 사용 중인 PC 가 보낸 PC 상태와 알림 글 (단축 버튼을 눌렀을 때 결과 등)
+      if (doc["pc"].is<JsonObjectConst>() && from == active && usage) pcpanel_set_status(doc["pc"], doc["host"] | "");
+      if (doc["toast"].is<const char *>() && from == active && usage) ui_toast(doc["toast"], 3000);
       if (doc["services"].is<JsonArrayConst>() && from == active && usage) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);

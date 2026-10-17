@@ -37,6 +37,8 @@ import audio
 import photos
 import videos
 import sounds
+import launcher
+import pcstats
 import statusline
 import sync
 from collectors import COLLECTORS, LIMITS
@@ -246,11 +248,15 @@ def main() -> None:
     speaker = sounds.Sounds(cfg.get("sounds", {}))
     receiver = photos.PhotoReceiver(cfg.get("photos", {}))
     movies = videos.VideoReceiver(cfg.get("videos", {}))
+    apps = launcher.Launcher()
+    pc = pcstats.PcStats()
 
     def on_event(event: dict) -> None:
         speaker.on_event(event)
         receiver.on_event(event)
         movies.on_event(event)
+        apps.on_event(event)
+        pc.on_event(event)
 
     transport = None
     first = True
@@ -363,6 +369,20 @@ def main() -> None:
                         transport.close()
                         transport = None
                         break
+                    # 기기 화면이 원할 때만 보내는 작은 메시지: PC 상태, 단축 버튼 결과 알림
+                    extra = {}
+                    if pc.due():
+                        extra["pc"] = pc.collect()
+                    if apps.pending_toast:
+                        extra["toast"], apps.pending_toast = apps.pending_toast, None
+                    if extra:
+                        try:
+                            transport.send({**extra, "host": _host_name()})
+                        except OSError as e:
+                            print(f"[device] 전송 실패: {e}")
+                            transport.close()
+                            transport = None
+                            break
                     time.sleep(0.5)
             else:
                 time.sleep(2)

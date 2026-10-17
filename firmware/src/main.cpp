@@ -19,6 +19,7 @@
 #include "settings.h"
 #include "health.h"
 #include "history.h"
+#include "pcpanel.h"
 #include "speaker.h"
 #include "video.h"
 #include "pins.h"
@@ -278,6 +279,7 @@ void loop() {
   sd_video_loop();
   health_loop();
   history_loop();
+  pcpanel_loop();
   speaker_loop(settings_speaker_page());
   show_info();
   if (ui_settings_visible()) settings_loop();
