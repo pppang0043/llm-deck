@@ -58,9 +58,10 @@ static char wifi_info[48] = "시작 중...";
 enum View { VIEW_HOME, VIEW_USAGE, VIEW_SETTINGS, VIEW_SHORTCUTS, VIEW_ASK };
 static View view = VIEW_HOME;  // 켤 때 첫 화면은 홈
 static lv_obj_t *home;
-#define HOME_ICONS 5
+#define HOME_ICONS 6
 static lv_obj_t *home_icons[HOME_ICONS];
-static lv_obj_t *mic_icon_sym;  // 홈의 질문 아이콘 (말할 수 없으면 흐리게)
+static lv_obj_t *ask_icon_sym;  // 홈의 질문 아이콘 (말할 수 없으면 흐리게)
+static lv_obj_t *mic_icon_sym;  // 홈의 마이크 아이콘 (기기 마이크 켜짐/꺼짐)
 static int pc_tile = 0;  // 사용량 화면에서 PC 상태 페이지의 번호 (맨 마지막)
 static void update_pc_watch();
 static lv_obj_t *settings_panel;
@@ -248,6 +249,8 @@ static void show_waiting() {
 
 // 사용량 화면 아래 버튼: 누르고 있는 동안 PC 마이크로 질문하고, 떼면 질문 화면에서 답을 본다
 static bool usage_talking = false;
+// 질문 화면을 사용량 화면의 버튼으로 열었는지 (그러면 오른쪽으로 밀 때 사용량으로 돌아간다. 홈에서 열었으면 홈으로)
+static bool ask_from_usage = false;
 
 static void mic_btn_event(lv_event_t *e) {
   lv_event_code_t code = lv_event_get_code(e);
@@ -257,6 +260,7 @@ static void mic_btn_event(lv_event_t *e) {
     askpanel_release();
     usage_talking = false;
     ui_show("ask");
+    ask_from_usage = true;
   }
 }
 
@@ -284,10 +288,10 @@ void ui_refresh_talk() {
   }
   lv_label_set_text(mic_lbl, text);
   lv_obj_center(mic_lbl);
-  if (mic_icon_sym) {
-    lv_obj_set_style_bg_color(lv_obj_get_parent(mic_icon_sym), st == ASK_NO_PC || st == ASK_NO_MIC ? COLOR_MIC_OFF
+  if (ask_icon_sym) {
+    lv_obj_set_style_bg_color(lv_obj_get_parent(ask_icon_sym), st == ASK_NO_PC || st == ASK_NO_MIC ? COLOR_MIC_OFF
                                                                                               : lv_color_hex(0x2E7D5B), 0);
-    lv_obj_set_style_text_color(mic_icon_sym, st == ASK_NO_PC || st == ASK_NO_MIC ? COLOR_DIM : lv_color_white(), 0);
+    lv_obj_set_style_text_color(ask_icon_sym, st == ASK_NO_PC || st == ASK_NO_MIC ? COLOR_DIM : lv_color_white(), 0);
   }
 }
 
@@ -300,6 +304,11 @@ static void screen_gesture(lv_event_t *e) {
   // 설정의 분류 화면에서는 먼저 목록으로 돌아간다 (아이폰의 뒤로 가기처럼)
   if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_RIGHT || view == VIEW_HOME) return;
   if (view == VIEW_SETTINGS && settings_back()) return;
+  if (view == VIEW_ASK && ask_from_usage) {
+    view = VIEW_USAGE;
+    apply_view();
+    return;
+  }
   ui_show_home();
 }
 
@@ -313,14 +322,19 @@ static void home_icon_event(lv_event_t *e) {
       if (camera_cb) camera_cb();
       break;
     case 2:
-      view = VIEW_ASK;
-      apply_view();
+      // 기기 마이크 켜고 끄기 (소리를 PC 마이크로 보낸다. 설정 > 알림 및 사운드에도 있다)
+      if (mic_toggle_cb) mic_toggle_cb();
       break;
     case 3:
-      view = VIEW_SHORTCUTS;
+      view = VIEW_ASK;
+      ask_from_usage = false;
       apply_view();
       break;
     case 4:
+      view = VIEW_SHORTCUTS;
+      apply_view();
+      break;
+    case 5:
       view = VIEW_SETTINGS;
       apply_view();
       break;
@@ -354,6 +368,7 @@ static lv_obj_t *add_home_icon(intptr_t index, const char *symbol, const char *n
   lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, 0);
   home_icons[index] = cell;
   if (index == 2) mic_icon_sym = sym;
+  if (index == 3) ask_icon_sym = sym;
   return tile;
 }
 
@@ -365,9 +380,10 @@ static void build_home() {
   lv_obj_clear_flag(home, LV_OBJ_FLAG_SCROLLABLE);
   add_home_icon(0, LV_SYMBOL_LIST, "사용량", COLOR_ACCENT, true);
   add_home_icon(1, LV_SYMBOL_IMAGE, "카메라", lv_color_hex(0x3A7BD5), true);
-  add_home_icon(2, LV_SYMBOL_AUDIO, "질문", lv_color_hex(0x2E7D5B), true);
-  add_home_icon(3, LV_SYMBOL_KEYBOARD, "단축키", lv_color_hex(0x7E57C2), true);
-  add_home_icon(4, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
+  add_home_icon(2, LV_SYMBOL_MUTE, "마이크", COLOR_MIC_OFF, true);
+  add_home_icon(3, LV_SYMBOL_AUDIO, "질문", lv_color_hex(0x2E7D5B), true);
+  add_home_icon(4, LV_SYMBOL_KEYBOARD, "단축키", lv_color_hex(0x7E57C2), true);
+  add_home_icon(5, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
 
   // 설정 화면 (settings.cpp)
   settings_panel = lv_obj_create(lv_scr_act());
@@ -720,9 +736,14 @@ void ui_usage_summary(char *out, size_t size) {
 }
 
 void ui_set_mic(bool on) {
-  // 기기 마이크(INMP441)는 PC 에서만 켜고 끈다 (--mic). 화면 아래 버튼은 이제 질문 버튼이다.
+  // 기기 마이크(INMP441): 홈의 마이크 아이콘, 설정, BOOT 버튼, PC(--mic) 로 켜고 끈다.
+  // 사용량 화면 아래 버튼은 질문 버튼이다.
   mic_on = on;
   if (!on) ui_set_level(0);
+  if (mic_icon_sym) {
+    lv_label_set_text(mic_icon_sym, on ? LV_SYMBOL_AUDIO : LV_SYMBOL_MUTE);
+    lv_obj_set_style_bg_color(lv_obj_get_parent(mic_icon_sym), on ? COLOR_MIC_ON : COLOR_MIC_OFF, 0);
+  }
 }
 
 void ui_set_level(uint8_t pct) {
