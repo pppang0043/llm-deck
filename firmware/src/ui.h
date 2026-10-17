@@ -26,17 +26,18 @@ void ui_layout();
 
 void ui_set_mic(bool on);
 
-// 홈 화면 (아이콘 6개: 사용량, 카메라, 마이크, 밝기, 정보, 설정). 어디서든 오른쪽으로 밀면 홈으로 온다.
+// 홈 화면 (아이콘 7개: 사용량, 카메라, 마이크, 프로그램, 키워드, PC 상태, 설정). 어디서든 오른쪽으로 밀면 홈으로 온다.
+// 밝기와 정보는 설정 안(디스플레이, 정보)에 있다.
 void ui_show_home();
-// 홈의 카메라·밝기 아이콘을 눌렀을 때 할 일
-void ui_set_home_actions(void (*open_camera)(), void (*cycle_brightness)());
-// 정보 화면이 보이는 중인지, 그 내용
+// 홈의 카메라 아이콘을 눌렀을 때 할 일
+void ui_set_home_actions(void (*open_camera)());
+// 설정 > 정보 화면이 보이는 중인지, 그 내용
 bool ui_info_visible();
 bool ui_settings_visible();
 // 모든 화면 위에 잠깐 뜨는 알림 (ms 뒤에 사라진다)
 void ui_toast(const char *text, uint32_t ms = 4000);
 
-// 화면 바꾸기: "home" / "usage" / "info" / "settings" / "shortcuts" / "pc" (PC 에서 시험할 때)
+// 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "programs" / "keywords" / "pc" (PC 에서 시험할 때)
 void ui_show(const char *name);
 // 지금 화면을 RGB565 로 찍는다 (진단용). *pixels 는 free 로 해제.
 bool ui_screenshot(uint16_t **pixels, int *w, int *h);

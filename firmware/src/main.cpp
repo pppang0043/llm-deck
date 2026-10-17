@@ -222,7 +222,7 @@ void setup() {
   camera_ui_init();
   mem_log("camera_ui");
   saver_init();
-  ui_set_home_actions(camera_ui_show, settings_cycle_brightness);
+  ui_set_home_actions(camera_ui_show);
   imu_init();
   battery_init();
   prefs.begin("llm-deck");

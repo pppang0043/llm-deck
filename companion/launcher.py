@@ -13,12 +13,22 @@ import sys
 APPS = {
     "excel": ("엑셀을", "excel", "Microsoft Excel"),
     "powerpoint": ("파워포인트를", "powerpnt", "Microsoft PowerPoint"),
+    "orca": ("ORCA를", "Orca", "Orca"),
+}
+# App Paths 에 등록하지 않는 프로그램이 사용자 폴더에 깔리는 자리 (Windows)
+WIN_PATHS = {
+    "Orca": [r"%LOCALAPPDATA%\Programs\orca\Orca.exe"],
 }
 
 
 def _app_path(exe: str) -> str | None:
     """Windows 가 프로그램 설치 때 적어 두는 App Paths 에서 실행 파일 위치를 찾는다 (Office 는 여기에 등록된다)."""
     import winreg
+
+    for candidate in WIN_PATHS.get(exe, []):
+        path = os.path.expandvars(candidate)
+        if os.path.exists(path):
+            return path
 
     key = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}.exe"
     for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):

@@ -60,8 +60,8 @@ static LinkOption link_options[] = {
 // 아이폰 설정처럼 첫 화면은 분류 목록이고, 누르면 그 분류의 화면으로 들어간다.
 // 들어간 화면에서 오른쪽으로 밀거나 "< 설정" 을 누르면 목록으로 돌아온다.
 enum Page { PAGE_LIST, PAGE_WIFI, PAGE_BLE, PAGE_SPEAKER, PAGE_NOTIFY, PAGE_DISPLAY, PAGE_BATTERY, PAGE_CAMERA, PAGE_SD,
-            PAGE_GENERAL, PAGE_COUNT };
-static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "speaker", "notify", "display", "battery", "camera", "sd", "general"};
+            PAGE_GENERAL, PAGE_INFO, PAGE_COUNT };
+static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "speaker", "notify", "display", "battery", "camera", "sd", "general", "info"};
 static lv_obj_t *pages[PAGE_COUNT];
 static Page current = PAGE_LIST;
 
@@ -77,7 +77,7 @@ static lv_obj_t *ble_status, *ble_none;
 static lv_obj_t *ble_rows[BLE_MAX_PEERS], *ble_names[BLE_MAX_PEERS], *ble_states[BLE_MAX_PEERS];
 static lv_obj_t *bat_level, *bat_state, *bat_left;
 static lv_obj_t *sd_status, *sd_space, *sd_count, *sd_vcount;
-static lv_obj_t *uptime_value, *boot_value, *crash_value;
+static lv_obj_t *uptime_value, *boot_value, *crash_value, *info_text;
 static lv_obj_t *spk_status, *spk_target, *spk_on_sw, *spk_keep_sw, *spk_vol_lbl, *spk_none, *spk_find_lbl;
 static lv_obj_t *spk_rows[SPK_MAX_FOUND], *spk_names[SPK_MAX_FOUND], *spk_signals[SPK_MAX_FOUND];
 
@@ -649,6 +649,7 @@ static void build_list(lv_obj_t *parent) {
   g = add_group(p);
   add_menu(g, LV_SYMBOL_SD_CARD, 0x6B7280, "SD 카드", PAGE_SD, &sd_value, 34);
   add_menu(g, LV_SYMBOL_SETTINGS, 0x6B7280, "일반", PAGE_GENERAL, nullptr);
+  add_menu(g, LV_SYMBOL_FILE, 0x4C8C6A, "정보", PAGE_INFO, nullptr);
 }
 
 static void build_wifi(lv_obj_t *parent) {
@@ -808,6 +809,22 @@ static void build_general(lv_obj_t *parent) {
   add_button(add_row(p, "기기 재시작", nullptr), "재시작", restart_clicked, &restart_btn.label, true);
 }
 
+// 정보: 연결·배터리·메모리 같은 기기 상태 (main.cpp 가 1초마다 채운다)
+static void build_info(lv_obj_t *parent) {
+  lv_obj_t *p = add_sub_page(parent, PAGE_INFO, "정보");
+  info_text = add_note_label(p, "");
+  lv_obj_set_style_text_color(info_text, lv_color_white(), 0);
+  lv_obj_set_style_text_line_space(info_text, 6, 0);
+}
+
+bool settings_info_visible() {
+  return ui_settings_visible() && current == PAGE_INFO;
+}
+
+void settings_set_info(const char *text) {
+  if (info_text && strcmp(lv_label_get_text(info_text), text) != 0) lv_label_set_text(info_text, text);
+}
+
 void settings_build(lv_obj_t *parent) {
   lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
   build_list(parent);
@@ -820,6 +837,7 @@ void settings_build(lv_obj_t *parent) {
   build_camera(parent);
   build_sd(parent);
   build_general(parent);
+  build_info(parent);
   // 켤 때는 값만 숨기고 보이기만 한다 (SD 카드 등은 설정을 열 때 읽는다)
   lv_obj_clear_flag(pages[PAGE_LIST], LV_OBJ_FLAG_HIDDEN);
 }

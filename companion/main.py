@@ -40,6 +40,7 @@ import sounds
 import launcher
 import pcstats
 import statusline
+import typer
 import sync
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
@@ -250,12 +251,14 @@ def main() -> None:
     movies = videos.VideoReceiver(cfg.get("videos", {}))
     apps = launcher.Launcher()
     pc = pcstats.PcStats()
+    keys = typer.Typer()
 
     def on_event(event: dict) -> None:
         speaker.on_event(event)
         receiver.on_event(event)
         movies.on_event(event)
         apps.on_event(event)
+        keys.on_event(event)
         pc.on_event(event)
 
     transport = None
@@ -373,8 +376,9 @@ def main() -> None:
                     extra = {}
                     if pc.due():
                         extra["pc"] = pc.collect()
-                    if apps.pending_toast:
-                        extra["toast"], apps.pending_toast = apps.pending_toast, None
+                    for source in (apps, keys):
+                        if source.pending_toast:
+                            extra["toast"], source.pending_toast = source.pending_toast, None
                     if extra:
                         try:
                             transport.send({**extra, "host": _host_name()})

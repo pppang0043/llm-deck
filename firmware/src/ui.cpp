@@ -54,17 +54,14 @@ static JsonDocument last_usage(PSRAM_JSON);
 static char wifi_info[48] = "시작 중...";
 
 // 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.
-enum View { VIEW_HOME, VIEW_USAGE, VIEW_INFO, VIEW_SETTINGS, VIEW_SHORTCUTS, VIEW_PC };
+enum View { VIEW_HOME, VIEW_USAGE, VIEW_SETTINGS, VIEW_PROGRAMS, VIEW_KEYWORDS, VIEW_PC };
 static View view = VIEW_HOME;  // 켤 때 첫 화면은 홈
 static lv_obj_t *home;
-#define HOME_ICONS 8
+#define HOME_ICONS 7
 static lv_obj_t *home_icons[HOME_ICONS];
 static lv_obj_t *mic_icon_sym;
-static lv_obj_t *info_panel;
-static lv_obj_t *info_lbl;
 static lv_obj_t *settings_panel;
 static void (*camera_cb)() = nullptr;
-static void (*brightness_cb)() = nullptr;
 static void apply_view();
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
@@ -264,22 +261,19 @@ static void home_icon_event(lv_event_t *e) {
       if (mic_toggle_cb) mic_toggle_cb();
       break;
     case 3:
-      if (brightness_cb) brightness_cb();
+      view = VIEW_PROGRAMS;
+      apply_view();
       break;
     case 4:
-      view = VIEW_INFO;
+      view = VIEW_KEYWORDS;
       apply_view();
       break;
     case 5:
-      view = VIEW_SETTINGS;
+      view = VIEW_PC;
       apply_view();
       break;
     case 6:
-      view = VIEW_SHORTCUTS;
-      apply_view();
-      break;
-    case 7:
-      view = VIEW_PC;
+      view = VIEW_SETTINGS;
       apply_view();
       break;
     default:
@@ -324,23 +318,10 @@ static void build_home() {
   add_home_icon(0, LV_SYMBOL_LIST, "사용량", COLOR_ACCENT, true);
   add_home_icon(1, LV_SYMBOL_IMAGE, "카메라", lv_color_hex(0x3A7BD5), true);
   add_home_icon(2, LV_SYMBOL_MUTE, "마이크", COLOR_MIC_OFF, true);
-  add_home_icon(3, LV_SYMBOL_EYE_OPEN, "밝기", lv_color_hex(0xC99A2E), true);
-  add_home_icon(4, LV_SYMBOL_FILE, "정보", lv_color_hex(0x4C8C6A), true);
-  add_home_icon(5, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
-  add_home_icon(6, LV_SYMBOL_KEYBOARD, "단축", lv_color_hex(0x7E57C2), true);
-  add_home_icon(7, LV_SYMBOL_DRIVE, "PC 상태", lv_color_hex(0x2E8C9E), true);
-
-  // 정보 화면: 연결·배터리·메모리 같은 기기 상태 (main 이 1초마다 채운다)
-  info_panel = lv_obj_create(lv_scr_act());
-  lv_obj_remove_style_all(info_panel);
-  lv_obj_set_style_bg_color(info_panel, COLOR_BG, 0);
-  lv_obj_set_style_bg_opa(info_panel, LV_OPA_COVER, 0);
-  lv_obj_set_style_pad_all(info_panel, 12, 0);
-  lv_obj_t *title = add_label(info_panel, "정보", &font_ko_20, COLOR_ACCENT);
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
-  info_lbl = add_label(info_panel, "", &font_ko_14, lv_color_white());
-  lv_obj_set_style_text_line_space(info_lbl, 6, 0);
-  lv_obj_align(info_lbl, LV_ALIGN_TOP_LEFT, 0, 34);
+  add_home_icon(3, LV_SYMBOL_PLAY, "프로그램", lv_color_hex(0x7E57C2), true);
+  add_home_icon(4, LV_SYMBOL_KEYBOARD, "키워드", lv_color_hex(0x5C6BC0), true);
+  add_home_icon(5, LV_SYMBOL_DRIVE, "PC 상태", lv_color_hex(0x2E8C9E), true);
+  add_home_icon(6, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
 
   // 설정 화면 (settings.cpp)
   settings_panel = lv_obj_create(lv_scr_act());
@@ -359,8 +340,6 @@ static void layout_home() {
   int w = display_width(), h = display_height() - STATUS_H;
   lv_obj_set_size(home, w, h);
   lv_obj_set_pos(home, 0, STATUS_H);
-  lv_obj_set_size(info_panel, w, h);
-  lv_obj_set_pos(info_panel, 0, STATUS_H);
   lv_obj_set_size(settings_panel, w, h);
   lv_obj_set_pos(settings_panel, 0, STATUS_H);
   pcpanel_layout(0, STATUS_H, w, h);
@@ -389,12 +368,8 @@ static void apply_view() {
   } else {
     lv_obj_add_flag(home, LV_OBJ_FLAG_HIDDEN);
   }
-  if (view == VIEW_INFO) {
-    lv_obj_clear_flag(info_panel, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(info_panel, LV_OBJ_FLAG_HIDDEN);
-  }
-  pcpanel_show_shortcuts(view == VIEW_SHORTCUTS);
+  pcpanel_show_programs(view == VIEW_PROGRAMS);
+  pcpanel_show_keywords(view == VIEW_KEYWORDS);
   pcpanel_show_status(view == VIEW_PC);
   if (view == VIEW_SETTINGS) {
     settings_refresh();
@@ -414,16 +389,15 @@ bool ui_settings_visible() {
 }
 
 bool ui_info_visible() {
-  return view == VIEW_INFO;
+  return settings_info_visible();
 }
 
 void ui_set_info(const char *text) {
-  if (strcmp(lv_label_get_text(info_lbl), text) != 0) lv_label_set_text(info_lbl, text);
+  settings_set_info(text);
 }
 
-void ui_set_home_actions(void (*open_camera)(), void (*cycle_brightness)()) {
+void ui_set_home_actions(void (*open_camera)()) {
   camera_cb = open_camera;
-  brightness_cb = cycle_brightness;
 }
 
 void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
@@ -729,9 +703,15 @@ void ui_show(const char *name) {
   } else if (strcmp(name, "usage") == 0) {
     view = VIEW_USAGE;
   } else if (strcmp(name, "info") == 0) {
-    view = VIEW_INFO;
-  } else if (strcmp(name, "shortcuts") == 0) {
-    view = VIEW_SHORTCUTS;
+    // 정보는 설정 안으로 옮겼다
+    view = VIEW_SETTINGS;
+    apply_view();
+    settings_open("info");
+    return;
+  } else if (strcmp(name, "programs") == 0) {
+    view = VIEW_PROGRAMS;
+  } else if (strcmp(name, "keywords") == 0) {
+    view = VIEW_KEYWORDS;
   } else if (strcmp(name, "pc") == 0) {
     view = VIEW_PC;
   } else if (strncmp(name, "settings", 8) == 0) {

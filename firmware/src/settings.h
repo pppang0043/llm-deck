@@ -44,9 +44,13 @@ void settings_loop();
 void settings_redraw();
 // 분류 화면에 들어가 있으면 목록으로 돌아가고 true (오른쪽으로 밀기)
 bool settings_back();
-// 분류 화면 바로 열기: "wifi" / "bluetooth" / "speaker" / "notify" / "display" / "battery" / "camera" / "sd" / "general"
+// 분류 화면 바로 열기: "wifi" / "bluetooth" / "speaker" / "notify" / "display" / "battery" / "camera" / "sd" / "general" / "info"
 // "end" 는 지금 화면의 맨 아래로 (진단용)
 void settings_open(const char *name);
+
+// 설정 > 정보 화면이 보이는지, 그 내용 (main.cpp 가 채운다)
+bool settings_info_visible();
+void settings_set_info(const char *text);
 
 // 설정 화면을 parent 안에 만든다 (ui.cpp 가 부른다)
 void settings_build(lv_obj_t *parent);
