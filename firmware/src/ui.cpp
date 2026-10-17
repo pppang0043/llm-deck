@@ -11,7 +11,8 @@ LV_FONT_DECLARE(font_ko_14);
 LV_FONT_DECLARE(font_ko_20);
 LV_FONT_DECLARE(font_ko_28);
 
-#define STATUS_H 24
+// 상태줄 높이. 오른쪽 끝 돌리기 버튼을 누르기 쉽게 넉넉히 둔다.
+#define STATUS_H 32
 #define MIC_H 56
 // 가로 화면에서는 마이크 버튼이 오른쪽에 세로로 놓인다
 #define MIC_W 72
@@ -312,17 +313,17 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   status_lbl = add_label(scr, "시작 중...", &font_ko_14, COLOR_DIM);
-  lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, 4);
+  lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, (STATUS_H - 16) / 2);
 
   // 화면 돌리기 버튼: 상태줄 오른쪽 끝에 작게. 누르기 쉽도록 반응 영역만 넓힌다.
   rotate_btn = lv_btn_create(scr);
-  lv_obj_set_size(rotate_btn, 36, STATUS_H - 2);
+  lv_obj_set_size(rotate_btn, 48, STATUS_H - 4);
   lv_obj_set_style_bg_color(rotate_btn, COLOR_MIC_OFF, 0);
   lv_obj_set_style_shadow_width(rotate_btn, 0, 0);
   lv_obj_set_style_pad_all(rotate_btn, 0, 0);
-  lv_obj_set_ext_click_area(rotate_btn, 10);
+  lv_obj_set_ext_click_area(rotate_btn, 8);
   lv_obj_add_event_cb(rotate_btn, rotate_btn_event, LV_EVENT_CLICKED, NULL);
-  lv_obj_center(add_label(rotate_btn, LV_SYMBOL_REFRESH, &font_ko_14, lv_color_white()));
+  lv_obj_center(add_label(rotate_btn, LV_SYMBOL_REFRESH, &lv_font_montserrat_20, lv_color_white()));
 
   clock_lbl = add_label(scr, "", &font_ko_14, COLOR_DIM);
 
@@ -408,7 +409,7 @@ static void layout_status_right() {
 
 void ui_layout() {
   int w = display_width(), h = display_height();
-  lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 1);
+  lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 2);
   layout_status_right();
   if (w > h) {
     // 가로: 왼쪽에 페이지, 오른쪽에 마이크 버튼

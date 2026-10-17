@@ -247,8 +247,18 @@ void link_loop() {
         }
       }
       if (doc["ble_use"].is<int>()) ble_peer_select(doc["ble_use"]);
+      // 진단용: SD 카드의 마지막 동영상을 PC 로 보낸다 (케이블로 연결한 PC 에서만)
+      if (doc["sd_pull"] == true && from == LINK_USB) {
+        char name[40];
+        uint8_t *data;
+        size_t len;
+        if (storage_read_last("/videos", name, sizeof(name), &data, &len)) photo_send_file(name, data, len);
+      }
       // 진단용: SD 카드의 사진을 모두 지운다 (케이블로 연결한 PC 에서만)
-      if (doc["sd_clear"] == true && from == LINK_USB) storage_clear("/photos");
+      if (doc["sd_clear"] == true && from == LINK_USB) {
+        storage_clear("/photos");
+        storage_clear("/videos");
+      }
       if (doc["services"].is<JsonArrayConst>() && from == active && usage) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);

@@ -1,6 +1,7 @@
 #include "net.h"
 
 #include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <Preferences.h>
@@ -73,10 +74,35 @@ static void handle_usage() {
   send_state();
 }
 
+// 무선 펌웨어 업로드 (PC 에서: pio run -e ota -t upload). 비밀번호가 맞아야 받는다.
+static bool ota_ready = false;
+
+static void start_ota() {
+  if (ota_ready || strlen(OTA_PASSWORD) == 0) return;
+  ArduinoOTA.setHostname(HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.setMdnsEnabled(false);  // mDNS 는 위에서 이미 켰다
+  ArduinoOTA.onStart([] {
+    Serial.println("[ota] update started");
+    ui_toast("무선으로 펌웨어를\n업데이트하는 중...", 120000);
+  });
+  ArduinoOTA.onEnd([] { Serial.println("[ota] done, restarting"); });
+  ArduinoOTA.onError([](ota_error_t e) {
+    Serial.printf("[ota] failed: %d\n", (int)e);
+    ui_toast("무선 업데이트 실패", 3000);
+  });
+  ArduinoOTA.begin();
+  ota_ready = true;
+  Serial.println("[ota] ready");
+}
+
 static void start_services() {
   MDNS.begin(HOSTNAME);
   MDNS.addService(HOSTNAME, "tcp", 80);
+  // espota 가 찾을 수 있게 알린다
+  if (strlen(OTA_PASSWORD) > 0) MDNS.enableArduino(3232, true);
   server.begin();
+  start_ota();
 }
 
 void net_init() {
@@ -170,7 +196,10 @@ void net_loop() {
     ui_set_wifi_info("다시 연결 중...");
   }
   was_connected = connected;
-  if (connected) server.handleClient();
+  if (connected) {
+    server.handleClient();
+    if (ota_ready) ArduinoOTA.handle();
+  }
 }
 
 void net_set_enabled(bool on) {

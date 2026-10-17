@@ -142,6 +142,21 @@ const char *photo_save(uint8_t *jpg, size_t len, bool to_sd) {
   return "저장할 곳이 없습니다\nSD 카드를 넣거나 PC를 연결하세요";
 }
 
+bool photo_send_file(const char *name, uint8_t *data, size_t len) {
+  Link link = link_active();
+  if (link != LINK_USB && link != LINK_BLE) {
+    free(data);
+    return false;
+  }
+  Job job = {data, len, "", link};
+  strlcpy(job.name, name, sizeof(job.name));
+  if (xQueueSend(jobs, &job, 0) != pdTRUE) {
+    free(data);
+    return false;
+  }
+  return true;
+}
+
 bool photo_last(const uint8_t **data, size_t *len, const char **name) {
   if (!last_data) return false;
   *data = last_data;

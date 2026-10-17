@@ -4,3 +4,6 @@
 
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
+
+// 무선(Wi-Fi) 펌웨어 업로드 비밀번호. 비워 두면 무선 업로드를 끈다.
+#define OTA_PASSWORD ""

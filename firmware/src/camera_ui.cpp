@@ -291,8 +291,8 @@ void camera_ui_loop() {
     uint32_t s = video_elapsed_ms() / 1000;
     snprintf(t, sizeof(t), "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
     if (strcmp(lv_label_get_text(rec_lbl), t) != 0) lv_label_set_text(rec_lbl, t);
-    // 녹화 중 PC 연결이 끊기면 멈춘다
-    if (link_active() != LINK_USB && link_active() != LINK_WIFI) stop_recording();
+    // PC 로만 녹화하는 중에 PC 연결이 끊기면 멈춘다 (SD 카드에도 쓰는 중이면 계속한다)
+    if (video_needs_pc() && link_active() != LINK_USB && link_active() != LINK_WIFI) stop_recording();
   }
   if (!camera_preview(frame_buf, display_width(), display_height(), display_rotation(), &w, &h)) return;
   static uint32_t frames = 0, counted_ms = 0;

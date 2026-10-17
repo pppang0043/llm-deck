@@ -18,3 +18,5 @@ int storage_clear(const char *dir);
 bool storage_recheck();
 // 읽을 수 없는 카드(exFAT 등)를 FAT32 로 포맷한다. 그 카드 안의 내용은 모두 지워진다. 읽히는 카드는 그대로 둔다.
 bool storage_format();
+// 폴더에서 이름이 가장 뒤인(가장 최근) 파일을 PSRAM 으로 읽는다 (진단용). *data 는 free 로 해제.
+bool storage_read_last(const char *dir, char *name, size_t name_size, uint8_t **data, size_t *len);

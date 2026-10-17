@@ -24,3 +24,6 @@ bool photo_sending();
 bool photo_progress(int *pct);
 // 지금까지 다 보낸(또는 실패한) 사진 수. 마지막 것의 성공 여부와 걸린 시간도 준다.
 uint32_t photo_finished(bool *ok, uint32_t *ms);
+
+// 진단용: 아무 파일이나 사진처럼 PC 로 보낸다 (USB·블루투스). data 는 ps_malloc 으로 잡은 것, 보낸 뒤 해제한다.
+bool photo_send_file(const char *name, uint8_t *data, size_t len);

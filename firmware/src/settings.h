@@ -28,6 +28,8 @@ void settings_set_link_allowed(int link, bool allowed);
 
 // 찍은 사진을 SD 카드에도 저장할지
 bool settings_sd_photos();
+// 녹화한 동영상을 SD 카드에도 저장할지
+bool settings_sd_videos();
 
 // 설정 화면이 보이는 동안 loop() 에서 부른다 (연결 상태 등을 1초마다 고친다)
 void settings_loop();

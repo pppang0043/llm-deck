@@ -6,6 +6,9 @@
 
 #include "link.h"
 #include "mic.h"
+#include "sd_video.h"
+#include "settings.h"
+#include "storage.h"
 #include "usb_link.h"
 
 enum JobKind { JOB_START, JOB_FRAME, JOB_END };
@@ -24,6 +27,9 @@ struct Job {
 static QueueHandle_t jobs;
 static volatile bool recording = false;
 static Link link_used = LINK_NONE;
+// 어디에 저장하는지: PC(USB·Wi-Fi 로 보내기), SD 카드 (둘 다일 수도 있다)
+static bool to_pc = false;
+static bool to_sd = false;
 static uint32_t start_ms = 0;
 static uint32_t frame_no = 0;
 static uint32_t dropped = 0;
@@ -113,9 +119,14 @@ static bool enqueue_text(JobKind kind, const char *text) {
 
 const char *video_start(uint8_t turns) {
   if (recording) return nullptr;
+  if (sd_video_active()) return "앞 동영상을 SD 카드에\n저장하는 중입니다";
   Link link = link_active();
-  if (link == LINK_BLE) return "동영상은 블루투스로\n보낼 수 없습니다\nUSB 케이블을 연결하세요";
-  if (link != LINK_USB && link != LINK_WIFI) return "PC가 연결되어 있지 않습니다\nUSB나 Wi-Fi로 연결하세요";
+  bool pc = link == LINK_USB || link == LINK_WIFI;
+  bool sd = settings_sd_videos() && storage_ready();
+  if (!pc && !sd) {
+    if (link == LINK_BLE) return "동영상은 블루투스로\n보낼 수 없습니다\nUSB 케이블이나 SD 카드가 필요합니다";
+    return "저장할 곳이 없습니다\nUSB·Wi-Fi로 PC를 연결하거나\nSD 카드를 넣으세요";
+  }
 
   time_t now = time(nullptr);
   if (now > 1700000000) {
@@ -125,21 +136,38 @@ const char *video_start(uint8_t turns) {
   } else {
     snprintf(name, sizeof(name), "VID_%lu.mov", (unsigned long)millis());
   }
+  if (sd && !sd_video_start(name, turns)) {
+    sd = false;
+    if (!pc) return "SD 카드에 파일을 만들지 못했습니다";
+  }
   link_used = link;
   frame_no = 0;
   dropped = 0;
   start_ms = millis();
-  char event[100];
-  snprintf(event, sizeof(event), "{\"video\":{\"start\":\"%s\",\"turns\":%d}}", name, turns);
-  if (!enqueue_text(JOB_START, event)) return "녹화를 시작하지 못했습니다";
+  to_pc = pc;
+  to_sd = sd;
+  if (pc) {
+    char event[100];
+    snprintf(event, sizeof(event), "{\"video\":{\"start\":\"%s\",\"turns\":%d}}", name, turns);
+    if (!enqueue_text(JOB_START, event)) {
+      to_pc = false;
+      if (!sd) return "녹화를 시작하지 못했습니다";
+    }
+  }
   recording = true;
-  Serial.printf("[video] start %s via %s\n", name, link == LINK_USB ? "USB" : "Wi-Fi");
+  Serial.printf("[video] start %s to%s%s\n", name, to_pc ? (link == LINK_USB ? " USB" : " Wi-Fi") : "",
+                to_sd ? " SD" : "");
   return nullptr;
 }
 
 void video_frame(const uint8_t *jpg, size_t len) {
   if (!recording) return;
   uint32_t ms = millis() - start_ms;
+  if (to_sd) sd_video_frame(jpg, len, ms);
+  if (!to_pc) {
+    frame_no++;
+    return;
+  }
   if (uxQueueSpacesAvailable(jobs) <= 2) {
     dropped++;
     return;
@@ -162,13 +190,21 @@ const char *video_stop() {
   if (!recording) return nullptr;
   recording = false;
   uint32_t seconds = (millis() - start_ms) / 1000;
-  char event[120];
-  snprintf(event, sizeof(event), "{\"video\":{\"end\":\"%s\",\"frames\":%lu,\"dropped\":%lu}}", name,
-           (unsigned long)frame_no, (unsigned long)dropped);
-  enqueue_text(JOB_END, event);
-  static char result[64];
-  snprintf(result, sizeof(result), "PC로 저장했습니다\n%lu초, %lu장", (unsigned long)seconds, (unsigned long)frame_no);
+  if (to_pc) {
+    char event[120];
+    snprintf(event, sizeof(event), "{\"video\":{\"end\":\"%s\",\"frames\":%lu,\"dropped\":%lu}}", name,
+             (unsigned long)frame_no, (unsigned long)dropped);
+    enqueue_text(JOB_END, event);
+  }
+  if (to_sd) sd_video_stop();
+  static char result[80];
+  snprintf(result, sizeof(result), "저장했습니다: %s\n%lu초", to_pc && to_sd ? "SD 카드 + PC" : to_sd ? "SD 카드" : "PC",
+           (unsigned long)seconds);
   return result;
+}
+
+bool video_needs_pc() {
+  return recording && to_pc && !to_sd;
 }
 
 bool video_recording() {

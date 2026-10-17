@@ -15,6 +15,7 @@
 #include "net.h"
 #include "photo.h"
 #include "saver.h"
+#include "sd_video.h"
 #include "settings.h"
 #include "video.h"
 #include "pins.h"
@@ -230,6 +231,7 @@ void loop() {
   battery_loop();
   show_clock();
   camera_ui_loop();
+  sd_video_loop();
   show_info();
   if (ui_settings_visible()) settings_loop();
   power_save();

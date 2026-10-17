@@ -14,7 +14,7 @@
 // 한 번에 그리는 줄 수. 클수록 빠르지만 메모리를 더 쓴다.
 #define DRAW_BUF_LINES 40
 
-// SD 카드와 같은 SPI 선(HSPI)을 함께 쓴다. 둘 다 loop 태스크에서만 쓰므로 서로 겹치지 않는다.
+// SD 카드와 같은 SPI 선(HSPI)을 함께 쓴다. 그리기는 SPIClass 트랜잭션 잠금을 잡아 SD 쓰기와 겹치지 않게 한다.
 static SPIClass spi(HSPI);
 static Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, LCD_MISO, HSPI, true);
 static Arduino_GFX *gfx = new Arduino_ST7789(bus, LCD_RST, 0 /* rotation */, true /* IPS */, LCD_W, LCD_H);
@@ -40,7 +40,12 @@ static bool touch_read_reg(uint8_t reg, uint8_t *data, uint8_t len) {
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
+  // SD 카드와 같은 SPI 선을 쓴다. 동영상을 카드에 쓰는 태스크와 겹치지 않게, SD 라이브러리가 쓰는 것과
+  // 같은 잠금(SPIClass 의 트랜잭션)을 잡고 그린다. 화면 드라이버는 그리기 전에 자기 속도로 다시 맞춘다.
+  SPIClass &bus = display_spi();
+  bus.beginTransaction(SPISettings(80000000, MSBFIRST, SPI_MODE0));
   gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)color_p, w, h);
+  bus.endTransaction();
   lv_disp_flush_ready(drv);
 }
 

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 // 동영상 녹화. 카메라가 찍는 640x480 JPEG 를 한 장씩 PC 로 보내고, PC 도우미가 MOV 파일로 묶어 저장한다.
+// SD 카드가 있으면(설정에서 켜 두면) 카드에도 같은 MOV 로 저장한다 (sd_video.h). 카드만 있어도 녹화할 수 있다.
 // 원본 JPEG 를 다시 압축하지 않으며, 바로 보이게 돌리는 정보는 파일에 따로 적는다.
 // 보내는 방법:
 //   USB: USB_FRAME_EVENT 알림 + USB_FRAME_VIDEO 조각 [장 번호 4][위치 4][장 크기 4][시각 ms 4][데이터]
@@ -21,4 +22,6 @@ void video_frame(const uint8_t *jpg, size_t len);
 const char *video_stop();
 
 bool video_recording();
+// PC 로만 저장하는 중인지 (그러면 PC 연결이 끊길 때 녹화를 멈춘다)
+bool video_needs_pc();
 uint32_t video_elapsed_ms();

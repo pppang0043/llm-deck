@@ -105,3 +105,28 @@ bool storage_format() {
   tried_ms = millis();
   return ok;
 }
+
+bool storage_read_last(const char *dir, char *name, size_t name_size, uint8_t **data, size_t *len) {
+  if (!storage_ready()) return false;
+  File d = SD.open(dir);
+  if (!d || !d.isDirectory()) return false;
+  String last;
+  for (File f = d.openNextFile(); f; f = d.openNextFile()) {
+    if (!f.isDirectory() && String(f.name()) > last) last = f.name();
+    f.close();
+  }
+  d.close();
+  if (!last.length()) return false;
+  File f = SD.open(String(dir) + "/" + last);
+  if (!f) return false;
+  *len = f.size();
+  *data = (uint8_t *)ps_malloc(*len);
+  bool ok = *data && f.read(*data, *len) == *len;
+  f.close();
+  if (!ok) {
+    free(*data);
+    return false;
+  }
+  strlcpy(name, last.c_str(), name_size);
+  return true;
+}

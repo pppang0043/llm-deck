@@ -29,6 +29,7 @@ static bool mic_sound = true;
 static bool auto_dim = true;
 static bool limit_alerts = true;
 static bool sd_photos = true;
+static bool sd_videos = true;
 // 화면 보호기가 켜지기까지 분 (0 이면 끔)
 static const uint8_t SAVER_CHOICES[] = {0, 1, 5, 10, 30};
 static uint8_t saver_min = 5;
@@ -60,14 +61,14 @@ static Page current = PAGE_LIST;
 static lv_obj_t *wifi_value, *ble_value, *battery_value, *sd_value;
 
 static lv_obj_t *bright_slider, *bright_value;
-static lv_obj_t *rotate_sw, *sound_sw, *mirror_sw, *dim_sw, *alert_sw, *sd_sw;
+static lv_obj_t *rotate_sw, *sound_sw, *mirror_sw, *dim_sw, *alert_sw, *sd_sw, *sd_video_sw;
 static lv_obj_t *saver_lbl, *cam_value;
 static lv_obj_t *wifi_status, *wifi_ip, *wifi_signal, *wifi_list;
 static lv_obj_t *ble_status, *ble_none;
 // 연결된 PC 한 대씩의 줄 (자리 수만큼 만들어 두고, 빈 자리는 숨긴다)
 static lv_obj_t *ble_rows[BLE_MAX_PEERS], *ble_names[BLE_MAX_PEERS], *ble_states[BLE_MAX_PEERS];
 static lv_obj_t *bat_level, *bat_state;
-static lv_obj_t *sd_status, *sd_space, *sd_count;
+static lv_obj_t *sd_status, *sd_space, *sd_count, *sd_vcount;
 static lv_obj_t *uptime_value;
 
 // 실수로 누르지 않게 3초 안에 한 번 더 눌러야 하는 버튼
@@ -117,6 +118,7 @@ void settings_init() {
   auto_dim = prefs.getBool("auto_dim", true);
   limit_alerts = prefs.getBool("lim_alert", true);
   sd_photos = prefs.getBool("sd_photos", true);
+  sd_videos = prefs.getBool("sd_videos", true);
   saver_min = prefs.getUChar("saver_min", 5);
   for (LinkOption &o : link_options) o.allowed = prefs.getBool(o.key, true);
   display_set_brightness(brightness);
@@ -185,6 +187,10 @@ bool settings_limit_alerts() {
 
 bool settings_sd_photos() {
   return sd_photos;
+}
+
+bool settings_sd_videos() {
+  return sd_videos;
 }
 
 uint32_t settings_saver_ms() {
@@ -432,6 +438,11 @@ static void sd_changed(lv_event_t *e) {
   prefs.putBool("sd_photos", sd_photos);
 }
 
+static void sd_video_changed(lv_event_t *e) {
+  sd_videos = lv_obj_has_state(sd_video_sw, LV_STATE_CHECKED);
+  prefs.putBool("sd_videos", sd_videos);
+}
+
 static void bright_changed(lv_event_t *e) {
   int v = lv_slider_get_value(bright_slider);
   lv_label_set_text_fmt(bright_value, "%d%%", v);
@@ -514,10 +525,11 @@ static void sd_format_clicked(lv_event_t *e) {
 
 static void sd_clear_clicked(lv_event_t *e) {
   if (!confirmed(sd_clear_btn)) return;
-  int n = storage_clear("/photos");
+  int photos = storage_clear("/photos");
+  int videos = storage_clear("/videos");
   refresh_page();
-  char text[48];
-  snprintf(text, sizeof(text), "SD 사진 %d장을 지웠습니다", n);
+  char text[64];
+  snprintf(text, sizeof(text), "사진 %d장, 동영상 %d개를\n지웠습니다", photos, videos);
   ui_toast(text, 2500);
 }
 
@@ -650,13 +662,15 @@ static void build_sd(lv_obj_t *parent) {
   sd_status = add_info(p, "상태");
   sd_space = add_info(p, "사용량");
   sd_count = add_info(p, "사진");
+  sd_vcount = add_info(p, "동영상");
   sd_sw = add_switch(add_row(p, "사진 저장", "찍으면 카드에도 저장"), sd_photos, sd_changed);
+  sd_video_sw = add_switch(add_row(p, "동영상 저장", "녹화하면 카드에도 저장"), sd_videos, sd_video_changed);
   add_button(add_row(p, "다시 찾기", "카드를 방금 꽂았을 때"), "찾기", sd_recheck_clicked, nullptr);
-  add_button(add_row(p, "사진 모두 지우기", "카드의 /photos"), "지우기", sd_clear_clicked, &sd_clear_btn.label,
+  add_button(add_row(p, "모두 지우기", "카드의 사진과 동영상"), "지우기", sd_clear_clicked, &sd_clear_btn.label,
              true);
   sd_format_row = add_row(p, "카드 포맷", "읽을 수 없을 때, 내용 지워짐");
   add_button(sd_format_row, "포맷", sd_format_clicked, &sd_format_btn.label, true);
-  add_note(p, "FAT32 형식 카드만 읽습니다. 64GB 이상 카드는 보통 exFAT라서 \"카드 포맷\"이 필요합니다. 동영상은 카드에 저장하지 않습니다.");
+  add_note(p, "FAT32 형식 카드만 읽습니다. 64GB 이상 카드는 보통 exFAT라서 \"카드 포맷\"이 필요합니다. 카드가 있으면 PC 없이도(블루투스만 연결되어 있어도) 녹화할 수 있습니다. 사진은 /photos, 동영상은 /videos 에 저장됩니다.");
 }
 
 static void build_general(lv_obj_t *parent) {
@@ -791,6 +805,7 @@ static void refresh_sd(bool count) {
     if (sd_format_row) lv_obj_clear_flag(sd_format_row, LV_OBJ_FLAG_HIDDEN);
     set_text(sd_space, "-");
     set_text(sd_count, "-");
+    set_text(sd_vcount, "-");
     set_text(sd_value, "읽을 수 없음");
     return;
   }
@@ -806,6 +821,8 @@ static void refresh_sd(bool count) {
   if (count) {
     snprintf(buf, sizeof(buf), "%d장", storage_count("/photos"));
     set_text(sd_count, buf);
+    snprintf(buf, sizeof(buf), "%d개", storage_count("/videos"));
+    set_text(sd_vcount, buf);
   }
   snprintf(buf, sizeof(buf), "%luGB", (unsigned long)((total + 512) / 1024));
   set_text(sd_value, total >= 1024 ? buf : "있음");
@@ -847,6 +864,7 @@ void settings_refresh() {
   set_checked(alert_sw, limit_alerts);
   set_checked(sound_sw, mic_sound);
   set_checked(sd_sw, sd_photos);
+  set_checked(sd_video_sw, sd_videos);
   show_page(PAGE_LIST);
 }
 
