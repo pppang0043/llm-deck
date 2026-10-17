@@ -3,6 +3,7 @@
 흐름: 기기 {"ask": "start"} -> 이 PC 마이크로 녹음 -> {"ask": "stop"} -> 이 PC 안에서 글자로 바꾸기(faster-whisper)
       -> 미리 띄워 둔 CLI 에 질문 -> 답을 나오는 대로 기기로 보낸다 {"ask": {"state", "q", "a", "done"}}
       {"ask": "cancel"} 녹음 버리기, {"ask": "new"} 새 대화 (앞 대화를 잊는다)
+      {"ask": "stop", "voice": true} 면 답이 다 나온 뒤 이 PC 스피커로 읽어 준다 (speech.py). {"ask": "mute"} 읽기 멈춤
 
 CLI 는 소리를 받지 못하므로 음성은 먼저 글자로 바꾼다. 소리는 인터넷으로 나가지 않는다.
 CLI 는 질문마다 새로 켜면 2~3초가 더 걸려서, 한 번 띄워 두고(stream-json) 계속 묻는다. 같은 프로세스라 대화도 이어진다.
@@ -18,6 +19,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+import speech
 
 # 먼저 찾는 순서. config.toml 의 [assistant] command 로 정하면 그것만 쓴다.
 COMMANDS = ("claude-test", "claude")
@@ -132,6 +135,7 @@ class Session:
         raise OSError("CLI 가 끝나 버렸습니다")
 
     def close(self) -> None:
+        self.speaker.stop()
         if self.alive():
             try:
                 self.proc.stdin.close()
@@ -163,6 +167,9 @@ class Assistant:
         # 마이크 입력 통로. 처음 여는 데 10초 넘게 걸릴 때가 있어서 한 번 열어 두고 다시 쓴다
         # (녹음하지 않는 동안은 멈춰 둔다. 멈춘 동안은 마이크를 쓰지 않는다). 오래 안 쓰면 닫는다.
         self._stream = None
+        # 답을 소리로 읽어 줄지 (기기 질문 화면의 음소거 버튼, 기본은 음소거). PC 음량은 건드리지 않는다.
+        self.voice = False
+        self.speaker = speech.Speaker(cfg)
         self.state: dict | None = None  # 기기로 보낼 최신 상태
         self.sent: dict | None = None
         self.sent_at = 0.0
@@ -171,10 +178,16 @@ class Assistant:
 
     def on_event(self, event: dict) -> None:
         action = event.get("ask")
+        if action in ("start", "cancel", "new", "mute"):
+            # 새로 말하기 시작하면 읽던 답은 끊는다 (마이크에 PC 소리가 들어가지 않게)
+            self.speaker.stop()
         if action == "start":
             self._start()
         elif action == "stop":
+            self.voice = bool(event.get("voice"))
             self._stop()
+        elif action == "mute":
+            self.voice = False
         elif action == "cancel":
             self.recording.clear()
             self._set("idle")
@@ -408,6 +421,8 @@ class Assistant:
                     answer = self.session.ask(question, lambda text: self._set("thinking", q=question, a=text))
                 print(f"[assistant] 답 ({time.monotonic() - start:.1f}초): {answer[:80]}")
                 self._set("done", q=question, a=answer)
+                if self.voice:
+                    self.speaker.speak(answer)
                 self.last_used = time.monotonic()
         except Exception as e:
             print(f"[assistant] 실패: {e}")

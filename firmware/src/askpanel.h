@@ -6,6 +6,7 @@
 // 질문 화면: 아래 버튼을 누르고 있는 동안 PC 마이크로 말하고, 떼면 PC 도우미가 받아 적어 Claude 에 묻는다.
 // 답은 글자로 나오는 대로 이 화면에 뜬다 (companion/assistant.py).
 //   기기 -> PC: {"ask": "start"} 누름 / "stop" 뗌 / "cancel" 버림 / "new" 새 대화
+//              음소거를 풀었으면 {"ask": "stop", "voice": true} (답을 PC 스피커로 읽어 줌), 다시 음소거하면 {"ask": "mute"}
 //   PC -> 기기: {"ask": {"state": "listening" | "thinking" | "done" | "error" | "idle", "q": 질문, "a": 답, "done": bool}}
 
 void askpanel_build(lv_obj_t *parent);

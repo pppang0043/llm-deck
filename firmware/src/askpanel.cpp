@@ -15,8 +15,10 @@ LV_FONT_DECLARE(font_ko_20);
 #define COLOR_TALKING lv_color_hex(0xC8372D)
 #define TALK_H 56
 
-static lv_obj_t *panel, *state_lbl, *new_btn, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
+static lv_obj_t *panel, *state_lbl, *new_btn, *mute_btn, *mute_lbl, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
 static bool talking = false;  // 버튼을 누르고 있는 중
+// 답을 PC 스피커로 읽어 줄지. 켤 때마다 음소거(읽지 않음)로 시작한다. PC 음량은 건드리지 않는다.
+static bool voice = false;
 static bool mic_ok = true;    // PC 마이크를 쓸 수 있는지 (PC 가 알려 준다. 모르면 된다고 본다)
 // 준비·듣기·답 받는 중이 된 마지막 시각. PC 가 이만큼 아무 말이 없으면 (도우미가 다시 켜졌거나 멈춤) 표시를 지운다
 #define BUSY_TIMEOUT_MS 70000
@@ -68,7 +70,7 @@ bool askpanel_press() {
 
 bool askpanel_release() {
   if (!talking) return false;
-  link_send_event("{\"ask\":\"stop\"}");
+  link_send_event(voice ? "{\"ask\":\"stop\",\"voice\":true}" : "{\"ask\":\"stop\"}");
   talking = false;
   askpanel_refresh();
   return true;
@@ -88,6 +90,19 @@ static void talk_event(lv_event_t *e) {
     // 손가락이 버튼 밖으로 미끄러져도 말한 것은 묻는다
     askpanel_release();
   }
+}
+
+static void draw_mute() {
+  lv_label_set_text(mute_lbl, voice ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
+  lv_obj_set_style_bg_color(mute_btn, voice ? COLOR_TALK : COLOR_ROW, 0);
+}
+
+static void mute_event(lv_event_t *e) {
+  voice = !voice;
+  draw_mute();
+  // 음소거로 바꾸면 PC 가 읽던 답도 바로 멈춘다
+  if (!voice && pc_connected()) link_send_event("{\"ask\":\"mute\"}");
+  ui_toast(voice ? "답을 PC 스피커로 읽어 줍니다" : "음소거: 답을 글로만 보여 줍니다", 1500);
 }
 
 static void new_event(lv_event_t *e) {
@@ -112,12 +127,22 @@ void askpanel_build(lv_obj_t *parent) {
   state_lbl = add_label(panel, "", &font_ko_14, COLOR_DIM);
 
   new_btn = lv_btn_create(panel);
-  lv_obj_set_size(new_btn, 76, 28);
+  lv_obj_set_size(new_btn, 68, 28);
   lv_obj_set_style_bg_color(new_btn, COLOR_ROW, 0);
   lv_obj_set_style_shadow_width(new_btn, 0, 0);
   lv_obj_set_style_pad_all(new_btn, 0, 0);
   lv_obj_add_event_cb(new_btn, new_event, LV_EVENT_CLICKED, NULL);
   lv_obj_center(add_label(new_btn, "새 대화", &font_ko_14, lv_color_white()));
+
+  // 음소거 (기본). 풀면 답이 다 나온 뒤 PC 가 소리로 읽어 준다.
+  mute_btn = lv_btn_create(panel);
+  lv_obj_set_size(mute_btn, 40, 28);
+  lv_obj_set_style_shadow_width(mute_btn, 0, 0);
+  lv_obj_set_style_pad_all(mute_btn, 0, 0);
+  lv_obj_add_event_cb(mute_btn, mute_event, LV_EVENT_CLICKED, NULL);
+  mute_lbl = add_label(mute_btn, "", &lv_font_montserrat_14, lv_color_white());
+  lv_obj_center(mute_lbl);
+  draw_mute();
 
   // 질문과 답. 길면 위아래로 밀어 본다.
   text_box = lv_obj_create(panel);
@@ -149,6 +174,10 @@ void askpanel_layout(int x, int y, int w, int h) {
   int inner_w = w - 20, inner_h = h - 20;
   lv_obj_align(state_lbl, LV_ALIGN_TOP_LEFT, 48, 4);
   lv_obj_align(new_btn, LV_ALIGN_TOP_RIGHT, 0, -2);
+  lv_obj_align_to(mute_btn, new_btn, LV_ALIGN_OUT_LEFT_MID, -6, 0);
+  // 상태 글자는 제목과 음소거 버튼 사이에 (좁으면 끝을 줄인다)
+  lv_label_set_long_mode(state_lbl, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(state_lbl, inner_w - 48 - 68 - 6 - 40 - 6);
   lv_obj_set_size(text_box, inner_w, inner_h - 34 - TALK_H - 8);
   lv_obj_set_pos(text_box, 0, 34);
   lv_obj_set_size(talk_btn, inner_w, TALK_H);

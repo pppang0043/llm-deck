@@ -62,3 +62,4 @@ dir = ""
 # idle_minutes = 30         # 이만큼 질문이 없으면 백그라운드 CLI 를 끈다
 # whisper_model = "small"   # 음성 인식 모델 (tiny / base / small / medium). 클수록 정확하고 느리다. 폴더 경로도 된다
 # input = ""                # 마이크 이름 일부 (비워 두면 PC 기본 마이크)
+# voice = "Yuna"            # 답 읽어 주기 목소리 (Mac 만. say -v '?' 로 목록). Windows 는 한국어 목소리를 저절로 고른다
