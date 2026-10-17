@@ -13,7 +13,7 @@ void settings_cycle_brightness();
 
 // 기울이면 화면이 따라 도는지
 bool settings_auto_rotate();
-// 마이크를 켜고 끌 때 PC 스피커로 알림음을 낼지
+// 마이크를 켜고 끌 때 알림음을 낼지 (블루투스 스피커가 있으면 그쪽, 없으면 PC 스피커)
 bool settings_mic_sound();
 // 배터리로만 쓸 때 만지지 않으면 화면을 어둡게(1분) 하고 끄는지(3분)
 bool settings_auto_dim();
@@ -31,13 +31,20 @@ bool settings_sd_photos();
 // 녹화한 동영상을 SD 카드에도 저장할지
 bool settings_sd_videos();
 
+// 블루투스 스피커(ATOM Lite 모듈): 알림음을 스피커로 낼지, 항상 연결해 둘지, 소리 크기(20~100)
+bool settings_speaker_on();
+bool settings_speaker_keep();
+uint8_t settings_speaker_volume();
+// 설정의 스피커 화면이 보이는 중인지 (그동안은 모듈 상태를 자주 읽는다)
+bool settings_speaker_page();
+
 // 설정 화면이 보이는 동안 loop() 에서 부른다 (연결 상태 등을 1초마다 고친다)
 void settings_loop();
 // 지금 바로 상태 글자를 고친다 (화면 찍기 직전)
 void settings_redraw();
 // 분류 화면에 들어가 있으면 목록으로 돌아가고 true (오른쪽으로 밀기)
 bool settings_back();
-// 분류 화면 바로 열기: "wifi" / "bluetooth" / "notify" / "display" / "battery" / "camera" / "sd" / "general"
+// 분류 화면 바로 열기: "wifi" / "bluetooth" / "speaker" / "notify" / "display" / "battery" / "camera" / "sd" / "general"
 // "end" 는 지금 화면의 맨 아래로 (진단용)
 void settings_open(const char *name);
 

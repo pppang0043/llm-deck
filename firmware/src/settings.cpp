@@ -9,6 +9,8 @@
 #include "display.h"
 #include "link.h"
 #include "net.h"
+#include "speaker.h"
+#include "speaker_proto.h"
 #include "storage.h"
 #include "ui.h"
 
@@ -33,6 +35,11 @@ static bool sd_videos = true;
 // 화면 보호기가 켜지기까지 분 (0 이면 끔)
 static const uint8_t SAVER_CHOICES[] = {0, 1, 5, 10, 30};
 static uint8_t saver_min = 5;
+// 블루투스 스피커 (ATOM Lite 모듈)
+static bool spk_on = true;
+static bool spk_keep = false;
+static uint8_t spk_vol = 60;
+static const uint8_t SPK_VOL_CHOICES[] = {20, 40, 60, 80, 100};
 
 // 연결 방식별 허용 여부
 struct LinkOption {
@@ -51,14 +58,14 @@ static LinkOption link_options[] = {
 // ---- 화면 구성 ----
 // 아이폰 설정처럼 첫 화면은 분류 목록이고, 누르면 그 분류의 화면으로 들어간다.
 // 들어간 화면에서 오른쪽으로 밀거나 "< 설정" 을 누르면 목록으로 돌아온다.
-enum Page { PAGE_LIST, PAGE_WIFI, PAGE_BLE, PAGE_NOTIFY, PAGE_DISPLAY, PAGE_BATTERY, PAGE_CAMERA, PAGE_SD,
+enum Page { PAGE_LIST, PAGE_WIFI, PAGE_BLE, PAGE_SPEAKER, PAGE_NOTIFY, PAGE_DISPLAY, PAGE_BATTERY, PAGE_CAMERA, PAGE_SD,
             PAGE_GENERAL, PAGE_COUNT };
-static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "notify", "display", "battery", "camera", "sd", "general"};
+static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "speaker", "notify", "display", "battery", "camera", "sd", "general"};
 static lv_obj_t *pages[PAGE_COUNT];
 static Page current = PAGE_LIST;
 
 // 목록 오른쪽에 보이는 현재 상태 글자
-static lv_obj_t *wifi_value, *ble_value, *battery_value, *sd_value;
+static lv_obj_t *wifi_value, *ble_value, *spk_value, *battery_value, *sd_value;
 
 static lv_obj_t *bright_slider, *bright_value;
 static lv_obj_t *rotate_sw, *sound_sw, *mirror_sw, *dim_sw, *alert_sw, *sd_sw, *sd_video_sw;
@@ -70,6 +77,8 @@ static lv_obj_t *ble_rows[BLE_MAX_PEERS], *ble_names[BLE_MAX_PEERS], *ble_states
 static lv_obj_t *bat_level, *bat_state;
 static lv_obj_t *sd_status, *sd_space, *sd_count, *sd_vcount;
 static lv_obj_t *uptime_value;
+static lv_obj_t *spk_status, *spk_target, *spk_on_sw, *spk_keep_sw, *spk_vol_lbl, *spk_none, *spk_find_lbl;
+static lv_obj_t *spk_rows[SPK_MAX_FOUND], *spk_names[SPK_MAX_FOUND], *spk_signals[SPK_MAX_FOUND];
 
 // 실수로 누르지 않게 3초 안에 한 번 더 눌러야 하는 버튼
 struct Confirm {
@@ -81,6 +90,7 @@ static Confirm restart_btn = {nullptr, "재시작", 0};
 static Confirm wifi_clear_btn = {nullptr, "지우기", 0};
 static Confirm sd_clear_btn = {nullptr, "지우기", 0};
 static Confirm sd_format_btn = {nullptr, "포맷", 0};
+static Confirm spk_forget_btn = {nullptr, "잊기", 0};
 static lv_obj_t *sd_format_row;
 
 static bool confirmed(Confirm &c) {
@@ -120,6 +130,9 @@ void settings_init() {
   sd_photos = prefs.getBool("sd_photos", true);
   sd_videos = prefs.getBool("sd_videos", true);
   saver_min = prefs.getUChar("saver_min", 5);
+  spk_on = prefs.getBool("spk_on", true);
+  spk_keep = prefs.getBool("spk_keep", false);
+  spk_vol = prefs.getUChar("spk_vol", 60);
   for (LinkOption &o : link_options) o.allowed = prefs.getBool(o.key, true);
   display_set_brightness(brightness);
 }
@@ -195,6 +208,22 @@ bool settings_sd_videos() {
 
 uint32_t settings_saver_ms() {
   return saver_min * 60000UL;
+}
+
+bool settings_speaker_on() {
+  return spk_on;
+}
+
+bool settings_speaker_keep() {
+  return spk_keep;
+}
+
+uint8_t settings_speaker_volume() {
+  return spk_vol;
+}
+
+bool settings_speaker_page() {
+  return ui_settings_visible() && current == PAGE_SPEAKER;
 }
 
 // ---- 화면 부품 ----
@@ -323,6 +352,7 @@ static void show_page(Page page) {
   disarm(wifi_clear_btn);
   disarm(sd_clear_btn);
   disarm(sd_format_btn);
+  disarm(spk_forget_btn);
   refresh_page();
 }
 
@@ -502,6 +532,68 @@ static void ble_disconnect_clicked(lv_event_t *e) {
   ui_toast("블루투스 연결을 끊었습니다", 2000);
 }
 
+static void spk_on_changed(lv_event_t *e) {
+  spk_on = lv_obj_has_state(spk_on_sw, LV_STATE_CHECKED);
+  prefs.putBool("spk_on", spk_on);
+}
+
+static void spk_keep_changed(lv_event_t *e) {
+  spk_keep = lv_obj_has_state(spk_keep_sw, LV_STATE_CHECKED);
+  prefs.putBool("spk_keep", spk_keep);
+}
+
+static void show_spk_vol() {
+  lv_label_set_text_fmt(spk_vol_lbl, "%d%%", spk_vol);
+}
+
+static void spk_vol_clicked(lv_event_t *e) {
+  // 누를 때마다 20 -> 40 -> 60 -> 80 -> 100 -> 20%
+  size_t i = 0;
+  while (i < sizeof(SPK_VOL_CHOICES) && SPK_VOL_CHOICES[i] != spk_vol) i++;
+  spk_vol = SPK_VOL_CHOICES[(i + 1) % sizeof(SPK_VOL_CHOICES)];
+  prefs.putUChar("spk_vol", spk_vol);
+  show_spk_vol();
+}
+
+static void spk_test_clicked(lv_event_t *e) {
+  if (!speaker_present()) {
+    ui_toast("스피커 모듈이 없습니다\n배선을 확인하세요", 2500);
+  } else if (!speaker_target(nullptr, 0)) {
+    ui_toast("먼저 스피커를 찾아 연결하세요", 2500);
+  } else if (!spk_on) {
+    ui_toast("\"스피커로 알림음\"을 켜세요", 2500);
+  } else {
+    speaker_play("test");
+    ui_toast(speaker_state() >= SPK_STATE_CONNECTED ? "시험 소리를 냅니다" : "스피커에 연결한 뒤 소리를 냅니다\n(몇 초 걸림)",
+             2500);
+  }
+}
+
+static void spk_find_clicked(lv_event_t *e) {
+  if (!speaker_present()) {
+    ui_toast("스피커 모듈이 없습니다\n배선을 확인하세요", 2500);
+    return;
+  }
+  speaker_find();
+  ui_toast("스피커를 찾는 중... (1분)\n스피커를 페어링 모드로 두세요", 3000);
+}
+
+static void spk_row_clicked(lv_event_t *e) {
+  int i = (intptr_t)lv_event_get_user_data(e);
+  char name[SPK_NAME_LEN];
+  if (!speaker_found(i, name, sizeof(name), nullptr)) return;
+  speaker_connect(i);
+  char text[64];
+  snprintf(text, sizeof(text), "%s\n연결하는 중... 되면 소리가 납니다", name);
+  ui_toast(text, 4000);
+}
+
+static void spk_forget_clicked(lv_event_t *e) {
+  if (!confirmed(spk_forget_btn)) return;
+  speaker_forget();
+  ui_toast("기억한 스피커를 지웠습니다", 2000);
+}
+
 static void wifi_clear_clicked(lv_event_t *e) {
   if (!confirmed(wifi_clear_btn)) return;
   net_clear_wifi();
@@ -544,6 +636,7 @@ static void build_list(lv_obj_t *parent) {
   lv_obj_t *g = add_group(p);
   add_menu(g, LV_SYMBOL_WIFI, 0x2F7DE1, "Wi-Fi", PAGE_WIFI, &wifi_value);
   add_menu(g, LV_SYMBOL_BLUETOOTH, 0x2F7DE1, "블루투스", PAGE_BLE, &ble_value, 30);
+  add_menu(g, LV_SYMBOL_AUDIO, 0xE0483C, "스피커", PAGE_SPEAKER, &spk_value, 34);
   add_link_switch(add_menu(g, LV_SYMBOL_USB, 0x4CAF50, "USB", PAGE_LIST, nullptr), LINK_USB);
 
   g = add_group(p);
@@ -612,11 +705,40 @@ static void build_ble(lv_obj_t *parent) {
   add_note(p, "PC 운영체제에서 페어링하지 마세요. PC 도우미가 자동으로 찾아 연결합니다.");
 }
 
+static void build_speaker(lv_obj_t *parent) {
+  lv_obj_t *p = add_sub_page(parent, PAGE_SPEAKER, "스피커");
+  spk_status = add_info(p, "상태");
+  spk_target = add_info(p, "스피커");
+  spk_on_sw = add_switch(add_row(p, "스피커로 알림음", "끄면 PC 스피커로"), spk_on, spk_on_changed);
+  spk_keep_sw = add_switch(add_row(p, "항상 연결", "소리가 바로 남, 전기 더 씀"), spk_keep, spk_keep_changed);
+  add_button(add_row(p, "소리 크기", nullptr), "60%", spk_vol_clicked, &spk_vol_lbl);
+  add_button(add_row(p, "시험 소리", nullptr), "듣기", spk_test_clicked, nullptr);
+
+  add_section(p, "새 스피커 연결");
+  add_button(add_row(p, "주변 스피커 찾기", "스피커를 페어링 모드로"), "찾기", spk_find_clicked, &spk_find_lbl);
+  spk_none = add_note_label(p, "");
+  for (int i = 0; i < SPK_MAX_FOUND; i++) {
+    lv_obj_t *row = add_row(p, "", "");
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(row, COLOR_LINE, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(row, spk_row_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    spk_names[i] = lv_obj_get_child(row, 0);
+    lv_label_set_long_mode(spk_names[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_width(spk_names[i], lv_pct(100));
+    spk_signals[i] = lv_obj_get_child(row, 1);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+    spk_rows[i] = row;
+  }
+  add_button(add_row(p, "스피커 잊기", "다른 스피커를 쓸 때"), "잊기", spk_forget_clicked, &spk_forget_btn.label,
+             true);
+  add_note(p, "이 보드는 블루투스 스피커를 직접 연결하지 못해 작은 스피커 모듈(ATOM Lite)이 대신 연결합니다. 소리를 낼 때만 연결하고 30초 뒤 끊어 전기를 아낍니다. 처음 소리는 연결하느라 몇 초 늦게 납니다.");
+}
+
 static void build_notify(lv_obj_t *parent) {
   lv_obj_t *p = add_sub_page(parent, PAGE_NOTIFY, "알림 및 사운드");
   alert_sw = add_switch(add_row(p, "한도 알림", "80%, 90%, 초기화 때"), limit_alerts, alert_changed);
-  sound_sw = add_switch(add_row(p, "마이크 알림음", "켜고 끌 때 PC 소리"), mic_sound, sound_changed);
-  add_note(p, "알림음은 연결된 PC의 스피커로 나옵니다.");
+  sound_sw = add_switch(add_row(p, "마이크 알림음", "켜고 끌 때 소리"), mic_sound, sound_changed);
+  add_note(p, "알림음은 블루투스 스피커를 연결해 두었으면 그 스피커로, 아니면 사용 중인 PC의 스피커로 나옵니다.");
 }
 
 static void build_display(lv_obj_t *parent) {
@@ -687,6 +809,7 @@ void settings_build(lv_obj_t *parent) {
   build_list(parent);
   build_wifi(parent);
   build_ble(parent);
+  build_speaker(parent);
   build_notify(parent);
   build_display(parent);
   build_battery(parent);
@@ -720,7 +843,30 @@ static const char *ble_text() {
   return buf;
 }
 
+static const char *spk_text(bool shortly) {
+  static char buf[48];
+  int st = speaker_state();
+  char name[SPK_NAME_LEN] = "";
+  bool target = speaker_target(name, sizeof(name));
+  if (st < 0) return "모듈 없음";
+  switch (st) {
+    case SPK_STATE_FINDING:
+      return "찾는 중";
+    case SPK_STATE_CONNECTING:
+      return "연결 중";
+    case SPK_STATE_CONNECTED:
+    case SPK_STATE_PLAYING:
+      if (shortly) return "연결됨";
+      snprintf(buf, sizeof(buf), "%s 연결됨", name);
+      return buf;
+    default:
+      if (!target) return shortly ? "없음" : "기억한 스피커 없음";
+      return shortly ? "쉬는 중" : "쉬는 중 (소리 낼 때 연결)";
+  }
+}
+
 static void refresh_list() {
+  set_text(spk_value, spk_text(true));
   set_text(wifi_value, wifi_text());
   // 목록에서는 짧게 (자세한 것은 블루투스 화면에)
   char ble_short[16];
@@ -781,6 +927,35 @@ static void refresh_live() {
         lv_obj_add_flag(ble_none, LV_OBJ_FLAG_HIDDEN);
       } else {
         lv_obj_clear_flag(ble_none, LV_OBJ_FLAG_HIDDEN);
+      }
+      break;
+    }
+    case PAGE_SPEAKER: {
+      set_text(spk_status, spk_text(false));
+      char name[SPK_NAME_LEN] = "";
+      set_text(spk_target, speaker_target(name, sizeof(name)) ? name : "-");
+      bool finding = speaker_state() == SPK_STATE_FINDING;
+      set_text(spk_find_lbl, finding ? "찾는 중" : "찾기");
+      int n = speaker_found_count();
+      for (int i = 0; i < SPK_MAX_FOUND; i++) {
+        int rssi = 0;
+        if (!speaker_found(i, name, sizeof(name), &rssi)) {
+          lv_obj_add_flag(spk_rows[i], LV_OBJ_FLAG_HIDDEN);
+          continue;
+        }
+        set_text(spk_names[i], name);
+        snprintf(buf, sizeof(buf), "눌러서 연결 (신호 %s)", rssi > -65 ? "강함" : rssi > -80 ? "보통" : "약함");
+        set_text(spk_signals[i], buf);
+        lv_obj_clear_flag(spk_rows[i], LV_OBJ_FLAG_HIDDEN);
+      }
+      if (!speaker_present()) {
+        set_text(spk_none, "스피커 모듈이 연결되어 있지 않습니다.");
+      } else if (finding && n == 0) {
+        set_text(spk_none, "찾는 중입니다. 스피커를 켜고 페어링 모드로 두세요.");
+      } else if (n == 0) {
+        set_text(spk_none, "\"찾기\"를 누르면 주변 스피커가 여기 나옵니다.");
+      } else {
+        set_text(spk_none, "연결할 스피커를 누르세요.");
       }
       break;
     }
@@ -861,6 +1036,9 @@ static void refresh_page() {
     case PAGE_SD:
       refresh_sd(true);
       break;
+    case PAGE_SPEAKER:
+      show_spk_vol();
+      break;
     default:
       break;
   }
@@ -876,6 +1054,8 @@ void settings_refresh() {
   set_checked(sound_sw, mic_sound);
   set_checked(sd_sw, sd_photos);
   set_checked(sd_video_sw, sd_videos);
+  set_checked(spk_on_sw, spk_on);
+  set_checked(spk_keep_sw, spk_keep);
   show_page(PAGE_LIST);
 }
 

@@ -5,6 +5,7 @@
 
 #include "link.h"
 #include "settings.h"
+#include "speaker.h"
 #include "ui.h"
 
 // 서비스 이름 + 구간 이름 -> 지난번 사용률
@@ -41,6 +42,7 @@ void alerts_check(JsonArrayConst services) {
   if (!sound) return;
   Serial.printf("[alert] %s\n", sound);
   ui_toast(text, 6000);
+  if (speaker_play(sound)) return;
   char event[48];
   snprintf(event, sizeof(event), "{\"sound\":\"%s\"}", sound);
   link_send_event(event);

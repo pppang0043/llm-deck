@@ -17,6 +17,7 @@
 #include "saver.h"
 #include "sd_video.h"
 #include "settings.h"
+#include "speaker.h"
 #include "video.h"
 #include "pins.h"
 #include "ui.h"
@@ -26,8 +27,10 @@ static void set_mic(bool on) {
   if (on == mic_is_on()) return;
   mic_set_on(on);
   ui_set_mic(on);
-  // 켜고 끈 것을 귀로도 알 수 있게 PC 스피커로 짧은 소리를 낸다
-  if (settings_mic_sound()) link_send_event(on ? "{\"sound\":\"mic_on\"}" : "{\"sound\":\"mic_off\"}");
+  // 켜고 끈 것을 귀로도 알 수 있게 짧은 소리를 낸다 (블루투스 스피커가 있으면 그쪽, 없으면 PC 스피커)
+  if (settings_mic_sound() && !speaker_play(on ? "mic_on" : "mic_off")) {
+    link_send_event(on ? "{\"sound\":\"mic_on\"}" : "{\"sound\":\"mic_off\"}");
+  }
 }
 
 static void toggle_mic() {
@@ -214,6 +217,7 @@ void setup() {
   cloud_init();
   photo_init();
   video_init();
+  speaker_init();
   Serial.println("[main] setup done");
 }
 
@@ -233,6 +237,7 @@ void loop() {
   show_clock();
   camera_ui_loop();
   sd_video_loop();
+  speaker_loop(settings_speaker_page());
   show_info();
   if (ui_settings_visible()) settings_loop();
   power_save();
