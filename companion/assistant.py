@@ -11,6 +11,7 @@ CLI 는 질문마다 새로 켜면 2~3초가 더 걸려서, 한 번 띄워 두�
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ COMMANDS = ("claude-test", "claude")
 WORKDIR = Path.home() / ".llm-deck" / "assistant"
 SYSTEM_PROMPT = (
     "너는 작은 휴대 기기 화면(가로 약 20자)에 답을 보여 주는 비서다. 질문은 음성을 받아 적은 것이라 오타가 있을 수 있다. "
+    "발음이 비슷한 다른 낱말로 잘못 적혔을 수 있으니(예: 수도 -> 소도), 글자 그대로보다 가장 자연스러운 뜻으로 알아듣고 답하라. "
     "한국어로, 핵심만 짧게 답하라. 표·코드 블록·마크다운 기호는 쓰지 말고 짧은 문장이나 줄바꿈으로 나눠라."
 )
 SAMPLE_RATE = 16000
@@ -35,12 +37,27 @@ MAX_ANSWER_CHARS = 1500
 PARTIAL_SECONDS = 0.5
 
 
+# 로그인 때 자동으로 켜진 도우미는 PATH 가 짧아서(터미널과 다르다) CLI 가 깔리는 자리를 직접 더 찾는다
+EXTRA_DIRS = [
+    "~/.local/bin", "~/.claude/local", "~/.npm-global/bin", "/opt/homebrew/bin", "/usr/local/bin",
+    "%APPDATA%\\npm", "%USERPROFILE%\\.local\\bin",
+]
+
+
+def _which(name: str) -> str | None:
+    path = shutil.which(name)
+    if path:
+        return path
+    extra = os.pathsep.join(os.path.expanduser(os.path.expandvars(d)) for d in EXTRA_DIRS)
+    return shutil.which(name, path=extra)
+
+
 def find_command(cfg: dict) -> tuple[str, str] | None:
     """(명령 이름, 실행 파일 경로). 실행해서 응답하는 것만 고른다. 없으면 None."""
     names = (cfg["command"],) if cfg.get("command") else COMMANDS
     for name in names:
         # Windows 는 claude-test.cmd 처럼 확장자가 붙어도 which 가 찾는다
-        path = shutil.which(name)
+        path = _which(name)
         if not path:
             print(f"[assistant] {name}: 없음")
             continue
@@ -62,6 +79,12 @@ def workdir() -> Path:
     WORKDIR.mkdir(parents=True, exist_ok=True)
     return WORKDIR
 
+
+# 마이크를 열었는데 소리가 하나도 오지 않을 때 (권한)
+_NO_AUDIO_REASON = (
+    "PC 마이크 소리가 오지 않습니다\n시스템 설정 > 개인정보 보호 > 마이크\n에서 LLM Deck 을 켜 주세요"
+    if sys.platform == "darwin" else
+    "PC 마이크 소리가 오지 않습니다\n설정 > 개인 정보 > 마이크를\n확인해 주세요")
 
 # Windows 에서 CLI 를 띄울 때 검은 창이 뜨지 않게 한다
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -137,6 +160,9 @@ class Assistant:
         # 다른 소리 스트림(기기 마이크 -> 가상 오디오 장치)이 열려 있는지. 열려 있으면 장치 목록을 다시 읽지 않는다
         # (PortAudio 를 다시 켜면 열린 스트림이 끊긴다). main.py 가 정해 준다.
         self.other_audio = lambda: False
+        # 마이크 입력 통로. 처음 여는 데 10초 넘게 걸릴 때가 있어서 한 번 열어 두고 다시 쓴다
+        # (녹음하지 않는 동안은 멈춰 둔다. 멈춘 동안은 마이크를 쓰지 않는다). 오래 안 쓰면 닫는다.
+        self._stream = None
         self.state: dict | None = None  # 기기로 보낼 최신 상태
         self.sent: dict | None = None
         self.sent_at = 0.0
@@ -168,7 +194,8 @@ class Assistant:
         self.recording.set()
         self.recorder = threading.Thread(target=self._record, daemon=True)
         self.recorder.start()
-        self._set("listening")
+        # 마이크가 실제로 소리를 받기 시작하면 _record 가 "listening" 으로 바꾼다 (그때부터 말하면 된다)
+        self._set("preparing")
         # 녹음하는 동안 모델과 CLI 를 미리 준비해 둔다 (처음이면 몇 초 걸린다)
         threading.Thread(target=self._warm, daemon=True).start()
 
@@ -196,7 +223,7 @@ class Assistant:
         if self._mic_privacy_blocked():
             return False, "Windows 가 마이크를 막았습니다\n설정 > 개인 정보 > 마이크에서\n데스크톱 앱 허용을 켜 주세요"
         # 마이크가 없던 때만 다시 읽어 새로 꽂은 것을 찾는다. 있던 마이크가 빠지면 녹음할 때 실패로 알게 된다.
-        if refresh and not self.mic and not self.other_audio():
+        if refresh and not self.mic and not self.other_audio() and self._stream is None:
             # PortAudio 는 처음 켤 때 본 장치만 기억한다. 나중에 꽂거나 뺀 마이크를 알도록 다시 읽는다
             try:
                 sd._terminate()
@@ -250,21 +277,51 @@ class Assistant:
                 return
             self.mic, self.mic_reason = True, ""
             try:
-                device = self.cfg.get("input") or None
-                with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=device) as stream:
+                if self._stream is None:
+                    opened = time.monotonic()
+                    device = self.cfg.get("input") or None
+                    self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=device)
+                    print(f"[assistant] 마이크를 열었습니다 ({time.monotonic() - opened:.1f}초)")
+                stream = self._stream
+                stream.start()
+                try:
+                    if self.recording.is_set():
+                        self._set("listening")
                     start = time.monotonic()
                     heard = False
                     while self.recording.is_set() and time.monotonic() - start < MAX_RECORD_SECONDS:
+                        # 기다리지 않고 읽는다: 마이크 권한을 묻는 중이거나 막혀 있으면 소리가 아예 오지 않아
+                        # read() 가 멈춰 버리고, 그러면 아무 말 없이 빈 녹음이 된다
+                        if stream.read_available < SAMPLE_RATE // 10:
+                            if not self.chunks and time.monotonic() - start > 2.0:
+                                fail(_NO_AUDIO_REASON, False)
+                                return
+                            time.sleep(0.02)
+                            continue
                         data, _ = stream.read(SAMPLE_RATE // 10)
                         self.chunks.append(data.copy())
                         heard = heard or bool(np.any(data))
                         # 진짜 마이크는 조용해도 잡음이 있다. 1.5초 동안 완전히 0 이면 음소거됐거나 막힌 것이다
                         if not heard and time.monotonic() - start > 1.5:
-                            fail("마이크 소리가 들어오지 않습니다\n음소거나 Windows 마이크 권한을\n확인해 주세요", False)
+                            fail("마이크 소리가 들어오지 않습니다\n음소거나 마이크 권한을\n확인해 주세요", False)
                             return
+                finally:
+                    stream.stop()
+                    # 멈춘 동안 쌓인 소리는 버린다 (다음 녹음에 앞 소리가 섞이지 않게)
+                    while stream.read_available:
+                        stream.read(stream.read_available)
             except Exception as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
+                self._close_stream()
                 self._mic_failed_until = time.monotonic() + 300
                 fail(f"PC 마이크를 열지 못했습니다\n{str(e)[:60]}", True)
+
+    def _close_stream(self) -> None:
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     def _stop(self) -> None:
         if not self.recording.is_set():
@@ -321,7 +378,10 @@ class Assistant:
             if self.recorder:
                 self.recorder.join(2)
             if not self.chunks:
-                self._set("idle")
+                # 녹음이 실패했으면 _record 가 이미 오류를 보냈다. 아니면 너무 짧게 눌렀다
+                if self.state is None or self.state.get("state") != "error":
+                    print("[assistant] 녹음된 소리가 없습니다 (너무 짧게 눌렀거나 마이크가 열리지 않음)")
+                    self._set("error", a="소리가 녹음되지 않았습니다\n버튼을 누른 채 말해 주세요")
                 return
             pcm = np.concatenate(self.chunks)[:, 0].astype(np.float32) / 32768
             self._set("thinking", a="받아 적는 중")
@@ -358,7 +418,8 @@ class Assistant:
     # --- PC -> 기기 ---
 
     def _set(self, state: str, q: str = "", a: str = "") -> None:
-        self.state = {"state": state, "q": q[:200], "a": a[:MAX_ANSWER_CHARS], "done": state != "listening" and state != "thinking"}
+        busy = state in ("preparing", "listening", "thinking")
+        self.state = {"state": state, "q": q[:200], "a": a[:MAX_ANSWER_CHARS], "done": not busy}
 
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다. 오래 안 쓰면 CLI 를 내린다."""
@@ -385,12 +446,21 @@ class Assistant:
                 self.session.close()
                 self.session = None
             self.model = None
+            if self._audio_lock.acquire(blocking=False):
+                try:
+                    self._close_stream()
+                finally:
+                    self._audio_lock.release()
             self.last_used = 0.0
             print(f"[assistant] {self.idle_seconds // 60}분 동안 질문이 없어 CLI 를 내렸습니다")
         finally:
             self.lock.release()
 
     def close(self) -> None:
+        # 녹음 중인 쪽이 마이크를 멈추는 동안 닫으면 macOS 오디오가 서로 기다리며 멈춘다 (PortAudio). 끝날 때까지 기다린다.
+        self.recording.clear()
+        with self._audio_lock:
+            self._close_stream()
         with self.lock:
             if self.session:
                 self.session.close()

@@ -25,3 +25,5 @@ bool askpanel_release();
 void askpanel_set_mic(bool available);
 // 연결이 바뀌었을 때 등 버튼 모양을 다시 그린다
 void askpanel_refresh();
+// loop() 에서 부른다: PC 가 "듣는 중/답 받는 중" 뒤로 오래 말이 없으면 그 표시를 지운다
+void askpanel_loop();

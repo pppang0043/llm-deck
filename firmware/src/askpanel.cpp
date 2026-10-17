@@ -18,6 +18,9 @@ LV_FONT_DECLARE(font_ko_20);
 static lv_obj_t *panel, *state_lbl, *new_btn, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
 static bool talking = false;  // 버튼을 누르고 있는 중
 static bool mic_ok = true;    // PC 마이크를 쓸 수 있는지 (PC 가 알려 준다. 모르면 된다고 본다)
+// 준비·듣기·답 받는 중이 된 마지막 시각. PC 가 이만큼 아무 말이 없으면 (도우미가 다시 켜졌거나 멈춤) 표시를 지운다
+#define BUSY_TIMEOUT_MS 70000
+static uint32_t busy_ms = 0;
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
@@ -56,6 +59,9 @@ bool askpanel_press() {
   if (st != ASK_READY) return false;
   link_send_event("{\"ask\":\"start\"}");
   talking = true;
+  // PC 가 마이크를 열 때까지 (처음엔 몇 초 걸린다). 열리면 PC 가 "듣는 중" 으로 바꾼다
+  lv_label_set_text(state_lbl, "마이크 준비 중...");
+  busy_ms = millis();
   askpanel_refresh();
   return true;
 }
@@ -165,15 +171,18 @@ void askpanel_show(bool on) {
 
 void askpanel_set(JsonObjectConst ask) {
   const char *state = ask["state"] | "";
-  if (strcmp(state, "listening") == 0) {
-    lv_label_set_text(state_lbl, "듣는 중...");
+  busy_ms = (ask["done"] | false) ? 0 : millis();
+  if (strcmp(state, "preparing") == 0) {
+    lv_label_set_text(state_lbl, "마이크 준비 중...");
+  } else if (strcmp(state, "listening") == 0) {
+    lv_label_set_text(state_lbl, "듣는 중... 말하세요");
   } else if (strcmp(state, "thinking") == 0) {
     lv_label_set_text(state_lbl, "답 받는 중...");
   } else {
     lv_label_set_text(state_lbl, "");
   }
-  // 듣는 중에는 앞 질문·답을 그대로 둔다 (말을 다 하면 새 질문으로 바뀐다)
-  if (strcmp(state, "listening") != 0) {
+  // 준비·듣는 중에는 앞 질문·답을 그대로 둔다 (말을 다 하면 새 질문으로 바뀐다)
+  if (strcmp(state, "listening") != 0 && strcmp(state, "preparing") != 0) {
     lv_label_set_text(q_lbl, ask["q"] | "");
     lv_label_set_text(a_lbl, ask["a"] | "");
     lv_obj_set_style_text_color(a_lbl, strcmp(state, "error") == 0 ? COLOR_ACCENT : lv_color_white(), 0);
@@ -190,4 +199,14 @@ void askpanel_set(JsonObjectConst ask) {
   if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN) && (ask["done"] | false) && strcmp(state, "done") == 0) {
     ui_toast("질문의 답이 왔습니다", 2000);
   }
+}
+
+void askpanel_loop() {
+  if (!busy_ms || millis() - busy_ms < BUSY_TIMEOUT_MS) return;
+  // 누르고 있는 중이 아닌데 PC 가 70초 동안 아무것도 안 보냈다
+  if (talking) return;
+  busy_ms = 0;
+  lv_label_set_text(state_lbl, "");
+  lv_label_set_text(a_lbl, "PC에서 답이 오지 않았습니다\n다시 눌러 주세요");
+  lv_obj_set_style_text_color(a_lbl, COLOR_ACCENT, 0);
 }
