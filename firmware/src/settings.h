@@ -50,6 +50,9 @@ bool settings_back();
 // "end" 는 지금 화면의 맨 아래로 (진단용)
 void settings_open(const char *name);
 
+// 설정 > 알림 및 사운드 > 마이크 스위치를 눌렀을 때 부를 함수 (main.cpp 의 set_mic)
+void settings_set_mic_handler(void (*handler)(bool on));
+
 // 설정 > 정보 화면이 보이는지, 그 내용 (main.cpp 가 채운다)
 bool settings_info_visible();
 void settings_set_info(const char *text);

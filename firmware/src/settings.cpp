@@ -9,6 +9,7 @@
 #include "display.h"
 #include "link.h"
 #include "health.h"
+#include "mic.h"
 #include "net.h"
 #include "speaker.h"
 #include "speaker_proto.h"
@@ -70,6 +71,8 @@ static Page current = PAGE_LIST;
 static lv_obj_t *wifi_value, *ble_value, *spk_value, *battery_value, *sd_value;
 
 static lv_obj_t *bright_slider, *bright_value;
+static lv_obj_t *mic_sw;
+static void (*mic_handler)(bool on) = nullptr;
 static lv_obj_t *rotate_sw, *restore_sw, *sound_sw, *mirror_sw, *dim_sw, *alert_sw, *sd_sw, *sd_video_sw;
 static lv_obj_t *saver_lbl, *cam_value;
 static lv_obj_t *wifi_status, *wifi_ip, *wifi_signal, *wifi_list;
@@ -466,6 +469,15 @@ static void rotate_changed(lv_event_t *e) {
   prefs.putBool("auto_rot", auto_rotate);
 }
 
+// 마이크 켜고 끄기 (홈의 마이크 버튼을 질문 버튼으로 바꾼 뒤에도 만일을 위해 여기서 직접 켜고 끌 수 있게)
+static void mic_changed(lv_event_t *e) {
+  if (mic_handler) mic_handler(lv_obj_has_state(mic_sw, LV_STATE_CHECKED));
+}
+
+void settings_set_mic_handler(void (*handler)(bool on)) {
+  mic_handler = handler;
+}
+
 static void restore_changed(lv_event_t *e) {
   rotate_restore = lv_obj_has_state(restore_sw, LV_STATE_CHECKED);
   prefs.putBool("rot_restore", rotate_restore);
@@ -749,6 +761,7 @@ static void build_speaker(lv_obj_t *parent) {
 
 static void build_notify(lv_obj_t *parent) {
   lv_obj_t *p = add_sub_page(parent, PAGE_NOTIFY, "알림 및 사운드");
+  mic_sw = add_switch(add_row(p, "마이크", "기기 마이크 소리를 PC로"), mic_is_on(), mic_changed);
   alert_sw = add_switch(add_row(p, "한도 알림", "80%, 90%, 초기화 때"), limit_alerts, alert_changed);
   sound_sw = add_switch(add_row(p, "마이크 알림음", "켜고 끌 때 소리"), mic_sound, sound_changed);
   add_note(p, "알림음은 블루투스 스피커를 연결해 두었으면 그 스피커로, 아니면 사용 중인 PC의 스피커로 나옵니다.");
@@ -995,6 +1008,10 @@ static void refresh_live() {
       }
       break;
     }
+    case PAGE_NOTIFY:
+      // PC(--mic)나 BOOT 버튼으로 바뀌었을 수도 있다
+      set_checked(mic_sw, mic_is_on());
+      break;
     case PAGE_BATTERY: {
       int pct = battery_pct();
       if (pct < 0) {

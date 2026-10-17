@@ -254,6 +254,7 @@ void setup() {
   prefs.begin("llm-deck");
   prefs.remove("rot_offset");  // 예전 펌웨어가 저장한 버튼 횟수 (어긋난 채 남아 있으면 계속 틀린 방향이 된다)
   settings_init();
+  settings_set_mic_handler(set_mic);
   history_init();
   delay(50);  // 센서가 첫 값을 낼 때까지 잠깐 기다린다
   int start = imu_rotation();
