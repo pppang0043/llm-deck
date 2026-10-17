@@ -75,7 +75,7 @@ static lv_obj_t *wifi_status, *wifi_ip, *wifi_signal, *wifi_list;
 static lv_obj_t *ble_status, *ble_none;
 // 연결된 PC 한 대씩의 줄 (자리 수만큼 만들어 두고, 빈 자리는 숨긴다)
 static lv_obj_t *ble_rows[BLE_MAX_PEERS], *ble_names[BLE_MAX_PEERS], *ble_states[BLE_MAX_PEERS];
-static lv_obj_t *bat_level, *bat_state;
+static lv_obj_t *bat_level, *bat_state, *bat_left;
 static lv_obj_t *sd_status, *sd_space, *sd_count, *sd_vcount;
 static lv_obj_t *uptime_value, *boot_value, *crash_value;
 static lv_obj_t *spk_status, *spk_target, *spk_on_sw, *spk_keep_sw, *spk_vol_lbl, *spk_none, *spk_find_lbl;
@@ -767,6 +767,7 @@ static void build_battery(lv_obj_t *parent) {
   lv_obj_t *p = add_sub_page(parent, PAGE_BATTERY, "배터리");
   bat_level = add_info(p, "잔량");
   bat_state = add_info(p, "전원");
+  bat_left = add_info(p, "남은 시간");
   dim_sw = add_switch(add_row(p, "배터리 절약", "1분 어둡게, 3분 끄기"), auto_dim, dim_changed);
   add_note(p, "배터리 절약은 배터리로만 쓸 때 동작합니다. 잔량은 전압으로 짐작하며, 충전이 끝난 채 USB에 20분 꽂혀 있으면 스스로 보정합니다.");
 }
@@ -973,6 +974,13 @@ static void refresh_live() {
         set_text(bat_state, battery_charging()           ? "충전 중"
                             : battery_external_power() ? "USB (충전 완료)"
                                                        : "배터리 사용 중");
+        int left = battery_minutes_left();
+        if (left >= 0) {
+          snprintf(buf, sizeof(buf), "약 %d시간 %d분", left / 60, left % 60);
+          set_text(bat_left, buf);
+        } else {
+          set_text(bat_left, battery_external_power() ? "-" : "재는 중 (잔량이 3% 줄면)");
+        }
       }
       break;
     }

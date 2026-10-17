@@ -207,6 +207,58 @@ void battery_init() {
                 scale, scale_manual ? " (manual)" : "");
 }
 
+// ---- 남은 시간 짐작 ----
+// 배터리로만 쓰는 동안 1분마다 잔량을 적어 두고, 최근 40분(모자라면 뽑은 뒤부터) 동안 줄어든 빠르기로 나눈다.
+// 잔량이 전압으로 짐작한 값이라 처음 몇 %는 흔들리므로, 3% 이상 줄어든 뒤에야 알려 준다.
+#define DRAIN_SAMPLES 41
+#define DRAIN_MIN_DROP 3
+static uint8_t drain_pct[DRAIN_SAMPLES];
+static int drain_count = 0, drain_head = 0;
+static int start_pct = -1;
+static uint32_t start_min = 0;
+static int minutes_left = -1;
+
+static void track_drain() {
+  uint32_t now_min = millis() / 60000;
+  if (charging || pct < 0) {
+    drain_count = 0;
+    start_pct = -1;
+    minutes_left = -1;
+    return;
+  }
+  if (start_pct < 0) {
+    start_pct = pct;
+    start_min = now_min;
+  }
+  // 배터리로만 쓰는 동안 잔량은 늘 수 없으므로, 전압이 잠깐 올라 생긴 값은 무시한다
+  int now_pct = pct;
+  if (drain_count > 0) {
+    int last = drain_pct[(drain_head - 1 + DRAIN_SAMPLES) % DRAIN_SAMPLES];
+    if (now_pct > last) now_pct = last;
+  }
+  drain_pct[drain_head] = now_pct;
+  drain_head = (drain_head + 1) % DRAIN_SAMPLES;
+  if (drain_count < DRAIN_SAMPLES) drain_count++;
+  // 창 안의 가장 오래된 값과 지금 값
+  int oldest = drain_pct[(drain_head - drain_count + DRAIN_SAMPLES) % DRAIN_SAMPLES];
+  int span = drain_count - 1;
+  int drop = oldest - now_pct;
+  if (drop < DRAIN_MIN_DROP) {
+    // 창이 짧으면(적게 쓰는 중) 뽑은 뒤 전체로 본다
+    drop = start_pct - now_pct;
+    span = now_min - start_min;
+  }
+  if (drop < DRAIN_MIN_DROP || span <= 0) {
+    minutes_left = -1;
+    return;
+  }
+  minutes_left = (int)((long)now_pct * span / drop);
+}
+
+int battery_minutes_left() {
+  return minutes_left;
+}
+
 void battery_loop() {
   static uint32_t checked_ms = 0;
   if (millis() - checked_ms < 3000) return;
@@ -218,6 +270,7 @@ void battery_loop() {
   if (millis() - logged_ms >= 60000) {
     logged_ms = millis();
     check_full(raw_mv);
+    track_drain();
     Serial.printf("[battery] %d mV (now %d, raw %d), %d%%, %s%s\n", battery_mv(), mv, raw_mv, pct,
                   charging ? "charging" : "on battery", full ? ", full" : "");
   }

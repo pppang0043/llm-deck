@@ -4,6 +4,7 @@
 
 #include "psram_json.h"
 #include "display.h"
+#include "history.h"
 #include "settings.h"
 
 // 한글이 들어 있는 글꼴 (src/fonts, 나눔고딕). 큰 숫자(48)는 기본 글꼴을 쓴다.
@@ -82,8 +83,105 @@ static void add_row(lv_obj_t *parent, const char *left, const lv_font_t *left_fo
   lv_obj_align(add_label(row, right, right_font, right_color), LV_ALIGN_RIGHT_MID, 0, 0);
 }
 
-// 한도 한 구간: 왼쪽에 이름과 초기화 시각, 오른쪽에 큰 숫자, 아래에 막대
-static void add_gauge(lv_obj_t *parent, JsonObjectConst bar) {
+// ---- 사용률 기록 그래프 (구간을 누르면 화면 전체에 최근 24시간) ----
+
+struct GaugeKey {
+  char service[32];
+  char label[16];
+};
+#define MAX_GAUGES 8
+static GaugeKey gauge_keys[MAX_GAUGES];
+static int gauge_count = 0;
+static lv_obj_t *hist_panel, *hist_title, *hist_chart, *hist_note, *hist_left, *hist_right;
+static lv_chart_series_t *hist_series;
+static lv_coord_t hist_points[HISTORY_SLOTS];
+
+static void hist_close(lv_event_t *e) {
+  lv_obj_add_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void hist_build() {
+  hist_panel = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(hist_panel);
+  lv_obj_set_style_bg_color(hist_panel, COLOR_BG, 0);
+  lv_obj_set_style_bg_opa(hist_panel, LV_OPA_COVER, 0);
+  lv_obj_set_style_pad_all(hist_panel, 10, 0);
+  lv_obj_add_flag(hist_panel, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(hist_panel, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(hist_panel, hist_close, LV_EVENT_CLICKED, NULL);
+
+  hist_title = add_label(hist_panel, "", &font_ko_20, COLOR_ACCENT);
+  lv_obj_align(hist_title, LV_ALIGN_TOP_LEFT, 0, 0);
+  hist_note = add_label(hist_panel, "", &font_ko_14, COLOR_DIM);
+  lv_obj_align(hist_note, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+  hist_chart = lv_chart_create(hist_panel);
+  lv_obj_clear_flag(hist_chart, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(hist_chart, LV_OBJ_FLAG_EVENT_BUBBLE);
+  lv_chart_set_type(hist_chart, LV_CHART_TYPE_LINE);
+  lv_chart_set_point_count(hist_chart, HISTORY_SLOTS);
+  lv_chart_set_range(hist_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+  lv_chart_set_div_line_count(hist_chart, 5, 0);  // 25% 마다 가로줄
+  lv_obj_set_style_bg_color(hist_chart, lv_color_hex(0x1C232B), 0);
+  lv_obj_set_style_border_width(hist_chart, 0, 0);
+  lv_obj_set_style_line_color(hist_chart, lv_color_hex(0x2A323B), LV_PART_MAIN);
+  lv_obj_set_style_size(hist_chart, 0, LV_PART_INDICATOR);  // 점은 그리지 않고 선만
+  lv_obj_set_style_line_width(hist_chart, 2, LV_PART_ITEMS);
+  hist_series = lv_chart_add_series(hist_chart, COLOR_ACCENT, LV_CHART_AXIS_PRIMARY_Y);
+  // 그래프 아래 양 끝: 시간 축
+  hist_left = add_label(hist_panel, "24시간 전", &font_ko_14, COLOR_DIM);
+  hist_right = add_label(hist_panel, "지금", &font_ko_14, COLOR_DIM);
+  lv_chart_set_ext_y_array(hist_chart, hist_series, hist_points);
+}
+
+static void hist_show(const GaugeKey &k) {
+  if (!hist_panel) hist_build();
+  uint8_t v[HISTORY_SLOTS];
+  bool have = history_get(k.service, k.label, v);
+  int peak = -1, last = -1, known = 0;
+  for (int i = 0; i < HISTORY_SLOTS; i++) {
+    bool ok = have && v[i] != HISTORY_NONE;
+    hist_points[i] = ok ? v[i] : LV_CHART_POINT_NONE;
+    if (ok) {
+      known++;
+      last = v[i];
+      if (v[i] > peak) peak = v[i];
+    }
+  }
+  lv_label_set_text_fmt(hist_title, "%s %s", k.service, k.label);
+  lv_label_set_long_mode(hist_title, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(hist_title, display_width() - 20);
+  if (known == 0) {
+    lv_label_set_text(hist_note, "아직 기록이 없습니다 (10분마다 모읍니다). 누르면 닫힘");
+  } else {
+    lv_label_set_text_fmt(hist_note, "최고 %d%%, 지금 %d%%. 누르면 닫힘", peak, last);
+  }
+  // 화면 방향에 맞춰 크기를 다시 정한다
+  lv_obj_set_size(hist_panel, display_width(), display_height());
+  lv_obj_set_size(hist_chart, lv_pct(100), display_height() - 20 - 30 - 42);
+  lv_obj_align(hist_chart, LV_ALIGN_TOP_MID, 0, 30);
+  lv_obj_align_to(hist_left, hist_chart, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
+  lv_obj_align_to(hist_right, hist_chart, LV_ALIGN_OUT_BOTTOM_RIGHT, 0, 2);
+  lv_chart_refresh(hist_chart);
+  lv_obj_clear_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(hist_panel);
+}
+
+static void gauge_clicked(lv_event_t *e) {
+  int i = (intptr_t)lv_event_get_user_data(e);
+  if (i >= 0 && i < gauge_count) hist_show(gauge_keys[i]);
+}
+
+bool ui_history_visible() {
+  return hist_panel && !lv_obj_has_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_history_close() {
+  if (hist_panel) lv_obj_add_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+// 한도 한 구간: 왼쪽에 이름과 초기화 시각, 오른쪽에 큰 숫자, 아래에 막대. 누르면 기록 그래프.
+static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar) {
   int pct = constrain(bar["pct"] | 0, 0, 100);
   lv_color_t color = pct >= 90 ? COLOR_FULL : pct >= 70 ? COLOR_WARN : lv_color_white();
 
@@ -93,6 +191,14 @@ static void add_gauge(lv_obj_t *parent, JsonObjectConst bar) {
   lv_obj_align(add_label(row, bar["label"] | "", &font_ko_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
   lv_obj_align(add_label(row, bar["note"] | "", &font_ko_14, COLOR_DIM), LV_ALIGN_BOTTOM_LEFT, 0, 0);
   lv_obj_align(add_label(row, bar["text"] | "", &lv_font_montserrat_48, color), LV_ALIGN_RIGHT_MID, 0, 0);
+  if (gauge_count < MAX_GAUGES) {
+    GaugeKey &k = gauge_keys[gauge_count];
+    strlcpy(k.service, service, sizeof(k.service));
+    strlcpy(k.label, bar["label"] | "", sizeof(k.label));
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(row, gauge_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)gauge_count);
+    gauge_count++;
+  }
 
   lv_obj_t *b = lv_bar_create(parent);
   lv_obj_set_size(b, lv_pct(100), 12);
@@ -253,6 +359,7 @@ static void layout_home() {
 
 static void apply_view() {
   bool usage = view == VIEW_USAGE;
+  ui_history_close();
   lv_obj_t *usage_parts[] = {tiles, level_bar, mic_btn};
   for (lv_obj_t *o : usage_parts) {
     if (usage) {
@@ -485,6 +592,7 @@ void ui_set_wifi_info(const char *text) {
 
 void ui_set_usage(JsonArrayConst services) {
   waiting = false;
+  history_record(services);
   last_usage.set(services);
   render_usage();
 }
@@ -504,6 +612,7 @@ static void render_usage() {
   }
 
   lv_obj_clean(tiles);
+  gauge_count = 0;
   uint8_t index = 0;
   for (JsonObjectConst svc : services) {
     lv_obj_t *page = add_page(index);
@@ -521,7 +630,7 @@ static void render_usage() {
       lv_obj_set_width(sub, lv_pct(100));
     }
     for (JsonObjectConst bar : svc["bars"].as<JsonArrayConst>()) {
-      add_gauge(page, bar);
+      add_gauge(page, svc["name"] | "?", bar);
     }
     for (JsonArrayConst row : svc["rows"].as<JsonArrayConst>()) {
       add_row(page, row[0] | "", &font_ko_20, COLOR_DIM, row[1] | "", &font_ko_20,
@@ -580,6 +689,21 @@ void ui_show(const char *name) {
   // 설정 안의 어느 화면이든 그 화면 그대로 맨 아래로만 내린다
   if (strcmp(name, "settings_end") == 0 && view == VIEW_SETTINGS) {
     settings_open("end");
+    return;
+  }
+  // 진단용: 사용량 화면의 첫 구간 기록 그래프. history_demo 는 화면에만 본보기 값을 그린다 (저장하지 않음).
+  if (strcmp(name, "history") == 0 || strcmp(name, "history_demo") == 0) {
+    view = VIEW_USAGE;
+    apply_view();
+    if (gauge_count == 0) return;
+    hist_show(gauge_keys[0]);
+    if (name[7] == '_') {
+      for (int i = 0; i < HISTORY_SLOTS; i++) {
+        // 5시간마다 0 으로 돌아가는 톱니 모양, 밤(가운데)은 비어 있음
+        hist_points[i] = (i > 50 && i < 80) ? LV_CHART_POINT_NONE : (i % 30) * 3;
+      }
+      lv_chart_refresh(hist_chart);
+    }
     return;
   }
   if (strcmp(name, "home") == 0) {

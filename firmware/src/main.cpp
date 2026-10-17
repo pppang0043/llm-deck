@@ -18,6 +18,7 @@
 #include "sd_video.h"
 #include "settings.h"
 #include "health.h"
+#include "history.h"
 #include "speaker.h"
 #include "video.h"
 #include "pins.h"
@@ -151,11 +152,16 @@ static void show_info() {
   char err[64];
   if (!health_last_error(err, sizeof(err))) strlcpy(err, "없음", sizeof(err));
   int pct = battery_pct();
-  char bat[48];
+  char bat[80];
   if (pct < 0) {
     snprintf(bat, sizeof(bat), "없음");
   } else {
     snprintf(bat, sizeof(bat), "%d%% (%.2fV)%s", pct, battery_mv() / 1000.0f, battery_charging() ? ", 충전 중" : "");
+    int left = battery_minutes_left();
+    if (left >= 0) {
+      size_t n = strlen(bat);
+      snprintf(bat + n, sizeof(bat) - n, ", 약 %d시간 %d분 남음", left / 60, left % 60);
+    }
   }
   snprintf(text, sizeof(text),
            "PC 연결: %s\n"
@@ -221,6 +227,7 @@ void setup() {
   prefs.begin("llm-deck");
   rotate_offset = prefs.getUChar("rot_offset", 0) & 3;
   settings_init();
+  history_init();
   delay(50);  // 센서가 첫 값을 낼 때까지 잠깐 기다린다
   int start = imu_rotation();
   if (start >= 0) tilt = start;
@@ -270,6 +277,7 @@ void loop() {
   camera_ui_loop();
   sd_video_loop();
   health_loop();
+  history_loop();
   speaker_loop(settings_speaker_page());
   show_info();
   if (ui_settings_visible()) settings_loop();

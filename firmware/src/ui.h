@@ -44,3 +44,7 @@ void ui_set_info(const char *text);
 // 화면 보호기에 띄울 짧은 사용률 요약 (서비스마다 한 줄). 받은 사용량이 없으면 빈 글자.
 void ui_usage_summary(char *out, size_t size);
 void ui_set_level(uint8_t pct);
+
+// 사용량 구간을 눌러 연 기록 그래프 (화면 전체). 다른 화면으로 갈 때 닫는다.
+bool ui_history_visible();
+void ui_history_close();

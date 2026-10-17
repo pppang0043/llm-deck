@@ -20,3 +20,6 @@ void battery_calibrate(int actual_mv);
 bool battery_charging();
 // 충전기나 PC 의 USB 로 전원이 들어오고 있는지 (충전이 끝났어도 true)
 bool battery_external_power();
+
+// 배터리로만 쓸 때 남은 시간 짐작 (분). 충전 중이거나 아직 모르면(뽑은 뒤 잔량이 3% 줄기 전) -1.
+int battery_minutes_left();
