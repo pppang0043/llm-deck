@@ -368,7 +368,7 @@ static lv_obj_t *add_group(lv_obj_t *page) {
 // 목록의 한 줄: [색 아이콘] 이름 ......... 값 >
 // page 가 PAGE_LIST 면 누를 수 없는 줄(오른쪽에 스위치를 직접 둔다)
 static lv_obj_t *add_menu(lv_obj_t *group, const char *symbol, uint32_t color, const char *title, Page page,
-                          lv_obj_t **value) {
+                          lv_obj_t **value, int value_pct = 40) {
   lv_obj_t *row = lv_obj_create(group);
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), 44);
@@ -404,7 +404,8 @@ static lv_obj_t *add_menu(lv_obj_t *group, const char *symbol, uint32_t color, c
       *value = add_label(row, "", &font_ko_14, COLOR_DIM);
       lv_label_set_long_mode(*value, LV_LABEL_LONG_DOT);
       lv_obj_set_style_text_align(*value, LV_TEXT_ALIGN_RIGHT, 0);
-      lv_obj_set_width(*value, lv_pct(40));
+      // 세로 화면(폭 240)에서도 왼쪽 이름과 겹치지 않는 폭. 넘치면 "..." 로 줄인다.
+      lv_obj_set_width(*value, lv_pct(value_pct));
       lv_obj_align(*value, LV_ALIGN_RIGHT_MID, -18, 0);
     }
   }
@@ -542,7 +543,7 @@ static void build_list(lv_obj_t *parent) {
 
   lv_obj_t *g = add_group(p);
   add_menu(g, LV_SYMBOL_WIFI, 0x2F7DE1, "Wi-Fi", PAGE_WIFI, &wifi_value);
-  add_menu(g, LV_SYMBOL_BLUETOOTH, 0x2F7DE1, "블루투스", PAGE_BLE, &ble_value);
+  add_menu(g, LV_SYMBOL_BLUETOOTH, 0x2F7DE1, "블루투스", PAGE_BLE, &ble_value, 30);
   add_link_switch(add_menu(g, LV_SYMBOL_USB, 0x4CAF50, "USB", PAGE_LIST, nullptr), LINK_USB);
 
   g = add_group(p);
@@ -552,7 +553,7 @@ static void build_list(lv_obj_t *parent) {
   add_menu(g, LV_SYMBOL_IMAGE, 0x6B7280, "카메라", PAGE_CAMERA, nullptr);
 
   g = add_group(p);
-  add_menu(g, LV_SYMBOL_SD_CARD, 0x6B7280, "SD 카드", PAGE_SD, &sd_value);
+  add_menu(g, LV_SYMBOL_SD_CARD, 0x6B7280, "SD 카드", PAGE_SD, &sd_value, 34);
   add_menu(g, LV_SYMBOL_SETTINGS, 0x6B7280, "일반", PAGE_GENERAL, nullptr);
 }
 
@@ -721,13 +722,23 @@ static const char *ble_text() {
 
 static void refresh_list() {
   set_text(wifi_value, wifi_text());
-  set_text(ble_value, ble_text());
+  // 목록에서는 짧게 (자세한 것은 블루투스 화면에)
+  char ble_short[16];
+  int peers = ble_peer_count();
+  if (!ble_link_enabled()) {
+    strlcpy(ble_short, "끔", sizeof(ble_short));
+  } else if (peers == 0) {
+    strlcpy(ble_short, "대기 중", sizeof(ble_short));
+  } else {
+    snprintf(ble_short, sizeof(ble_short), "PC %d대", peers);
+  }
+  set_text(ble_value, ble_short);
   char buf[24];
   int pct = battery_pct();
   if (pct < 0) {
     set_text(battery_value, "없음");
   } else {
-    snprintf(buf, sizeof(buf), "%d%%%s", pct, battery_charging() ? " 충전 중" : "");
+    snprintf(buf, sizeof(buf), "%s%d%%", battery_charging() ? LV_SYMBOL_CHARGE " " : "", pct);
     set_text(battery_value, buf);
   }
 }

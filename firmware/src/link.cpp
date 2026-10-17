@@ -42,6 +42,7 @@ static bool pending_usage = true;
 static volatile Link active = LINK_NONE;
 static uint32_t last_ms = 0;
 static void (*set_mic_cb)(bool);
+static void (*rotate_cb)() = nullptr;
 
 // 마지막으로 받은 사용량. PC 없이 전원만 연결해도 이 값을 보여준다.
 static Preferences prefs;
@@ -231,6 +232,8 @@ void link_loop() {
         camera_set_mount(doc["camera_mount"]["rot"] | 0, doc["camera_mount"]["mirror"] | false);
       }
       if (doc["saver"] == true) saver_demo();
+      // 진단용: 화면 돌리기 버튼을 누른 것과 같다
+      if (doc["rotate"] == true && rotate_cb) rotate_cb();
       if (doc["photo_test"] == true) {
         uint8_t *jpg;
         size_t len;
@@ -278,6 +281,10 @@ void link_loop() {
     // 지금 연결이 끊겼거나 설정에서 껐으면 살아 있는 다음 연결로 넘어간다 (없으면 "PC 없음")
     set_active(best_link());
   }
+}
+
+void link_set_rotate(void (*rotate)()) {
+  rotate_cb = rotate;
 }
 
 Link link_active() {

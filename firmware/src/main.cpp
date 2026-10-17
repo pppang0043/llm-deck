@@ -207,6 +207,7 @@ void setup() {
   Serial.printf("[main] tilt %d (accel %.2f %.2f %.2f), button %d\n", start, ax, ay, az, rotate_offset);
   apply_rotation();
   link_init(set_mic);
+  link_set_rotate(rotate_by_button);
   mic_init();
   net_init();
   ble_link_init();
