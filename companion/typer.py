@@ -1,9 +1,9 @@
-"""기기의 키워드 버튼({"type": 이름})을 누르면 이 PC 에서 지금 커서가 있는 곳에 정해 둔 글을 입력한다.
+"""기기의 키워드 버튼({"type": 이름})을 누르면 이 PC 에서 지금 커서가 있는 곳에 정해 둔 글을 입력하고 Enter 를 누른다.
 
-여기 적어 둔 글만 입력한다 (기기나 다른 사람이 아무 글·명령이나 치게 하지 못하게). Enter 는 누르지 않는다.
+여기 적어 둔 글만 입력한다 (기기나 다른 사람이 아무 글·명령이나 치게 하지 못하게).
   - Windows: 글자를 하나씩 키보드 입력으로 보낸다 (SendInput 의 유니코드 입력. 한글도 한/영 상태와 상관없이 들어간다).
     관리자 권한으로 띄운 창에는 입력되지 않는다 (Windows 가 막는다).
-  - Mac: 클립보드에 넣고 Cmd+V 로 붙여 넣은 뒤 클립보드를 되돌린다.
+  - Mac: 클립보드에 넣고 Cmd+V 로 붙여 넣은 뒤 Enter, 클립보드를 되돌린다.
     처음 한 번 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용 에서 "LLM Deck" 을 허용해야 한다.
 결과는 기기 화면에 짧은 알림으로 보낸다 (pending_toast).
 """
@@ -57,6 +57,7 @@ def _type_windows(text: str) -> str | None:
     INPUT_KEYBOARD = 1
     KEYEVENTF_KEYUP = 0x0002
     KEYEVENTF_UNICODE = 0x0004
+    VK_RETURN = 0x0D
 
     class KEYBDINPUT(ctypes.Structure):
         _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
@@ -82,6 +83,11 @@ def _type_windows(text: str) -> str | None:
             item = INPUT(type=INPUT_KEYBOARD)
             item.ki = KEYBDINPUT(wVk=0, wScan=code, dwFlags=flags, time=0, dwExtraInfo=0)
             inputs.append(item)
+    # 마지막에 Enter (보통 키로: 유니코드 입력의 줄바꿈은 프로그램마다 다르게 받는다)
+    for flags in (0, KEYEVENTF_KEYUP):
+        item = INPUT(type=INPUT_KEYBOARD)
+        item.ki = KEYBDINPUT(wVk=VK_RETURN, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0)
+        inputs.append(item)
     array = (INPUT * len(inputs))(*inputs)
     sent = ctypes.windll.user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT))
     if sent != len(inputs):
@@ -93,7 +99,8 @@ def _type_mac(text: str) -> str | None:
     before = subprocess.run(["pbpaste"], capture_output=True).stdout
     subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
     result = subprocess.run(
-        ["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down'],
+        ["osascript", "-e", 'tell application "System Events"', "-e", 'keystroke "v" using command down',
+         "-e", "delay 0.1", "-e", "key code 36", "-e", "end tell"],
         capture_output=True, text=True, timeout=10)
     time.sleep(0.3)  # 붙여 넣기가 끝난 뒤 클립보드를 되돌린다
     subprocess.run(["pbcopy"], input=before)

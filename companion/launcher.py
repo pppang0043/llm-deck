@@ -8,16 +8,24 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 
 # 이름 -> (기기에 보일 이름 + 조사, Windows 실행 이름, Mac 앱 이름)
 APPS = {
     "excel": ("엑셀을", "excel", "Microsoft Excel"),
     "powerpoint": ("파워포인트를", "powerpnt", "Microsoft PowerPoint"),
     "orca": ("ORCA를", "Orca", "Orca"),
+    "powershell": ("파워쉘을", "powershell", None),
+    "powershell_admin": ("관리자 파워쉘을", "powershell", None),
 }
+# 관리자 권한으로 여는 것 (Windows 가 "허용하시겠습니까?" 를 묻는다. PC 에서 직접 눌러야 열린다)
+ADMIN = {"powershell_admin"}
 # App Paths 에 등록하지 않는 프로그램이 사용자 폴더에 깔리는 자리 (Windows)
 WIN_PATHS = {
     "Orca": [r"%LOCALAPPDATA%\Programs\orca\Orca.exe"],
+    # 새 PowerShell(7) 이 깔려 있으면 그것을, 없으면 Windows 에 들어 있는 것을 연다
+    "powershell": [r"%ProgramFiles%\PowerShell\7\pwsh.exe",
+                   r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"],
 }
 
 
@@ -58,18 +66,32 @@ class Launcher:
             self.pending_toast = "PC 도우미가 모르는 버튼입니다\n도우미를 새로 깔아 주세요"
             return
         label, win_name, mac_name = app
-        ok = self._open(win_name, mac_name)
-        print(f"[launch] {label} {'열었습니다' if ok else '열지 못했습니다'}")
-        self.pending_toast = f"{label} 열었습니다" if ok else f"{label} 열지 못했습니다\n설치되어 있는지 확인하세요"
+        if sys.platform != "win32" and mac_name is None:
+            self.pending_toast = f"{label} 열 수 없습니다\nWindows 에서만 됩니다"
+            return
+        admin = name in ADMIN
+
+        # 관리자 권한은 사용자가 PC 에서 "예" 를 누를 때까지 기다리므로, 기기와 주고받는 일을 막지 않게 따로 연다
+        def run() -> None:
+            ok = self._open(win_name, mac_name, admin)
+            print(f"[launch] {label} {'열었습니다' if ok else '열지 못했습니다'}")
+            if ok:
+                self.pending_toast = f"{label} 열었습니다"
+            else:
+                self.pending_toast = f"{label} 열지 못했습니다\n" + (
+                    "PC 에서 허용하지 않았습니다" if admin else "설치되어 있는지 확인하세요")
+
+        threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
-    def _open(win_name: str, mac_name: str) -> bool:
+    def _open(win_name: str, mac_name: str | None, admin: bool = False) -> bool:
         try:
             if sys.platform == "win32":
                 path = _app_path(win_name)
                 if not path:
                     return False
-                os.startfile(path)  # noqa: S606 (APPS 에 적은 프로그램만)
+                # 관리자 권한은 "runas": Windows 가 사용자에게 허용을 묻는다 (거절하면 OSError)
+                os.startfile(path, "runas" if admin else "open")  # noqa: S606 (APPS 에 적은 프로그램만)
                 return True
             elif sys.platform == "darwin":
                 result = subprocess.run(["open", "-a", mac_name], capture_output=True, timeout=10)

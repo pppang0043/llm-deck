@@ -3,18 +3,20 @@
 #include <ArduinoJson.h>
 #include <lvgl.h>
 
-// PC 와 함께 쓰는 화면 세 개. 프로그램·키워드는 PC 도우미가 정해 둔 것만 연다·입력한다
+// PC 와 함께 쓰는 화면 두 개. 단축키는 PC 도우미가 정해 둔 것만 연다·입력한다
 // (기기가 아무 명령·글이나 보내지 못하게).
-//  - 프로그램: 누르면 사용 중인 PC 에서 프로그램을 연다 (엑셀, 파워포인트, ORCA).
-//  - 키워드: 누르면 PC 에서 지금 커서가 있는 곳에 정해 둔 글을 입력한다 (커밋해줘 등).
+//  - 단축키: 왼쪽 끝 칸에서 "프로그램" / "키워드" 를 고른다.
+//      프로그램: 누르면 사용 중인 PC 에서 연다 (엑셀, 파워포인트, ORCA, 파워쉘, 관리자 파워쉘).
+//      키워드: 누르면 PC 에서 지금 커서가 있는 곳에 정해 둔 글을 입력하고 Enter 를 누른다 (커밋해줘 등).
 //  - PC 상태: 사용 중인 PC 의 CPU, 메모리, 디스크, 네트워크. 화면이 보이는 동안만 PC 가 3초마다 보내 준다.
 
-// 세 화면을 만든다 (ui.cpp 가 부른다). 처음에는 숨겨져 있다.
+// 두 화면을 만든다 (ui.cpp 가 부른다). 처음에는 숨겨져 있다.
 void pcpanel_build(lv_obj_t *parent);
 // 화면 크기가 바뀌면 (돌리기) 다시 배치한다. 상태줄 아래 영역.
 void pcpanel_layout(int x, int y, int w, int h);
-void pcpanel_show_programs(bool on);
-void pcpanel_show_keywords(bool on);
+void pcpanel_show_shortcuts(bool on);
+// 단축키 화면에서 고를 묶음: 0 = 프로그램, 1 = 키워드
+void pcpanel_select_shortcuts(int page);
 void pcpanel_show_status(bool on);
 bool pcpanel_status_visible();
 
