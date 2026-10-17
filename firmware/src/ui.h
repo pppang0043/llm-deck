@@ -32,6 +32,7 @@ void ui_show_home();
 void ui_set_home_actions(void (*open_camera)(), void (*cycle_brightness)());
 // 정보 화면이 보이는 중인지, 그 내용
 bool ui_info_visible();
+bool ui_settings_visible();
 // 모든 화면 위에 잠깐 뜨는 알림 (ms 뒤에 사라진다)
 void ui_toast(const char *text, uint32_t ms = 4000);
 

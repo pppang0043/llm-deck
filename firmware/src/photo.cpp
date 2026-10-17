@@ -6,6 +6,7 @@
 
 #include "ble_link.h"
 #include "link.h"
+#include "settings.h"
 #include "storage.h"
 #include "usb_link.h"
 
@@ -106,7 +107,7 @@ const char *photo_save(uint8_t *jpg, size_t len) {
 
   char path[56];
   snprintf(path, sizeof(path), "/photos/%s", name);
-  bool on_sd = storage_write(path, jpg, len);
+  bool on_sd = settings_sd_photos() && storage_write(path, jpg, len);
 
   // Wi-Fi 로 받아 갈 수 있게 마지막 사진으로 둔다 (원본은 아래에서 PC 전송에 쓴다)
   uint8_t *copy = (uint8_t *)ps_malloc(len);

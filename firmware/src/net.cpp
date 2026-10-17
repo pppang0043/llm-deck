@@ -136,6 +136,22 @@ void net_add_wifi(const char *ssid, const char *password) {
   Serial.printf("[net] wifi added: %s (%u saved)\n", ssid, (unsigned)list.size());
 }
 
+String net_saved_names() {
+  String out;
+  if (strlen(WIFI_SSID) > 0) out = WIFI_SSID;
+  for (JsonObjectConst wifi : saved.as<JsonArrayConst>()) {
+    const char *name = wifi["s"] | "";
+    if (strcmp(name, WIFI_SSID) == 0) continue;
+    if (out.length()) out += "\n";
+    out += name;
+  }
+  return out;
+}
+
+int net_added_count() {
+  return saved.size();
+}
+
 void net_clear_wifi() {
   saved.to<JsonArray>();
   store_saved();

@@ -11,6 +11,7 @@
 #define BLE_NAME "LLM-Deck"
 
 void ble_link_init();
+// 사용 중인 PC 가 있는지
 bool ble_link_connected();
 // 끄면 연결을 끊고 광고(다른 기기가 찾을 수 있게 알리기)를 멈춘다
 void ble_link_set_enabled(bool on);
@@ -20,3 +21,14 @@ void ble_send_event(const char *json);
 size_t ble_photo_chunk_max();
 // 보내기 버퍼가 비기를 기다리며 보낸다. 연결이 끊기면 false.
 bool ble_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len);
+bool ble_link_enabled();
+
+// 여러 PC 동시 연결. slot 은 0 ~ BLE_MAX_PEERS-1.
+#define BLE_MAX_PEERS 3
+// 그 자리의 상태: 0 비어 있음, 1 기다리는 중, 2 사용 중. name 에 PC 이름(모르면 주소)을 넣는다.
+int ble_peer_get(int slot, char *name, size_t size);
+int ble_peer_count();
+// 이 PC 를 사용 중으로 바꾼다 (마이크·사진·알림이 이 PC 로 간다). 다음에 다시 붙어도 이 PC 를 먼저 쓴다.
+void ble_peer_select(int slot);
+// 이 PC 와의 연결을 끊는다
+void ble_peer_disconnect(int slot);

@@ -16,3 +16,8 @@ void net_add_wifi(const char *ssid, const char *password);
 void net_clear_wifi();
 // Wi-Fi 를 켜고 끈다 (설정에서 Wi-Fi 와 클라우드를 모두 끄면 끈다)
 void net_set_enabled(bool on);
+// 등록된 Wi-Fi 이름들 (줄바꿈으로 구분, secrets.h 의 것이 먼저). 설정 화면에 보여준다.
+#include <Arduino.h>
+String net_saved_names();
+// PC 도우미로 추가한 Wi-Fi 개수 (secrets.h 의 것은 빼고)
+int net_added_count();

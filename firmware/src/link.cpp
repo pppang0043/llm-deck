@@ -36,6 +36,7 @@
 static SemaphoreHandle_t lock;
 static std::string pending;
 static Link pending_from = LINK_NONE;
+static bool pending_usage = true;
 
 static volatile Link active = LINK_NONE;
 static uint32_t last_ms = 0;
@@ -146,19 +147,27 @@ void link_init(void (*set_mic)(bool on)) {
   }
 }
 
-void link_submit(Link from, const char *data, size_t len) {
+void link_submit(Link from, const char *data, size_t len, bool usage) {
   xSemaphoreTake(lock, portMAX_DELAY);
+  // 사용량을 쓰지 않을 메시지가 아직 처리 안 된 사용량 메시지를 덮어쓰지 않게 한다
+  if (!usage && !pending.empty() && pending_usage) {
+    xSemaphoreGive(lock);
+    return;
+  }
   pending.assign(data, len);
   pending_from = from;
+  pending_usage = usage;
   xSemaphoreGive(lock);
 }
 
 void link_loop() {
   std::string message;
   Link from;
+  bool usage;
   xSemaphoreTake(lock, portMAX_DELAY);
   message.swap(pending);
   from = pending_from;
+  usage = pending_usage;
   xSemaphoreGive(lock);
 
   // USB 로 온 {"links": {"usb": true, "ble": false, ...}} 는 연결 방식 설정을 바꾼다. USB 를 꺼 둔 상태에서도
@@ -228,13 +237,22 @@ void link_loop() {
       if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
       if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
       if (doc["wifi_clear"] | false) net_clear_wifi();
-      if (doc["services"].is<JsonArrayConst>() && from == active) {
+      if (doc["services"].is<JsonArrayConst>() && !usage) {
+        static uint32_t told_ms = 0;
+        if (!told_ms || millis() - told_ms > 60000) {
+          told_ms = millis();
+          Serial.printf("[link] usage from standby Bluetooth PC %s ignored\n", doc["host"] | "?");
+        }
+      }
+      if (doc["ble_use"].is<int>()) ble_peer_select(doc["ble_use"]);
+      if (doc["services"].is<JsonArrayConst>() && from == active && usage) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);
         alerts_check(services);
         shown.clear();
         serializeJson(services, shown);
-        Serial.printf("[link] usage via %s: %u services\n", link_tag(from), (unsigned)services.size());
+        Serial.printf("[link] usage via %s: %u services (%s)\n", link_tag(from), (unsigned)services.size(),
+                      doc["host"] | "?");
       }
     }
   }

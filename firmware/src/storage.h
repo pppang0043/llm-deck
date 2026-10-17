@@ -6,3 +6,13 @@
 bool storage_ready();
 // 파일을 쓴다. path 는 카드 안의 경로 (예: "/photos/IMG_1.jpg"). 폴더는 알아서 만든다.
 bool storage_write(const char *path, const uint8_t *data, size_t len);
+
+// 설정 화면용
+// 카드 크기·사용량 (MB). 카드가 없으면 false.
+bool storage_info(uint32_t *total_mb, uint32_t *used_mb);
+// 폴더 안의 파일 수 (카드가 없으면 -1)
+int storage_count(const char *dir);
+// 폴더 안의 파일을 모두 지운다. 지운 개수를 돌려준다.
+int storage_clear(const char *dir);
+// 카드를 다시 찾는다 (방금 꽂았을 때). 10초 기다림 없이 바로.
+bool storage_recheck();

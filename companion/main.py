@@ -22,6 +22,7 @@
 import argparse
 import getpass
 import json
+import platform
 import socket
 import sys
 import time
@@ -99,7 +100,15 @@ def collect_all(cfg: dict) -> dict:
             services.append(result)
     # 기기에는 시계가 없어서(Wi-Fi 가 없으면 시각을 모른다) 보낼 때마다 현재 시각을 알려준다
     clock = {"now": int(time.time()), "utc_offset": time.localtime().tm_gmtoff}
-    return {"updated": datetime.now().strftime("%H:%M"), "services": services, **clock, **extra}
+    # 기기의 블루투스 설정 화면에 여러 PC 를 이름으로 보여주려고 이 PC 이름을 함께 보낸다
+    return {"updated": datetime.now().strftime("%H:%M"), "services": services, "host": _host_name(), **clock, **extra}
+
+
+def _host_name() -> str:
+    name = platform.node().removesuffix(".local") or "PC"
+    # 기기 쪽 글꼴에 없는 글자나 따옴표가 섞이지 않게 영문·숫자·-_ 만 남긴다
+    name = "".join(c for c in name if c.isascii() and (c.isalnum() or c in "-_ "))
+    return name[:31] or "PC"
 
 
 _instance_lock = None
@@ -108,7 +117,7 @@ _instance_lock = None
 def claim_device() -> bool:
     """기기에 붙는 도우미는 PC 에 하나만 돈다. 이미 돌고 있으면 False.
 
-    블루투스 연결은 기기가 하나만 받고 USB 포트도 한 프로그램만 열 수 있어서, 두 번째 도우미는
+    USB 포트는 한 프로그램만 열 수 있고 같은 PC 에서 블루투스로 두 번 붙을 수도 없어서, 두 번째 도우미는
     기기를 "찾지 못했다"고만 나온다. 그 대신 무엇이 문제인지 알려 주려고 PC 안에서만 쓰는 포트를 잡는다.
     """
     global _instance_lock
@@ -175,7 +184,10 @@ def main() -> None:
                         help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
     parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
     parser.add_argument("--links", metavar="usb=on,ble=off", help="기기의 연결 방식 켜고 끄기 (USB 로 연결했을 때만)")
-    parser.add_argument("--view", choices=["home", "usage", "info", "settings", "settings_end"], help="기기 화면 바꾸기")
+    parser.add_argument("--view", metavar="화면",
+                        help="기기 화면 바꾸기: home / usage / info / settings, 설정 분류는 settings_wifi / settings_bluetooth / "
+                             "settings_notify / settings_display / settings_battery / settings_camera / settings_sd / "
+                             "settings_general (settings_end 는 지금 화면의 맨 아래)")
     parser.add_argument("--saver", action="store_true", help="기기의 화면 보호기를 지금 띄운다 (화면을 만지면 사라짐)")
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")

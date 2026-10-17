@@ -84,30 +84,32 @@ static void build_pages(JsonObjectConst shared, JsonArray services) {
   }
 }
 
-static void fetch(const char *from);
+#define RETRY_MS 20000
+static bool fetch(const char *from);
 
-static void poll(const char *from) {
+static bool poll(const char *from) {
   // HTTPS(mbedTLS)는 내부 RAM 에서만 수십 KB 를 쓰므로, 카메라용으로 잡아 둔 자리를 잠깐 빌린다
   camera_lend_reserve(true);
-  fetch(from);
+  bool ok = fetch(from);
   camera_lend_reserve(false);
+  return ok;
 }
 
-static void fetch(const char *from) {
+static bool fetch(const char *from) {
   NetworkClientSecure client;
   // 화면에 보여줄 사용률 숫자만 읽으므로 서버 인증서 검증은 생략한다
   client.setInsecure();
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(8000);
-  if (!http.begin(client, from)) return;
+  if (!http.begin(client, from)) return false;
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     Serial.printf("[cloud] fetch failed: %d (internal free %u, largest %u)\n", code,
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     http.end();
-    return;
+    return false;
   }
   String body = http.getString();
   http.end();
@@ -115,13 +117,14 @@ static void fetch(const char *from) {
   JsonDocument shared(PSRAM_JSON);
   if (deserializeJson(shared, body) || !shared.is<JsonObjectConst>()) {
     Serial.println("[cloud] bad data");
-    return;
+    return false;
   }
   JsonDocument message(PSRAM_JSON);
   build_pages(shared.as<JsonObjectConst>(), message["services"].to<JsonArray>());
   String out;
   serializeJson(message, out);
   link_submit(LINK_CLOUD, out.c_str(), out.length());
+  return true;
 }
 
 static void cloud_task(void *) {
@@ -145,7 +148,8 @@ static void cloud_task(void *) {
     if (polled && millis() - last_ms < POLL_MS) continue;
     polled = true;
     last_ms = millis();
-    poll(from);
+    // 실패하면(블루투스가 막 끊겨 메모리가 아직 정리 중일 때 등) 20초 뒤에 다시 해 본다
+    if (!poll(from)) last_ms = millis() - POLL_MS + RETRY_MS;
   }
 }
 

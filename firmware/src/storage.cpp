@@ -1,6 +1,7 @@
 #include "storage.h"
 
 #include <SD.h>
+#include <vector>
 
 #include "display.h"
 #include "pins.h"
@@ -40,4 +41,53 @@ bool storage_write(const char *path, const uint8_t *data, size_t len) {
   }
   Serial.printf("[sd] saved %s (%u bytes)\n", path, (unsigned)len);
   return true;
+}
+
+bool storage_info(uint32_t *total_mb, uint32_t *used_mb) {
+  if (!storage_ready()) return false;
+  *total_mb = SD.totalBytes() / (1024 * 1024);
+  *used_mb = SD.usedBytes() / (1024 * 1024);
+  return true;
+}
+
+int storage_count(const char *dir) {
+  if (!storage_ready()) return -1;
+  File d = SD.open(dir);
+  if (!d || !d.isDirectory()) return 0;
+  int n = 0;
+  for (File f = d.openNextFile(); f; f = d.openNextFile()) {
+    if (!f.isDirectory()) n++;
+    f.close();
+  }
+  d.close();
+  return n;
+}
+
+int storage_clear(const char *dir) {
+  if (!storage_ready()) return 0;
+  File d = SD.open(dir);
+  if (!d || !d.isDirectory()) return 0;
+  // 지우면서 목록을 읽으면 건너뛰는 파일이 생길 수 있어, 이름을 먼저 모은 뒤 지운다
+  std::vector<String> names;
+  for (File f = d.openNextFile(); f; f = d.openNextFile()) {
+    if (!f.isDirectory()) names.push_back(String(dir) + "/" + f.name());
+    f.close();
+  }
+  d.close();
+  int n = 0;
+  for (const String &path : names) {
+    if (SD.remove(path)) n++;
+  }
+  Serial.printf("[sd] removed %d files in %s\n", n, dir);
+  return n;
+}
+
+bool storage_recheck() {
+  if (mounted) {
+    // 카드를 뺐다 꽂았을 수 있으니 처음부터
+    SD.end();
+    mounted = false;
+  }
+  tried_ms = 0;
+  return storage_ready();
 }

@@ -136,7 +136,10 @@ static void rotate_btn_event(lv_event_t *e) {
 
 static void screen_gesture(lv_event_t *e) {
   // 어디서든 오른쪽으로 밀면 홈으로
-  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_RIGHT && view != VIEW_HOME) ui_show_home();
+  // 설정의 분류 화면에서는 먼저 목록으로 돌아간다 (아이폰의 뒤로 가기처럼)
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_RIGHT || view == VIEW_HOME) return;
+  if (view == VIEW_SETTINGS && settings_back()) return;
+  ui_show_home();
 }
 
 static void home_icon_event(lv_event_t *e) {
@@ -269,7 +272,6 @@ static void apply_view() {
   }
   if (view == VIEW_SETTINGS) {
     settings_refresh();
-    lv_obj_scroll_to_y(settings_panel, 0, LV_ANIM_OFF);
     lv_obj_clear_flag(settings_panel, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(settings_panel, LV_OBJ_FLAG_HIDDEN);
@@ -279,6 +281,10 @@ static void apply_view() {
 void ui_show_home() {
   view = VIEW_HOME;
   apply_view();
+}
+
+bool ui_settings_visible() {
+  return view == VIEW_SETTINGS;
 }
 
 bool ui_info_visible() {
@@ -576,12 +582,12 @@ void ui_show(const char *name) {
     view = VIEW_USAGE;
   } else if (strcmp(name, "info") == 0) {
     view = VIEW_INFO;
-  } else if (strcmp(name, "settings") == 0 || strcmp(name, "settings_end") == 0) {
+  } else if (strncmp(name, "settings", 8) == 0) {
     view = VIEW_SETTINGS;
   }
   apply_view();
-  // 진단용: 설정 화면 아래쪽까지 보려고 끝으로 내린다
-  if (strcmp(name, "settings_end") == 0) lv_obj_scroll_to_y(settings_panel, LV_COORD_MAX, LV_ANIM_OFF);
+  // "settings_sd", "settings_bluetooth" 처럼 분류 화면을 바로 연다. "settings_end" 는 맨 아래로.
+  if (strncmp(name, "settings_", 9) == 0) settings_open(name + 9);
 }
 
 bool ui_screenshot(uint16_t **pixels, int *w, int *h) {

@@ -231,6 +231,7 @@ void loop() {
   show_clock();
   camera_ui_loop();
   show_info();
+  if (ui_settings_visible()) settings_loop();
   power_save();
   saver_loop();
 

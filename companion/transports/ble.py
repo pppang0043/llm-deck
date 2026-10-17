@@ -1,6 +1,7 @@
 """블루투스(BLE)로 통신한다. 형식은 펌웨어의 ble_link.h 참고."""
 
 import asyncio
+import concurrent.futures
 import json
 import struct
 import threading
@@ -47,6 +48,10 @@ class BleTransport:
             return False
         except (BleakError, OSError) as e:
             print(f"[Bluetooth] 연결 실패: {e}")
+            return False
+        except (asyncio.CancelledError, concurrent.futures.CancelledError):
+            # Windows 는 연결이 늦으면 bleak 이 안에서 취소하고 끝낸다. 다음 차례에 다시 시도한다.
+            print("[Bluetooth] 연결이 중간에 취소되었습니다. 다시 시도합니다.")
             return False
 
     async def _connect(self) -> bool:
