@@ -79,6 +79,8 @@ struct Confirm {
 static Confirm restart_btn = {nullptr, "재시작", 0};
 static Confirm wifi_clear_btn = {nullptr, "지우기", 0};
 static Confirm sd_clear_btn = {nullptr, "지우기", 0};
+static Confirm sd_format_btn = {nullptr, "포맷", 0};
+static lv_obj_t *sd_format_row;
 
 static bool confirmed(Confirm &c) {
   if (c.armed_ms && millis() - c.armed_ms < 3000) {
@@ -314,6 +316,7 @@ static void show_page(Page page) {
   disarm(restart_btn);
   disarm(wifi_clear_btn);
   disarm(sd_clear_btn);
+  disarm(sd_format_btn);
   refresh_page();
 }
 
@@ -500,6 +503,15 @@ static void sd_recheck_clicked(lv_event_t *e) {
   ui_toast(ok ? "SD 카드를 찾았습니다" : "SD 카드가 없습니다", 2000);
 }
 
+static void sd_format_clicked(lv_event_t *e) {
+  if (!confirmed(sd_format_btn)) return;
+  ui_toast("SD 카드를 포맷하는 중...", 30000);
+  lv_refr_now(NULL);
+  bool ok = storage_format();
+  refresh_page();
+  ui_toast(ok ? "SD 카드를 FAT32로 포맷했습니다" : "포맷하지 못했습니다\n카드가 꽂혀 있는지 확인하세요", 3000);
+}
+
 static void sd_clear_clicked(lv_event_t *e) {
   if (!confirmed(sd_clear_btn)) return;
   int n = storage_clear("/photos");
@@ -642,7 +654,9 @@ static void build_sd(lv_obj_t *parent) {
   add_button(add_row(p, "다시 찾기", "카드를 방금 꽂았을 때"), "찾기", sd_recheck_clicked, nullptr);
   add_button(add_row(p, "사진 모두 지우기", "카드의 /photos"), "지우기", sd_clear_clicked, &sd_clear_btn.label,
              true);
-  add_note(p, "FAT32로 포맷한 microSD 카드를 씁니다. 동영상은 카드에 저장하지 않습니다.");
+  sd_format_row = add_row(p, "카드 포맷", "읽을 수 없을 때, 내용 지워짐");
+  add_button(sd_format_row, "포맷", sd_format_clicked, &sd_format_btn.label, true);
+  add_note(p, "FAT32 형식 카드만 읽습니다. 64GB 이상 카드는 보통 exFAT라서 \"카드 포맷\"이 필요합니다. 동영상은 카드에 저장하지 않습니다.");
 }
 
 static void build_general(lv_obj_t *parent) {
@@ -773,14 +787,16 @@ static void refresh_live() {
 static void refresh_sd(bool count) {
   uint32_t total, used;
   if (!storage_info(&total, &used)) {
-    set_text(sd_status, "카드 없음");
+    set_text(sd_status, "없음 또는 FAT32 아님");
+    if (sd_format_row) lv_obj_clear_flag(sd_format_row, LV_OBJ_FLAG_HIDDEN);
     set_text(sd_space, "-");
     set_text(sd_count, "-");
-    set_text(sd_value, "없음");
+    set_text(sd_value, "읽을 수 없음");
     return;
   }
   char buf[40];
   set_text(sd_status, "사용 가능");
+  if (sd_format_row) lv_obj_add_flag(sd_format_row, LV_OBJ_FLAG_HIDDEN);
   if (total >= 1024) {
     snprintf(buf, sizeof(buf), "%.1f / %.1fGB", used / 1024.0f, total / 1024.0f);
   } else {

@@ -91,3 +91,17 @@ bool storage_recheck() {
   tried_ms = 0;
   return storage_ready();
 }
+
+bool storage_format() {
+  // 읽을 수 없는 카드(exFAT 등, 64GB 이상 카드의 기본 형식)만 FAT32 로 포맷한다. 이미 읽히는 카드는 건드리지 않는다.
+  if (mounted) return true;
+  bool ok = SD.begin(SD_CS, display_spi(), 20000000, "/sd", 5, true);
+  if (ok) {
+    mounted = true;
+    Serial.printf("[sd] formatted, %llu MB\n", SD.totalBytes() / (1024 * 1024));
+  } else {
+    Serial.println("[sd] format failed (no card?)");
+  }
+  tried_ms = millis();
+  return ok;
+}
