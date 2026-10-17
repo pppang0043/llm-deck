@@ -21,7 +21,9 @@
 
 #define SLEEP_AFTER_MS 30000    // 항상 연결이 꺼져 있으면 마지막 소리 뒤 이만큼 지나 쉰다
 #define FIND_MS 60000           // 찾기는 이만큼 하고 끝낸다 (그동안 목록에서 고른다)
-#define PENDING_TIMEOUT_MS 25000 // 이 안에 연결이 안 되면 기다리던 소리는 버린다
+// 이 안에 연결이 안 되면 기다리던 소리는 버린다. 마이크 소리는 늦게 나면 오히려 헷갈리므로 짧게.
+#define PENDING_TIMEOUT_MS 25000
+#define PENDING_MIC_TIMEOUT_MS 6000
 #define SETTLE_MS 800           // 연결 직후 스피커가 소리를 받을 준비가 될 때까지
 
 enum Mode : uint8_t { MODE_OFF, MODE_CONNECT, MODE_FIND };
@@ -415,7 +417,8 @@ void loop() {
     } else {
       if (connected_since) Serial.println("[spk] disconnected");
       connected_since = 0;
-      if (pending_sound && now - pending_since > PENDING_TIMEOUT_MS) {
+      bool mic = pending_sound == SPK_SOUND_MIC_ON || pending_sound == SPK_SOUND_MIC_OFF;
+      if (pending_sound && now - pending_since > (mic ? PENDING_MIC_TIMEOUT_MS : PENDING_TIMEOUT_MS)) {
         Serial.println("[spk] speaker not reachable, drop sound");
         pending_sound = 0;
       }
