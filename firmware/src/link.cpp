@@ -18,6 +18,7 @@
 
 #include "camera.h"
 #include "display.h"
+#include "health.h"
 #include "camera_ui.h"
 #include "mic.h"
 #include "photo.h"
@@ -232,6 +233,8 @@ void link_loop() {
         camera_set_mount(doc["camera_mount"]["rot"] | 0, doc["camera_mount"]["mirror"] | false);
       }
       if (doc["saver"] == true) saver_demo();
+      // 진단용: I2C 데이터 선을 잠깐 낮게 잡아 막힌 상황을 만든다 (막힘 풀기가 동작하는지 본다)
+      if (doc["i2c_test"] == true) display_i2c_test();
       // 진단용: 화면 돌리기 버튼을 누른 것과 같다
       if (doc["rotate"] == true && rotate_cb) rotate_cb();
       if (doc["photo_test"] == true) {
@@ -260,6 +263,14 @@ void link_loop() {
         if (storage_read_last("/videos", name, sizeof(name), &data, &len)) photo_send_file(name, data, len);
       }
       // 진단용: SD 카드의 사진을 모두 지운다 (케이블로 연결한 PC 에서만)
+      // 진단용(USB 만): 일부러 프로그램을 멈춰 재시작 원인 기록이 되는지 본다
+      if (doc["health_clear"] == true && from == LINK_USB) health_clear();
+      if (doc["crash_test"] == true && from == LINK_USB) {
+        Serial.println("[health] crash test");
+        Serial.flush();
+        delay(100);
+        abort();
+      }
       if (doc["sd_clear"] == true && from == LINK_USB) {
         storage_clear("/photos");
         storage_clear("/videos");

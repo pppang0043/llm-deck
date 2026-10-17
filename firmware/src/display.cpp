@@ -49,10 +49,66 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
   lv_disp_flush_ready(drv);
 }
 
+// I2C 선 막힘 풀기. 터치 칩, 기울기 센서, 스피커 모듈이 한 선을 쓰는데, 어느 기기가 데이터 선(SDA)을
+// 낮게 잡은 채 멈추면 모두 대답이 없어진다. 시계 선(SCL)을 직접 9번 흔들어 놓아주게 한 뒤 다시 연다.
+#define IMU_ADDR 0x6B
+#define TOUCH_FAIL_LIMIT 30  // 터치를 이만큼 연달아 못 읽으면 (약 1초) 선을 살펴본다
+
+static bool bus_alive() {
+  // 기울기 센서는 늘 대답하므로, 이것도 대답이 없으면 선이 막힌 것으로 본다
+  Wire.beginTransmission(IMU_ADDR);
+  return Wire.endTransmission(true) == 0;
+}
+
+static void recover_bus() {
+  Wire.end();
+  pinMode(TP_SDA, INPUT_PULLUP);
+  pinMode(TP_SCL, OUTPUT_OPEN_DRAIN);
+  for (int i = 0; i < 9 && digitalRead(TP_SDA) == LOW; i++) {
+    digitalWrite(TP_SCL, LOW);
+    delayMicroseconds(5);
+    digitalWrite(TP_SCL, HIGH);
+    delayMicroseconds(5);
+  }
+  // 멈춤(STOP) 신호: SCL 이 높을 때 SDA 를 낮음에서 높음으로
+  pinMode(TP_SDA, OUTPUT_OPEN_DRAIN);
+  digitalWrite(TP_SDA, LOW);
+  delayMicroseconds(5);
+  digitalWrite(TP_SCL, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(TP_SDA, HIGH);
+  delayMicroseconds(5);
+  Wire.begin(TP_SDA, TP_SCL);
+}
+
+static void watch_bus(bool ok) {
+  static int fails = 0;
+  static uint32_t checked_ms = 0;
+  if (ok) {
+    fails = 0;
+    return;
+  }
+  if (++fails < TOUCH_FAIL_LIMIT || millis() - checked_ms < 5000) return;
+  fails = 0;
+  checked_ms = millis();
+  if (bus_alive()) return;  // 터치 칩만 잠깐 대답을 안 한 것
+  Serial.println("[i2c] bus stuck, recovering");
+  recover_bus();
+  Serial.printf("[i2c] %s\n", bus_alive() ? "recovered" : "still stuck");
+}
+
+void display_i2c_test() {
+  Serial.println("[i2c] test: holding SDA low");
+  pinMode(TP_SDA, OUTPUT);
+  digitalWrite(TP_SDA, LOW);
+}
+
 static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   // [0]=손가락 수, [1..2]=X, [3..4]=Y
   uint8_t raw[5];
-  bool down = touch_read_reg(CST816_REG_TOUCH, raw, sizeof(raw)) && raw[0] > 0;
+  bool read_ok = touch_read_reg(CST816_REG_TOUCH, raw, sizeof(raw));
+  watch_bus(read_ok);
+  bool down = read_ok && raw[0] > 0;
   if (down) touched_ms = millis();
   if (down && sleeping) swallow = true;
   if (swallow) {

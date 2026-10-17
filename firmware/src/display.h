@@ -29,3 +29,6 @@ void display_set_brightness(uint8_t pct);
 
 // 화면과 SD 카드가 같이 쓰는 SPI
 SPIClass &display_spi();
+
+// 진단용: I2C 데이터 선을 낮게 잡아 막힌 것처럼 만든다. 터치가 1초쯤 안 읽히다가 스스로 풀려야 한다 ([i2c] 로그).
+void display_i2c_test();

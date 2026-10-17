@@ -22,12 +22,41 @@ struct __attribute__((packed)) Packet {
   int16_t pcm[MIC_FRAME_SAMPLES];
 };
 
+// 마이크 장치(I2S)는 켤 때만 연다. 열어 두면 받는 칸(DMA)이 내부 RAM 을 8KB 남짓 차지한다.
+// 열고 닫기는 이 작업 안에서만 해서, 읽는 도중에 닫히는 일이 없게 한다.
+static bool open_i2s() {
+  i2s.setPins(MIC_SCK, MIC_WS, -1, MIC_SD);
+  if (!i2s.begin(I2S_MODE_STD, MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT)) {
+    Serial.println("[mic] i2s begin failed");
+    return false;
+  }
+  return true;
+}
+
 static void mic_task(void *) {
   static int32_t raw[MIC_FRAME_SAMPLES];
   static Packet packet;
   uint32_t seq = 0;
+  bool opened = false;
 
   for (;;) {
+    if (on != opened) {
+      if (on) {
+        opened = open_i2s();
+        if (!opened) {
+          vTaskDelay(pdMS_TO_TICKS(1000));
+          continue;
+        }
+      } else {
+        i2s.end();
+        opened = false;
+        level = 0;
+      }
+    }
+    if (!opened) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
     size_t got = i2s.readBytes((char *)raw, sizeof(raw));
     if (got != sizeof(raw) || !on) {
       level = 0;
@@ -66,11 +95,6 @@ static void mic_task(void *) {
 }
 
 void mic_init() {
-  i2s.setPins(MIC_SCK, MIC_WS, -1, MIC_SD);
-  if (!i2s.begin(I2S_MODE_STD, MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT)) {
-    Serial.println("[mic] i2s begin failed");
-    return;
-  }
   xTaskCreatePinnedToCore(mic_task, "mic", 4096, NULL, 5, NULL, 0);
 }
 

@@ -17,6 +17,7 @@
 #include "saver.h"
 #include "sd_video.h"
 #include "settings.h"
+#include "health.h"
 #include "speaker.h"
 #include "video.h"
 #include "pins.h"
@@ -146,7 +147,9 @@ static void show_info() {
   if (!visible || (!just_opened && millis() - checked_ms < 1000)) return;
   checked_ms = millis();
   static const char *LINKS[] = {"없음", "USB", "블루투스", "Wi-Fi", "클라우드"};
-  char text[400];
+  char text[480];
+  char err[64];
+  if (!health_last_error(err, sizeof(err))) strlcpy(err, "없음", sizeof(err));
   int pct = battery_pct();
   char bat[48];
   if (pct < 0) {
@@ -161,11 +164,12 @@ static void show_info() {
            "화면 밝기: %d%%\n"
            "마이크: %s\n"
            "메모리: 내부 %uKB, PSRAM %uKB 남음\n"
-           "켜진 지: %lu분\n"
+           "켜진 지: %lu분 (%s)\n"
+           "오류 재시작: %s\n"
            "펌웨어: " __DATE__ " " __TIME__,
            LINKS[link_active()], WiFi.isConnected() ? WiFi.localIP().toString().c_str() : "연결 안 됨", bat,
            settings_brightness(), mic_is_on() ? "켜짐" : "꺼짐", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
-           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned long)(millis() / 60000));
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned long)(millis() / 60000), health_boot_reason(), err);
   ui_set_info(text);
 }
 
@@ -199,6 +203,7 @@ void setup() {
   usb_link_init();
   Serial.begin(115200);
   pinMode(BTN_BOOT, INPUT_PULLUP);
+  health_init();
   mem_log("start");
 
   display_init();
@@ -264,6 +269,7 @@ void loop() {
   show_clock();
   camera_ui_loop();
   sd_video_loop();
+  health_loop();
   speaker_loop(settings_speaker_page());
   show_info();
   if (ui_settings_visible()) settings_loop();

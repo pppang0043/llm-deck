@@ -8,6 +8,7 @@
 #include "camera.h"
 #include "display.h"
 #include "link.h"
+#include "health.h"
 #include "net.h"
 #include "speaker.h"
 #include "speaker_proto.h"
@@ -76,7 +77,7 @@ static lv_obj_t *ble_status, *ble_none;
 static lv_obj_t *ble_rows[BLE_MAX_PEERS], *ble_names[BLE_MAX_PEERS], *ble_states[BLE_MAX_PEERS];
 static lv_obj_t *bat_level, *bat_state;
 static lv_obj_t *sd_status, *sd_space, *sd_count, *sd_vcount;
-static lv_obj_t *uptime_value;
+static lv_obj_t *uptime_value, *boot_value, *crash_value;
 static lv_obj_t *spk_status, *spk_target, *spk_on_sw, *spk_keep_sw, *spk_vol_lbl, *spk_none, *spk_find_lbl;
 static lv_obj_t *spk_rows[SPK_MAX_FOUND], *spk_names[SPK_MAX_FOUND], *spk_signals[SPK_MAX_FOUND];
 
@@ -801,6 +802,8 @@ static void build_general(lv_obj_t *parent) {
   lv_label_set_text(add_info(p, "이름"), "LLM Deck");
   lv_label_set_text(add_info(p, "펌웨어"), __DATE__ " " __TIME__);
   uptime_value = add_info(p, "켜진 지");
+  boot_value = add_info(p, "켜진 이유");
+  crash_value = add_info(p, "오류 재시작");
   add_button(add_row(p, "기기 재시작", nullptr), "재시작", restart_clicked, &restart_btn.label, true);
 }
 
@@ -977,6 +980,14 @@ static void refresh_live() {
       uint32_t min = millis() / 60000;
       snprintf(buf, sizeof(buf), "%lu시간 %lu분", (unsigned long)(min / 60), (unsigned long)(min % 60));
       set_text(uptime_value, buf);
+      set_text(boot_value, health_boot_reason());
+      // 자세한 것(언제, 무슨 이유로)은 홈의 정보 화면에
+      if (health_error_count()) {
+        snprintf(buf, sizeof(buf), "%lu번 (정보 화면에 자세히)", (unsigned long)health_error_count());
+        set_text(crash_value, buf);
+      } else {
+        set_text(crash_value, "없음");
+      }
       break;
     }
     default:
