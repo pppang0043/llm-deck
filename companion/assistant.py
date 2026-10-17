@@ -4,6 +4,9 @@
       -> 미리 띄워 둔 CLI 에 질문 -> 답을 나오는 대로 기기로 보낸다 {"ask": {"state", "q", "a", "done"}}
       {"ask": "cancel"} 녹음 버리기, {"ask": "new"} 새 대화 (앞 대화를 잊는다)
       {"ask": "stop", "voice": true} 면 답이 다 나온 뒤 이 PC 스피커로 읽어 준다 (speech.py). {"ask": "mute"} 읽기 멈춤
+      읽는 것은 답의 앞 1~2문장(요약)이다. 질문에 "길게", "자세히" 같은 말이 있으면 답 전체를 읽는다.
+받아쓰기: {"ask": "start", "mode": "dictate"} ... {"ask": "stop"} -> 받아 적은 글을 이 PC 의 커서 자리에 입력한다
+      (Claude 에 묻지 않는다, Enter 는 누르지 않는다). 기기 사용량 화면의 버튼이 쓴다.
 
 CLI 는 소리를 받지 못하므로 음성은 먼저 글자로 바꾼다. 소리는 인터넷으로 나가지 않는다.
 CLI 는 질문마다 새로 켜면 2~3초가 더 걸려서, 한 번 띄워 두고(stream-json) 계속 묻는다. 같은 프로세스라 대화도 이어진다.
@@ -21,6 +24,7 @@ import time
 from pathlib import Path
 
 import speech
+import typer
 
 # 먼저 찾는 순서. config.toml 의 [assistant] command 로 정하면 그것만 쓴다.
 COMMANDS = ("claude-test", "claude")
@@ -30,8 +34,11 @@ WORKDIR = Path.home() / ".llm-deck" / "assistant"
 SYSTEM_PROMPT = (
     "너는 작은 휴대 기기 화면(가로 약 20자)에 답을 보여 주는 비서다. 질문은 음성을 받아 적은 것이라 오타가 있을 수 있다. "
     "발음이 비슷한 다른 낱말로 잘못 적혔을 수 있으니(예: 수도 -> 소도), 글자 그대로보다 가장 자연스러운 뜻으로 알아듣고 답하라. "
+    "답의 첫 1~2문장은 그것만 들어도 답이 되는 요약으로 써라 (소리로 읽어 줄 때 이 부분만 읽는다). "
     "한국어로, 핵심만 짧게 답하라. 표·코드 블록·마크다운 기호는 쓰지 말고 짧은 문장이나 줄바꿈으로 나눠라."
 )
+# 질문에 이런 말이 있으면 읽어 줄 때 요약이 아니라 답 전체를 읽는다
+LONG_WORDS = ("길게", "자세히", "자세하게", "전부", "전체", "다 읽어", "풀어서", "길게 말")
 SAMPLE_RATE = 16000
 MAX_RECORD_SECONDS = 60
 # 기기 화면에 보낼 답의 최대 글자 수 (넘으면 뒤를 자른다)
@@ -93,6 +100,18 @@ _NO_AUDIO_REASON = (
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
+def spoken_text(question: str, answer: str) -> str:
+    """소리로 읽을 부분: 보통은 답의 앞 1~2문장, 길게 말해 달라고 했으면 전부."""
+    if any(w in question for w in LONG_WORDS):
+        return answer
+    import re
+
+    # 첫 단락에서 문장 두 개까지 (마침표·물음표·느낌표·줄바꿈으로 나눈다)
+    first = answer.strip().split("\n\n")[0]
+    sentences = [x for x in re.split(r"(?<=[.!?。])\s+|\n+", first) if x.strip()]
+    return " ".join(sentences[:2])
+
+
 class Session:
     """백그라운드에 띄워 둔 CLI 하나. 질문을 넣으면 답이 나오는 대로 on_text 를 부른다."""
 
@@ -135,7 +154,6 @@ class Session:
         raise OSError("CLI 가 끝나 버렸습니다")
 
     def close(self) -> None:
-        self.speaker.stop()
         if self.alive():
             try:
                 self.proc.stdin.close()
@@ -170,6 +188,9 @@ class Assistant:
         # 답을 소리로 읽어 줄지 (기기 질문 화면의 음소거 버튼, 기본은 음소거). PC 음량은 건드리지 않는다.
         self.voice = False
         self.speaker = speech.Speaker(cfg)
+        # 이번 녹음이 받아쓰기인지 (사용량 화면 버튼). 받아쓰기는 Claude 에 묻지 않고 PC 에 입력만 한다.
+        self.dictate = False
+        self.pending_toast: str | None = None  # main.py 가 기기 알림으로 보낸다
         self.state: dict | None = None  # 기기로 보낼 최신 상태
         self.sent: dict | None = None
         self.sent_at = 0.0
@@ -182,6 +203,7 @@ class Assistant:
             # 새로 말하기 시작하면 읽던 답은 끊는다 (마이크에 PC 소리가 들어가지 않게)
             self.speaker.stop()
         if action == "start":
+            self.dictate = event.get("mode") == "dictate"
             self._start()
         elif action == "stop":
             self.voice = bool(event.get("voice"))
@@ -349,7 +371,8 @@ class Assistant:
         try:
             with self.lock:
                 self._load_model()
-                self._open_session()
+                if not self.dictate:  # 받아쓰기는 Claude 를 쓰지 않는다
+                    self._open_session()
         except Exception as e:
             print(f"[assistant] 준비 실패: {e}")
 
@@ -404,7 +427,11 @@ class Assistant:
                 segments, _ = self.model.transcribe(pcm, language=self.cfg.get("language", "ko"), beam_size=1,
                                                     vad_filter=True)
                 question = "".join(s.text for s in segments).strip()
-                print(f"[assistant] 질문 ({len(pcm) / SAMPLE_RATE:.1f}초 녹음, {time.monotonic() - start:.1f}초): {question}")
+                kind = "받아쓰기" if self.dictate else "질문"
+                print(f"[assistant] {kind} ({len(pcm) / SAMPLE_RATE:.1f}초 녹음, {time.monotonic() - start:.1f}초): {question}")
+                if self.dictate:
+                    self._finish_dictation(question)
+                    return
                 if not question:
                     self._set("error", a="알아듣지 못했습니다. 다시 말해 주세요")
                     return
@@ -422,7 +449,7 @@ class Assistant:
                 print(f"[assistant] 답 ({time.monotonic() - start:.1f}초): {answer[:80]}")
                 self._set("done", q=question, a=answer)
                 if self.voice:
-                    self.speaker.speak(answer)
+                    self.speaker.speak(spoken_text(question, answer))
                 self.last_used = time.monotonic()
         except Exception as e:
             print(f"[assistant] 실패: {e}")
@@ -430,11 +457,23 @@ class Assistant:
         finally:
             self.busy = False
 
+    def _finish_dictation(self, text: str) -> None:
+        """받아 적은 글을 PC 의 커서 자리에 입력한다. 결과는 기기 알림으로."""
+        if not text:
+            self._set("idle", mode="dictate")
+            self.pending_toast = "알아듣지 못했습니다\n다시 말해 주세요"
+            return
+        error = typer._type(text, enter=False)
+        self._set("idle", mode="dictate")
+        self.pending_toast = f"입력했습니다: {text[:40]}" if not error else f"입력하지 못했습니다\n{error}"
+
     # --- PC -> 기기 ---
 
-    def _set(self, state: str, q: str = "", a: str = "") -> None:
+    def _set(self, state: str, q: str = "", a: str = "", mode: str | None = None) -> None:
         busy = state in ("preparing", "listening", "thinking")
-        self.state = {"state": state, "q": q[:200], "a": a[:MAX_ANSWER_CHARS], "done": not busy}
+        mode = mode or ("dictate" if self.dictate else "ask")
+        # 받아쓰기는 질문 화면의 질문·답을 바꾸지 않는다 (기기는 mode 를 보고 사용량 화면 버튼에만 보여 준다)
+        self.state = {"state": state, "q": q[:200], "a": a[:MAX_ANSWER_CHARS], "done": not busy, "mode": mode}
 
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다. 오래 안 쓰면 CLI 를 내린다."""
@@ -474,6 +513,7 @@ class Assistant:
     def close(self) -> None:
         # 녹음 중인 쪽이 마이크를 멈추는 동안 닫으면 macOS 오디오가 서로 기다리며 멈춘다 (PortAudio). 끝날 때까지 기다린다.
         self.recording.clear()
+        self.speaker.stop()
         with self._audio_lock:
             self._close_stream()
         with self.lock:

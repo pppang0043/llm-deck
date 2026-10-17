@@ -17,6 +17,8 @@ LV_FONT_DECLARE(font_ko_20);
 
 static lv_obj_t *panel, *state_lbl, *new_btn, *mute_btn, *mute_lbl, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
 static bool talking = false;  // 버튼을 누르고 있는 중
+static bool dictating = false;  // 지금 누른 것이 받아쓰기(사용량 화면 버튼)인지
+static int dictate_step = DICTATE_IDLE;  // 받아쓰기 진행 (PC 가 알려 준다)
 // 답을 PC 스피커로 읽어 줄지. 켤 때마다 음소거(읽지 않음)로 시작한다. PC 음량은 건드리지 않는다.
 static bool voice = false;
 static bool mic_ok = true;    // PC 마이크를 쓸 수 있는지 (PC 가 알려 준다. 모르면 된다고 본다)
@@ -54,15 +56,20 @@ void askpanel_refresh() {
   ui_refresh_talk();
 }
 
-bool askpanel_press() {
+bool askpanel_press(bool dictate) {
   int st = askpanel_talk_state();
   if (st == ASK_NO_PC) ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
   if (st == ASK_NO_MIC) ui_toast("PC에 쓸 수 있는 마이크가 없습니다", 2500);
   if (st != ASK_READY) return false;
-  link_send_event("{\"ask\":\"start\"}");
+  link_send_event(dictate ? "{\"ask\":\"start\",\"mode\":\"dictate\"}" : "{\"ask\":\"start\"}");
   talking = true;
+  dictating = dictate;
   // PC 가 마이크를 열 때까지 (처음엔 몇 초 걸린다). 열리면 PC 가 "듣는 중" 으로 바꾼다
-  lv_label_set_text(state_lbl, "마이크 준비 중...");
+  if (dictate) {
+    dictate_step = DICTATE_PREPARING;
+  } else {
+    lv_label_set_text(state_lbl, "마이크 준비 중...");
+  }
   busy_ms = millis();
   askpanel_refresh();
   return true;
@@ -70,8 +77,9 @@ bool askpanel_press() {
 
 bool askpanel_release() {
   if (!talking) return false;
-  link_send_event(voice ? "{\"ask\":\"stop\",\"voice\":true}" : "{\"ask\":\"stop\"}");
+  link_send_event(voice && !dictating ? "{\"ask\":\"stop\",\"voice\":true}" : "{\"ask\":\"stop\"}");
   talking = false;
+  if (dictating) dictate_step = DICTATE_WRITING;
   askpanel_refresh();
   return true;
 }
@@ -85,7 +93,7 @@ void askpanel_set_mic(bool available) {
 static void talk_event(lv_event_t *e) {
   lv_event_code_t code = lv_event_get_code(e);
   if (code == LV_EVENT_PRESSED) {
-    askpanel_press();
+    askpanel_press(false);
   } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
     // 손가락이 버튼 밖으로 미끄러져도 말한 것은 묻는다
     askpanel_release();
@@ -198,8 +206,22 @@ void askpanel_show(bool on) {
   }
 }
 
+int askpanel_dictate_step() {
+  return dictate_step;
+}
+
 void askpanel_set(JsonObjectConst ask) {
   const char *state = ask["state"] | "";
+  // 받아쓰기는 질문 화면을 건드리지 않고 사용량 화면 버튼에만 보여 준다 (결과는 PC 가 알림으로 보낸다)
+  if (strcmp(ask["mode"] | "ask", "dictate") == 0) {
+    busy_ms = (ask["done"] | false) ? 0 : millis();
+    dictate_step = strcmp(state, "preparing") == 0   ? DICTATE_PREPARING
+                   : strcmp(state, "listening") == 0 ? DICTATE_LISTENING
+                   : strcmp(state, "thinking") == 0  ? DICTATE_WRITING
+                                                     : DICTATE_IDLE;
+    ui_refresh_talk();
+    return;
+  }
   busy_ms = (ask["done"] | false) ? 0 : millis();
   if (strcmp(state, "preparing") == 0) {
     lv_label_set_text(state_lbl, "마이크 준비 중...");
@@ -235,6 +257,12 @@ void askpanel_loop() {
   // 누르고 있는 중이 아닌데 PC 가 70초 동안 아무것도 안 보냈다
   if (talking) return;
   busy_ms = 0;
+  if (dictate_step != DICTATE_IDLE) {
+    dictate_step = DICTATE_IDLE;
+    ui_refresh_talk();
+    ui_toast("PC에서 받아쓰기 결과가 오지 않았습니다", 2500);
+    return;
+  }
   lv_label_set_text(state_lbl, "");
   lv_label_set_text(a_lbl, "PC에서 답이 오지 않았습니다\n다시 눌러 주세요");
   lv_obj_set_style_text_color(a_lbl, COLOR_ACCENT, 0);

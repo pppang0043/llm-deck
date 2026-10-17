@@ -18,9 +18,13 @@ void askpanel_set(JsonObjectConst ask);
 
 // 말하기 버튼은 두 곳에 있다: 이 화면 아래, 사용량 화면 아래(ui.cpp). 상태는 여기서 하나로 관리한다.
 enum { ASK_READY, ASK_TALKING, ASK_NO_PC, ASK_NO_MIC };
+// 받아쓰기(사용량 화면 버튼) 진행: 마이크 준비 / 듣는 중 / 받아 적어 PC 에 입력하는 중
+enum { DICTATE_IDLE, DICTATE_PREPARING, DICTATE_LISTENING, DICTATE_WRITING };
+int askpanel_dictate_step();
 int askpanel_talk_state();
 // 누름: 녹음을 시작하면 true (PC 가 없거나 마이크가 없으면 알림만 띄우고 false). 뗌: 질문을 보냈으면 true.
-bool askpanel_press();
+// dictate: 사용량 화면의 받아쓰기 버튼 (Claude 에 묻지 않고, 받아 적은 글을 PC 커서 자리에 입력)
+bool askpanel_press(bool dictate);
 bool askpanel_release();
 // PC 가 알려 준 마이크 사용 가능 여부 {"ask_mic": bool}
 void askpanel_set_mic(bool available);

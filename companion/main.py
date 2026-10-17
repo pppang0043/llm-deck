@@ -392,7 +392,7 @@ def main() -> None:
                     extra = {}
                     if pc.due():
                         extra["pc"] = pc.collect()
-                    for source in (apps, keys):
+                    for source in (apps, keys, ask):
                         if source.pending_toast:
                             extra["toast"], source.pending_toast = source.pending_toast, None
                     # 말로 묻기: 상태(듣는 중·생각 중)와 나오는 중인 답
