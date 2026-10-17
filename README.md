@@ -129,6 +129,7 @@ cd firmware
 ```sh
 LLMDECK_OTA_PASSWORD=$(cat ~/.llm-deck/ota_password) ~/.local/bin/pio run -e ota -t upload   # 주소가 다르면 --upload-port <IP>
 ```
+인터넷 회사 DNS 가 `llm-deck.local` 에 바깥 주소를 대답하기도 해서, 업로드 전에 집 안 주소만 골라 쓴다 (`firmware/scripts/ota_port.py`).
 `firmware/include/secrets.h` 에 기본 Wi-Fi 이름·비밀번호를 적는다 (git 에 올라가지 않는다).
 
 ## 블루투스 스피커 (ATOM Lite 모듈)
@@ -172,6 +173,6 @@ I2C 선은 느려서 소리 데이터를 보내지 않고, 알림음은 모듈�
 - 보드에는 마이크가 없다. INMP441 I2S 마이크를 달면(SCK 18, WS 43, SD 44) 마이크 소리가 PC 로 간다. PC 에서 마이크로 쓰려면 Mac 은 BlackHole, Windows 는 VB-CABLE 이 필요하다
 - 블루투스는 PC 3대까지 동시에 붙는다. 그중 "사용 중" 인 PC 하나만 마이크 소리·사진·알림음을 받고, 화면의 사용량도 그 PC 것을 쓴다. 나머지는 기다리며, 사용 중인 PC 가 끊기면 이어받는다. 설정에서 고른 PC 는 기억해 두었다가 다시 붙으면 먼저 쓴다
 - 블루투스 신호가 약하면(-70dBm 아래) PC 가 기기를 찾아도 연결이 자주 실패한다. 기기를 PC 가까이 둔다
-- 기기 내부 RAM 이 빠듯하다. 카메라용 20KB 를 부팅 때 미리 잡아 두고, 카메라를 안 쓸 때 클라우드(HTTPS) 받아 오기에 잠깐 빌려준다
+- 기기 내부 RAM 이 빠듯하다 (켠 뒤 남는 양 약 70KB). 암호화 통신(HTTPS)과 블루투스 버퍼, 클라우드 작업 스택은 큰 메모리(PSRAM)에 둔다. 카메라용 20KB 는 부팅 때 미리 잡아 둔다. 시리얼 로그의 `[mem]` 줄에 단계별 남은 양이 나온다
 - 연결이 바뀐 직후 75초 동안은 앞 연결을 살아 있다고 본다. 같은 PC 에서 USB 로 쓰다가 Wi-Fi 로만 바꾸면 그동안 사진이 USB 쪽으로 간다
 - 배터리 % 는 전압으로 짐작한다. USB 에 꽂혀 충전이 끝난 채 20분이 지나면 스스로 보정한다

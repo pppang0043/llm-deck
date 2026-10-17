@@ -5,6 +5,8 @@
 #include <NetworkClientSecure.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
+#include <mbedtls/platform.h>
 #include <time.h>
 
 #include "psram_json.h"
@@ -88,7 +90,7 @@ static void build_pages(JsonObjectConst shared, JsonArray services) {
 static bool fetch(const char *from);
 
 static bool poll(const char *from) {
-  // HTTPS(mbedTLS)는 내부 RAM 에서만 수십 KB 를 쓰므로, 카메라용으로 잡아 둔 자리를 잠깐 빌린다
+  // 암호화 통신의 나머지(드라이버 등)가 내부 RAM 을 조금 쓰므로, 카메라용으로 잡아 둔 자리를 잠깐 빌린다
   camera_lend_reserve(true);
   bool ok = fetch(from);
   camera_lend_reserve(false);
@@ -127,6 +129,13 @@ static bool fetch(const char *from) {
   return true;
 }
 
+// 암호화 통신(mbedTLS)이 쓰는 메모리(연결 하나에 40KB 안팎)를 큰 메모리(PSRAM)에서 받게 한다.
+// 기본 설정은 내부 RAM 에서만 받아, 블루투스·Wi-Fi 와 겹치면 내부 RAM 이 바닥났다.
+static void *tls_calloc(size_t n, size_t size) {
+  void *p = heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  return p ? p : heap_caps_calloc(n, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
 static void cloud_task(void *) {
   uint32_t last_ms = 0;
   bool polled = false;
@@ -158,8 +167,9 @@ void cloud_init() {
   prefs.begin("llm-deck");
   prefs.getString("sync_url", url, sizeof(url));
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
-  // 암호화 통신(TLS)이 메모리를 많이 써서 스택을 넉넉히 준다
-  xTaskCreatePinnedToCore(cloud_task, "cloud", 12288, NULL, 1, NULL, 1);
+  mbedtls_platform_set_calloc_free(tls_calloc, heap_caps_free);
+  // 암호화 통신(TLS)이 스택을 많이 써서 넉넉히 주되, 큰 메모리(PSRAM)에 둔다 (이 작업은 플래시에 쓰지 않는다)
+  xTaskCreatePinnedToCoreWithCaps(cloud_task, "cloud", 12288, NULL, 1, NULL, 1, MALLOC_CAP_SPIRAM);
 }
 
 void cloud_set_url(const char *value) {

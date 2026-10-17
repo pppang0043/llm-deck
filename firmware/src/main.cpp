@@ -186,15 +186,29 @@ static void show_clock() {
   ui_set_battery(battery_pct(), battery_charging());
 }
 
+// 내부 RAM 이 얼마나 남았는지 (부팅 단계별로 무엇이 얼마나 쓰는지 볼 때)
+static void mem_log(const char *tag) {
+  Serial.printf("[mem] %-10s internal free %6u largest %6u min %6u | psram free %u\n", tag,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+
 void setup() {
   usb_link_init();
   Serial.begin(115200);
   pinMode(BTN_BOOT, INPUT_PULLUP);
+  mem_log("start");
 
   display_init();
+  mem_log("display");
   ui_init(toggle_mic, rotate_by_button);
+  mem_log("ui");
   camera_init();
+  mem_log("camera");
   camera_ui_init();
+  mem_log("camera_ui");
   saver_init();
   ui_set_home_actions(camera_ui_show, settings_cycle_brightness);
   imu_init();
@@ -210,18 +224,31 @@ void setup() {
   Serial.printf("[main] tilt %d (accel %.2f %.2f %.2f), button %d\n", start, ax, ay, az, rotate_offset);
   apply_rotation();
   link_init(set_mic);
+  mem_log("link");
   link_set_rotate(rotate_by_button);
   mic_init();
+  mem_log("mic");
   net_init();
+  mem_log("net");
   ble_link_init();
+  mem_log("ble");
   cloud_init();
+  mem_log("cloud");
   photo_init();
+  mem_log("photo");
   video_init();
+  mem_log("video");
   speaker_init();
   Serial.println("[main] setup done");
 }
 
 void loop() {
+  // 연결이 다 붙은 뒤(30초)와 그 뒤 5분마다 남은 내부 RAM 을 적는다
+  static uint32_t mem_ms = 0;
+  if ((!mem_ms && millis() > 30000) || (mem_ms && millis() - mem_ms > 300000)) {
+    mem_ms = millis();
+    mem_log("running");
+  }
   static uint32_t level_ms = 0;
 
   display_loop();
