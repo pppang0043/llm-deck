@@ -74,6 +74,7 @@ static void close_camera() {
 static void open_camera() {
   if (is_open) return;
   is_open = true;
+  display_poke();  // PC 에서 열었을 때도 2분 세기를 지금부터
   camera_ui_layout();
   lv_obj_add_flag(preview, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(overlay, LV_OBJ_FLAG_HIDDEN);
@@ -275,9 +276,18 @@ static void show_send_progress() {
   }
 }
 
+// 카메라는 켜 두면 뜨거워지므로, 녹화 중이 아닐 때 이만큼 만지지 않으면 닫는다
+#define CAMERA_IDLE_MS (2 * 60 * 1000UL)
+
 void camera_ui_loop() {
   show_send_progress();
   if (!is_open) return;
+  if (!video_recording() && millis() - display_last_touch_ms() > CAMERA_IDLE_MS) {
+    Serial.println("[camera] idle, closing");
+    close_camera();
+    ui_toast("카메라를 2분 동안 안 써서 껐습니다\n(열이 나지 않게)", 3000);
+    return;
+  }
   if (msg_until && (int32_t)(millis() - msg_until) > 0) {
     msg_until = 0;
     lv_obj_add_flag(msg_lbl, LV_OBJ_FLAG_HIDDEN);

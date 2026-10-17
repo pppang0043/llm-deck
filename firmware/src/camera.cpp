@@ -42,7 +42,15 @@ void camera_lend_reserve(bool lend) {
   }
 }
 
+// 카메라 센서 전원 끄기(PWDN 핀을 높게). 드라이버를 내려도 센서는 켜진 채 남아 열이 나므로 직접 끈다.
+// 켤 때는 드라이버(esp_camera_init)가 이 핀을 낮게 내려 다시 켠다.
+static void sensor_power_down() {
+  pinMode(CAM_PWDN, OUTPUT);
+  digitalWrite(CAM_PWDN, HIGH);
+}
+
 void camera_init() {
+  sensor_power_down();
   hold_reserve();
   Serial.printf("[camera] reserved %s\n", reserve ? "ok" : "failed");
 }
@@ -114,6 +122,7 @@ bool camera_start() {
   release_reserve();
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
+    sensor_power_down();
     hold_reserve();
     last_error = err;
     Serial.printf("[camera] start failed (0x%x), internal largest block %u\n", err,
@@ -140,6 +149,7 @@ void camera_stop() {
   if (!running) return;
   camera_set_video(false, nullptr);
   esp_camera_deinit();
+  sensor_power_down();
   running = false;
   hold_reserve();
   Serial.printf("[camera] off, internal free %u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
