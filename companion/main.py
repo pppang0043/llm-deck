@@ -14,6 +14,7 @@
     uv run main.py --test-sound     기기 알림에 쓰는 소리(마이크 켬·끔, 한도 알림)를 모두 들어 본다
     uv run main.py --bt-check       기기가 블루투스 스피커에 붙을 수 있는지 시험한다 (칩 지원 범위 + 주변 기기 찾기, USB)
     uv run main.py --bt-check all   위 + 연결할 수 있는 기기마다 붙어서 BLE 서비스 목록을 읽는다 (주소를 주면 그 기기만)
+    uv run main.py --assistant-check 기기 질문에 쓸 Claude CLI 를 찾는다 (claude-test 먼저, 없으면 claude)
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
     uv run main.py --clear-wifi     추가로 등록한 Wi-Fi 를 모두 지운다
     uv run main.py --sync-only      기기 없이, 이 PC 의 한도 사용률을 다른 PC 와 공유만 한다
@@ -33,6 +34,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+import assistant
 import audio
 import photos
 import videos
@@ -202,6 +204,7 @@ def main() -> None:
     parser.add_argument("--test-sound", action="store_true", help="기기 알림에 쓰는 소리를 모두 들어 본다")
     parser.add_argument("--bt-check", nargs="?", const=True, metavar="주소|all",
                         help="기기가 블루투스 스피커에 붙을 수 있는지 시험한다 (USB). 주소나 all 을 주면 서비스 목록도 읽는다")
+    parser.add_argument("--assistant-check", action="store_true", help="기기 질문에 쓸 Claude CLI 를 찾는다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     parser.add_argument("--log", metavar="FILE", help="출력을 파일에 덧붙여 쓴다 (창 없이 자동 실행할 때)")
@@ -215,6 +218,10 @@ def main() -> None:
         return statusline.uninstall()
     cfg = load_config()
 
+    if args.assistant_check:
+        found = assistant.find_command(cfg.get("assistant", {}))
+        print(f"[assistant] 질문 폴더: {assistant.workdir()}")
+        sys.exit(0 if found else 1)
     if args.test_sound:
         speaker = sounds.Sounds(cfg.get("sounds", {}))
         for name in sounds.TONES:
@@ -252,6 +259,8 @@ def main() -> None:
     apps = launcher.Launcher()
     pc = pcstats.PcStats()
     keys = typer.Typer()
+    ask = assistant.Assistant(cfg.get("assistant", {}))
+    ask.other_audio = lambda: getattr(sink, "stream", None) is not None
 
     def on_event(event: dict) -> None:
         speaker.on_event(event)
@@ -260,15 +269,22 @@ def main() -> None:
         apps.on_event(event)
         keys.on_event(event)
         pc.on_event(event)
+        ask.on_event(event)
 
     transport = None
     first = True
+    sent_mic = True
     while True:
         try:
             if transport is None:
                 transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
             if transport:
                 message = collect_all(cfg)
+                # PC 마이크를 쓸 수 있는지 (없으면 기기의 말하기 버튼이 꺼진다)
+                if hasattr(ask, "mic_available"):
+                    ask.mic_available()
+                message["ask_mic"] = ask.mic
+                sent_mic = ask.mic
                 if first and args.mic:
                     message["mic"] = args.mic == "on"
                 if first and args.test_photo:
@@ -379,6 +395,12 @@ def main() -> None:
                     for source in (apps, keys):
                         if source.pending_toast:
                             extra["toast"], source.pending_toast = source.pending_toast, None
+                    # 말로 묻기: 상태(듣는 중·생각 중)와 나오는 중인 답
+                    answer = ask.pending()
+                    if answer:
+                        extra["ask"] = answer
+                    if ask.mic != sent_mic:
+                        extra["ask_mic"] = sent_mic = ask.mic
                     if extra:
                         try:
                             transport.send({**extra, "host": _host_name()})

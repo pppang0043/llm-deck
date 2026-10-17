@@ -77,6 +77,21 @@ $uvw = Join-Path (Split-Path $uv) 'uvw.exe'
 Write-Host '[2/6] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
 & $uv sync --directory $Dir --quiet
 if ($LASTEXITCODE -ne 0) { throw '도우미 준비에 실패했습니다.' }
+# 음성 질문용 부품(faster-whisper)이 이 PC 에서 켜지는지 본다. 안 돼도 나머지 기능은 쓸 수 있다.
+# Windows PowerShell 5.1 은 Stop 일 때 프로그램의 오류 출력만으로도 멈추므로, 이 확인 동안만 풀어 둔다
+$ErrorActionPreference = 'Continue'
+& $uv run --directory $Dir python -c 'import ctranslate2, onnxruntime, av, faster_whisper' 2>$null
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '      주의: 음성 질문 부품을 켜지 못했습니다. "Microsoft Visual C++ 재배포 가능 패키지(x64)"를 설치한 뒤 다시 실행하세요.'
+    Write-Host '            https://aka.ms/vs/17/release/vc_redist.x64.exe  (음성 질문 말고는 그대로 쓸 수 있습니다)'
+}
+$model = Join-Path $env:USERPROFILE '.llm-deck\models\faster-whisper-small\model.bin'
+if (Test-Path $model) {
+    Write-Host '      음성 인식 모델: 복사해 둔 폴더를 씁니다 (.llm-deck\models\faster-whisper-small)'
+} else {
+    Write-Host '      음성 인식 모델: 처음 질문할 때 인터넷으로 받습니다 (약 480MB). 회사망에서 막히면 README.txt 참고'
+}
 
 Write-Host '[3/6] 설정 파일'
 $config = Join-Path $Dir 'config.toml'

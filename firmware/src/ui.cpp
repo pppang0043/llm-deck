@@ -3,6 +3,7 @@
 #include <lvgl.h>
 
 #include "psram_json.h"
+#include "askpanel.h"
 #include "display.h"
 #include "history.h"
 #include "pcpanel.h"
@@ -54,12 +55,14 @@ static JsonDocument last_usage(PSRAM_JSON);
 static char wifi_info[48] = "시작 중...";
 
 // 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.
-enum View { VIEW_HOME, VIEW_USAGE, VIEW_SETTINGS, VIEW_SHORTCUTS, VIEW_PC };
+enum View { VIEW_HOME, VIEW_USAGE, VIEW_SETTINGS, VIEW_SHORTCUTS, VIEW_ASK };
 static View view = VIEW_HOME;  // 켤 때 첫 화면은 홈
 static lv_obj_t *home;
-#define HOME_ICONS 6
+#define HOME_ICONS 5
 static lv_obj_t *home_icons[HOME_ICONS];
-static lv_obj_t *mic_icon_sym;
+static lv_obj_t *mic_icon_sym;  // 홈의 질문 아이콘 (말할 수 없으면 흐리게)
+static int pc_tile = 0;  // 사용량 화면에서 PC 상태 페이지의 번호 (맨 마지막)
+static void update_pc_watch();
 static lv_obj_t *settings_panel;
 static void (*camera_cb)() = nullptr;
 static void apply_view();
@@ -215,13 +218,24 @@ static lv_obj_t *add_page(uint8_t index) {
   return page;
 }
 
+// 사용량 페이지 맨 끝에 PC 상태 페이지를 붙인다 (pcpanel.cpp 가 그린다)
+static void add_pc_tile(uint8_t index) {
+  lv_obj_t *tile = lv_tileview_add_tile(tiles, 0, index, LV_DIR_VER);
+  lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+  pcpanel_status_attach(tile, lv_obj_get_width(tiles), lv_obj_get_height(tiles));
+  pc_tile = index;
+}
+
 static void show_placeholder(const char *title, const char *body) {
+  pcpanel_status_detach();
   lv_obj_clean(tiles);
   lv_obj_t *page = add_page(0);
   add_label(page, title, &font_ko_20, COLOR_ACCENT);
   lv_obj_t *lbl = add_label(page, body, &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(lbl, lv_pct(100));
+  add_pc_tile(1);
+  update_pc_watch();
 }
 
 // PC 에서 첫 데이터가 오기 전까지 보여주는 화면: 연결 방법 안내
@@ -232,8 +246,49 @@ static void show_waiting() {
   show_placeholder("LLM Deck", body);
 }
 
+// 사용량 화면 아래 버튼: 누르고 있는 동안 PC 마이크로 질문하고, 떼면 질문 화면에서 답을 본다
+static bool usage_talking = false;
+
 static void mic_btn_event(lv_event_t *e) {
-  if (mic_toggle_cb) mic_toggle_cb();
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_PRESSED) {
+    usage_talking = askpanel_press();
+  } else if ((code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) && usage_talking) {
+    askpanel_release();
+    usage_talking = false;
+    ui_show("ask");
+  }
+}
+
+bool ui_usage_talking() {
+  return usage_talking;
+}
+
+void ui_refresh_talk() {
+  if (!mic_btn) return;
+  int st = askpanel_talk_state();
+  bool wide = display_width() > display_height();
+  lv_obj_set_style_bg_color(mic_btn, st == ASK_TALKING ? COLOR_MIC_ON : st == ASK_READY ? lv_color_hex(0x2E7D5B)
+                                                                                      : COLOR_MIC_OFF, 0);
+  lv_obj_set_style_text_color(mic_lbl, st == ASK_READY || st == ASK_TALKING ? lv_color_white() : COLOR_DIM, 0);
+  // 가로 화면의 버튼은 좁아서 여러 줄로 쓴다
+  const char *text;
+  if (st == ASK_TALKING) {
+    text = wide ? LV_SYMBOL_AUDIO "\n말하는\n중\n\n떼면\n질문" : LV_SYMBOL_AUDIO "  말하는 중... 떼면 질문";
+  } else if (st == ASK_NO_PC) {
+    text = wide ? "PC\n연결\n없음" : "PC 연결 없음";
+  } else if (st == ASK_NO_MIC) {
+    text = wide ? "PC\n마이크\n없음" : "PC 마이크 없음";
+  } else {
+    text = wide ? LV_SYMBOL_AUDIO "\n질문\n\n누르고\n말하기" : LV_SYMBOL_AUDIO "  누르고 말하기 (질문)";
+  }
+  lv_label_set_text(mic_lbl, text);
+  lv_obj_center(mic_lbl);
+  if (mic_icon_sym) {
+    lv_obj_set_style_bg_color(lv_obj_get_parent(mic_icon_sym), st == ASK_NO_PC || st == ASK_NO_MIC ? COLOR_MIC_OFF
+                                                                                              : lv_color_hex(0x2E7D5B), 0);
+    lv_obj_set_style_text_color(mic_icon_sym, st == ASK_NO_PC || st == ASK_NO_MIC ? COLOR_DIM : lv_color_white(), 0);
+  }
 }
 
 static void rotate_btn_event(lv_event_t *e) {
@@ -258,17 +313,14 @@ static void home_icon_event(lv_event_t *e) {
       if (camera_cb) camera_cb();
       break;
     case 2:
-      if (mic_toggle_cb) mic_toggle_cb();
+      view = VIEW_ASK;
+      apply_view();
       break;
     case 3:
       view = VIEW_SHORTCUTS;
       apply_view();
       break;
     case 4:
-      view = VIEW_PC;
-      apply_view();
-      break;
-    case 5:
       view = VIEW_SETTINGS;
       apply_view();
       break;
@@ -313,10 +365,9 @@ static void build_home() {
   lv_obj_clear_flag(home, LV_OBJ_FLAG_SCROLLABLE);
   add_home_icon(0, LV_SYMBOL_LIST, "사용량", COLOR_ACCENT, true);
   add_home_icon(1, LV_SYMBOL_IMAGE, "카메라", lv_color_hex(0x3A7BD5), true);
-  add_home_icon(2, LV_SYMBOL_MUTE, "마이크", COLOR_MIC_OFF, true);
+  add_home_icon(2, LV_SYMBOL_AUDIO, "질문", lv_color_hex(0x2E7D5B), true);
   add_home_icon(3, LV_SYMBOL_KEYBOARD, "단축키", lv_color_hex(0x7E57C2), true);
-  add_home_icon(4, LV_SYMBOL_DRIVE, "PC 상태", lv_color_hex(0x2E8C9E), true);
-  add_home_icon(5, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
+  add_home_icon(4, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
 
   // 설정 화면 (settings.cpp)
   settings_panel = lv_obj_create(lv_scr_act());
@@ -328,6 +379,8 @@ static void build_home() {
 
   // 단축 버튼, PC 상태 (pcpanel.cpp)
   pcpanel_build(lv_scr_act());
+  // 말로 묻고 글로 답받기 (askpanel.cpp)
+  askpanel_build(lv_scr_act());
 }
 
 // 홈 아이콘 배치: 가로 화면 3x2, 세로 화면 2x3
@@ -338,6 +391,7 @@ static void layout_home() {
   lv_obj_set_size(settings_panel, w, h);
   lv_obj_set_pos(settings_panel, 0, STATUS_H);
   pcpanel_layout(0, STATUS_H, w, h);
+  askpanel_layout(0, STATUS_H, w, h);
   int cols = w > display_height() ? 3 : 2;
   int rows = (HOME_ICONS + cols - 1) / cols;
   int cw = w / cols, ch = h / rows;
@@ -350,7 +404,7 @@ static void layout_home() {
 static void apply_view() {
   bool usage = view == VIEW_USAGE;
   ui_history_close();
-  lv_obj_t *usage_parts[] = {tiles, level_bar, mic_btn};
+  lv_obj_t *usage_parts[] = {tiles, mic_btn};
   for (lv_obj_t *o : usage_parts) {
     if (usage) {
       lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -364,7 +418,8 @@ static void apply_view() {
     lv_obj_add_flag(home, LV_OBJ_FLAG_HIDDEN);
   }
   pcpanel_show_shortcuts(view == VIEW_SHORTCUTS);
-  pcpanel_show_status(view == VIEW_PC);
+  update_pc_watch();
+  askpanel_show(view == VIEW_ASK);
   if (view == VIEW_SETTINGS) {
     settings_refresh();
     lv_obj_clear_flag(settings_panel, LV_OBJ_FLAG_HIDDEN);
@@ -453,15 +508,18 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
   tiles = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
+  lv_obj_add_event_cb(tiles, [](lv_event_t *e) { update_pc_watch(); }, LV_EVENT_VALUE_CHANGED, NULL);
 
   level_bar = lv_bar_create(scr);
   lv_obj_set_style_radius(level_bar, 0, 0);
   lv_obj_set_style_radius(level_bar, 0, LV_PART_INDICATOR);
   lv_bar_set_range(level_bar, 0, 100);
+  // 기기 마이크(INMP441)의 소리 크기. 지금은 마이크를 달지 않아 쓰지 않는다.
+  lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
 
   mic_btn = lv_btn_create(scr);
   lv_obj_set_style_radius(mic_btn, 0, 0);
-  lv_obj_add_event_cb(mic_btn, mic_btn_event, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(mic_btn, mic_btn_event, LV_EVENT_ALL, NULL);
   mic_lbl = add_label(mic_btn, "", &font_ko_20, lv_color_white());
   lv_obj_set_style_text_align(mic_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
@@ -521,7 +579,7 @@ void ui_layout() {
     lv_obj_set_size(mic_btn, w, MIC_H);
     lv_obj_set_pos(mic_btn, 0, h - MIC_H);
   }
-  ui_set_mic(mic_on);
+  ui_refresh_talk();
   layout_home();
   // 페이지는 크기에 맞춰 새로 만든다
   if (waiting) {
@@ -535,6 +593,8 @@ void ui_set_status(const char *text) {
   if (strcmp(lv_label_get_text(status_lbl), text) == 0) return;
   lv_label_set_text(status_lbl, text);
   layout_status_right();
+  // 연결이 바뀌면 말하기 버튼도 (PC 없음 <-> 누르고 말하기)
+  askpanel_refresh();
 }
 
 void ui_set_clock(const char *date, const char *time) {
@@ -597,6 +657,7 @@ static void render_usage() {
     return;
   }
 
+  pcpanel_status_detach();
   lv_obj_clean(tiles);
   gauge_count = 0;
   uint8_t index = 0;
@@ -624,8 +685,18 @@ static void render_usage() {
     }
     index++;
   }
+  add_pc_tile(index);
 
-  lv_obj_set_tile_id(tiles, 0, keep < count ? keep : count - 1, LV_ANIM_OFF);
+  lv_obj_set_tile_id(tiles, 0, keep <= count ? keep : count, LV_ANIM_OFF);
+  update_pc_watch();
+}
+
+// PC 상태 페이지가 보이는 동안만 PC 에 3초마다 보내 달라고 한다
+static void update_pc_watch() {
+  lv_obj_t *active = lv_tileview_get_tile_act(tiles);
+  int tile_h = lv_obj_get_height(tiles);
+  bool on_pc = active && tile_h > 0 && lv_obj_get_y(active) / tile_h == pc_tile;
+  pcpanel_show_status(view == VIEW_USAGE && on_pc);
 }
 
 void ui_usage_summary(char *out, size_t size) {
@@ -649,21 +720,8 @@ void ui_usage_summary(char *out, size_t size) {
 }
 
 void ui_set_mic(bool on) {
+  // 기기 마이크(INMP441)는 PC 에서만 켜고 끈다 (--mic). 화면 아래 버튼은 이제 질문 버튼이다.
   mic_on = on;
-  bool wide = display_width() > display_height();
-  lv_obj_set_style_bg_color(mic_btn, on ? COLOR_MIC_ON : COLOR_MIC_OFF, 0);
-  // 가로 화면의 버튼은 좁아서 두 줄로 쓴다
-  if (wide) {
-    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "\n마이크\n켜짐" : LV_SYMBOL_MUTE "\n마이크\n꺼짐");
-  } else {
-    lv_label_set_text(mic_lbl, on ? LV_SYMBOL_AUDIO "  마이크 켜짐" : LV_SYMBOL_MUTE "  마이크 꺼짐");
-  }
-  lv_obj_center(mic_lbl);
-  // 홈의 마이크 아이콘도 켜짐(빨강)/꺼짐을 따라간다
-  if (mic_icon_sym) {
-    lv_label_set_text(mic_icon_sym, on ? LV_SYMBOL_AUDIO : LV_SYMBOL_MUTE);
-    lv_obj_set_style_bg_color(lv_obj_get_parent(mic_icon_sym), on ? COLOR_MIC_ON : COLOR_MIC_OFF, 0);
-  }
   if (!on) ui_set_level(0);
 }
 
@@ -709,7 +767,14 @@ void ui_show(const char *name) {
     view = VIEW_SHORTCUTS;
     pcpanel_select_shortcuts(1);
   } else if (strcmp(name, "pc") == 0) {
-    view = VIEW_PC;
+    // PC 상태는 사용량 화면의 마지막 페이지
+    view = VIEW_USAGE;
+    apply_view();
+    lv_obj_set_tile_id(tiles, 0, pc_tile, LV_ANIM_OFF);
+    update_pc_watch();
+    return;
+  } else if (strcmp(name, "ask") == 0) {
+    view = VIEW_ASK;
   } else if (strncmp(name, "settings", 8) == 0) {
     view = VIEW_SETTINGS;
   }

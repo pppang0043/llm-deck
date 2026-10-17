@@ -1,0 +1,193 @@
+#include "askpanel.h"
+
+#include "display.h"
+#include "link.h"
+#include "ui.h"
+
+LV_FONT_DECLARE(font_ko_14);
+LV_FONT_DECLARE(font_ko_20);
+
+#define COLOR_BG lv_color_hex(0x101418)
+#define COLOR_DIM lv_color_hex(0x8A939E)
+#define COLOR_ACCENT lv_color_hex(0xD97757)
+#define COLOR_ROW lv_color_hex(0x1C232B)
+#define COLOR_TALK lv_color_hex(0x2E7D5B)
+#define COLOR_TALKING lv_color_hex(0xC8372D)
+#define TALK_H 56
+
+static lv_obj_t *panel, *state_lbl, *new_btn, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
+static bool talking = false;  // 버튼을 누르고 있는 중
+static bool mic_ok = true;    // PC 마이크를 쓸 수 있는지 (PC 가 알려 준다. 모르면 된다고 본다)
+
+static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
+  lv_obj_t *lbl = lv_label_create(parent);
+  lv_label_set_text(lbl, text);
+  lv_obj_set_style_text_font(lbl, font, 0);
+  lv_obj_set_style_text_color(lbl, color, 0);
+  return lbl;
+}
+
+static bool pc_connected() {
+  return link_active() != LINK_NONE && link_active() != LINK_CLOUD;
+}
+
+int askpanel_talk_state() {
+  if (talking) return ASK_TALKING;
+  if (!pc_connected()) return ASK_NO_PC;
+  return mic_ok ? ASK_READY : ASK_NO_MIC;
+}
+
+void askpanel_refresh() {
+  if (!talk_btn) return;
+  int st = askpanel_talk_state();
+  lv_obj_set_style_bg_color(talk_btn, st == ASK_TALKING ? COLOR_TALKING : st == ASK_READY ? COLOR_TALK : COLOR_ROW, 0);
+  lv_obj_set_style_text_color(talk_lbl, st == ASK_READY || st == ASK_TALKING ? lv_color_white() : COLOR_DIM, 0);
+  lv_label_set_text(talk_lbl, st == ASK_TALKING ? LV_SYMBOL_AUDIO "  말하는 중... 떼면 질문"
+                              : st == ASK_NO_PC ? "PC 연결 없음"
+                              : st == ASK_NO_MIC ? "PC 마이크 없음"
+                                                 : LV_SYMBOL_AUDIO "  누르고 말하기");
+  ui_refresh_talk();
+}
+
+bool askpanel_press() {
+  int st = askpanel_talk_state();
+  if (st == ASK_NO_PC) ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
+  if (st == ASK_NO_MIC) ui_toast("PC에 쓸 수 있는 마이크가 없습니다", 2500);
+  if (st != ASK_READY) return false;
+  link_send_event("{\"ask\":\"start\"}");
+  talking = true;
+  askpanel_refresh();
+  return true;
+}
+
+bool askpanel_release() {
+  if (!talking) return false;
+  link_send_event("{\"ask\":\"stop\"}");
+  talking = false;
+  askpanel_refresh();
+  return true;
+}
+
+void askpanel_set_mic(bool available) {
+  if (available == mic_ok) return;
+  mic_ok = available;
+  askpanel_refresh();
+}
+
+static void talk_event(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_PRESSED) {
+    askpanel_press();
+  } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+    // 손가락이 버튼 밖으로 미끄러져도 말한 것은 묻는다
+    askpanel_release();
+  }
+}
+
+static void new_event(lv_event_t *e) {
+  if (!pc_connected()) {
+    ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
+    return;
+  }
+  link_send_event("{\"ask\":\"new\"}");
+  lv_label_set_text(q_lbl, "");
+  lv_label_set_text(a_lbl, "");
+}
+
+void askpanel_build(lv_obj_t *parent) {
+  panel = lv_obj_create(parent);
+  lv_obj_remove_style_all(panel);
+  lv_obj_set_style_bg_color(panel, COLOR_BG, 0);
+  lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+  lv_obj_set_style_pad_all(panel, 10, 0);
+  lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_align(add_label(panel, "질문", &font_ko_20, COLOR_ACCENT), LV_ALIGN_TOP_LEFT, 0, 0);
+  state_lbl = add_label(panel, "", &font_ko_14, COLOR_DIM);
+
+  new_btn = lv_btn_create(panel);
+  lv_obj_set_size(new_btn, 76, 28);
+  lv_obj_set_style_bg_color(new_btn, COLOR_ROW, 0);
+  lv_obj_set_style_shadow_width(new_btn, 0, 0);
+  lv_obj_set_style_pad_all(new_btn, 0, 0);
+  lv_obj_add_event_cb(new_btn, new_event, LV_EVENT_CLICKED, NULL);
+  lv_obj_center(add_label(new_btn, "새 대화", &font_ko_14, lv_color_white()));
+
+  // 질문과 답. 길면 위아래로 밀어 본다.
+  text_box = lv_obj_create(panel);
+  lv_obj_remove_style_all(text_box);
+  lv_obj_set_flex_flow(text_box, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_row(text_box, 6, 0);
+  lv_obj_set_scroll_dir(text_box, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(text_box, LV_SCROLLBAR_MODE_AUTO);
+  q_lbl = add_label(text_box, "", &font_ko_14, COLOR_DIM);
+  lv_label_set_long_mode(q_lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(q_lbl, lv_pct(100));
+  a_lbl = add_label(text_box, "아래 버튼을 누르고 PC 마이크에 말하세요.\n떼면 Claude 가 글로 답합니다.", &font_ko_20,
+                    lv_color_white());
+  lv_label_set_long_mode(a_lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(a_lbl, lv_pct(100));
+
+  talk_btn = lv_btn_create(panel);
+  lv_obj_set_style_radius(talk_btn, 14, 0);
+  lv_obj_set_style_shadow_width(talk_btn, 0, 0);
+  lv_obj_add_event_cb(talk_btn, talk_event, LV_EVENT_ALL, NULL);
+  talk_lbl = add_label(talk_btn, "", &font_ko_20, lv_color_white());
+  lv_obj_center(talk_lbl);
+  askpanel_refresh();
+}
+
+void askpanel_layout(int x, int y, int w, int h) {
+  lv_obj_set_size(panel, w, h);
+  lv_obj_set_pos(panel, x, y);
+  int inner_w = w - 20, inner_h = h - 20;
+  lv_obj_align(state_lbl, LV_ALIGN_TOP_LEFT, 48, 4);
+  lv_obj_align(new_btn, LV_ALIGN_TOP_RIGHT, 0, -2);
+  lv_obj_set_size(text_box, inner_w, inner_h - 34 - TALK_H - 8);
+  lv_obj_set_pos(text_box, 0, 34);
+  lv_obj_set_size(talk_btn, inner_w, TALK_H);
+  lv_obj_set_pos(talk_btn, 0, inner_h - TALK_H);
+}
+
+void askpanel_show(bool on) {
+  if (on) {
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    // 누른 채 다른 화면으로 가면 녹음을 버린다
+    if (talking && !ui_usage_talking()) {
+      link_send_event("{\"ask\":\"cancel\"}");
+      talking = false;
+      askpanel_refresh();
+    }
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void askpanel_set(JsonObjectConst ask) {
+  const char *state = ask["state"] | "";
+  if (strcmp(state, "listening") == 0) {
+    lv_label_set_text(state_lbl, "듣는 중...");
+  } else if (strcmp(state, "thinking") == 0) {
+    lv_label_set_text(state_lbl, "답 받는 중...");
+  } else {
+    lv_label_set_text(state_lbl, "");
+  }
+  // 듣는 중에는 앞 질문·답을 그대로 둔다 (말을 다 하면 새 질문으로 바뀐다)
+  if (strcmp(state, "listening") != 0) {
+    lv_label_set_text(q_lbl, ask["q"] | "");
+    lv_label_set_text(a_lbl, ask["a"] | "");
+    lv_obj_set_style_text_color(a_lbl, strcmp(state, "error") == 0 ? COLOR_ACCENT : lv_color_white(), 0);
+    // 답이 나오는 동안은 끝을 따라가고, 다 나오면 질문부터 읽게 맨 위로 둔다
+    if (ask["done"] | false) {
+      lv_obj_scroll_to_y(text_box, 0, LV_ANIM_OFF);
+    } else {
+      lv_obj_update_layout(text_box);
+      lv_obj_scroll_to_y(text_box, LV_COORD_MAX, LV_ANIM_OFF);
+    }
+  }
+  // 질문 화면이 아닐 때 답이 오면 화면을 깨우고 알린다
+  display_poke();
+  if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN) && (ask["done"] | false) && strcmp(state, "done") == 0) {
+    ui_toast("질문의 답이 왔습니다", 2000);
+  }
+}

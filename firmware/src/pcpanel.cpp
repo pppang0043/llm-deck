@@ -66,6 +66,7 @@ static Meter cpu, ram, disk;
 static lv_obj_t *net_lbl, *bat_lbl;
 static uint32_t stat_ms = 0;  // 마지막으로 받은 시각
 static uint32_t drawn_ms = 0;  // 마지막으로 "몇 초 전" 을 고친 시각
+static bool watching = false;  // PC 상태 페이지가 화면에 보이는 중 (ui.cpp 가 알려 준다)
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
@@ -299,10 +300,9 @@ void pcpanel_build(lv_obj_t *parent) {
   build_status(parent);
 }
 
-void pcpanel_layout(int x, int y, int w, int h) {
-  layout_shortcuts(x, y, w, h);
+static void layout_status(int w, int h) {
   lv_obj_set_size(stat_panel, w, h);
-  lv_obj_set_pos(stat_panel, x, y);
+  lv_obj_set_pos(stat_panel, 0, 0);
   int inner_w = w - 20;
 
   // PC 상태: 위에서부터 차례로
@@ -322,18 +322,32 @@ void pcpanel_layout(int x, int y, int w, int h) {
   lv_obj_align(stat_none, LV_ALIGN_CENTER, 0, 10);
 }
 
+void pcpanel_layout(int x, int y, int w, int h) {
+  layout_shortcuts(x, y, w, h);
+}
+
+void pcpanel_status_attach(lv_obj_t *tile, int w, int h) {
+  lv_obj_set_parent(stat_panel, tile);
+  lv_obj_clear_flag(stat_panel, LV_OBJ_FLAG_HIDDEN);
+  layout_status(w, h);
+}
+
+void pcpanel_status_detach() {
+  lv_obj_set_parent(stat_panel, lv_scr_act());
+  lv_obj_add_flag(stat_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
 void pcpanel_show_status(bool on) {
+  if (on == watching) return;
+  watching = on;
   if (on) {
-    lv_obj_clear_flag(stat_panel, LV_OBJ_FLAG_HIDDEN);
     drawn_ms = 0;
     pcpanel_loop();
-  } else {
-    lv_obj_add_flag(stat_panel, LV_OBJ_FLAG_HIDDEN);
   }
 }
 
 bool pcpanel_status_visible() {
-  return stat_panel && !lv_obj_has_flag(stat_panel, LV_OBJ_FLAG_HIDDEN);
+  return watching;
 }
 
 static void set_meter(Meter &m, int pct, const char *text) {

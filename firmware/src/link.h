@@ -25,6 +25,8 @@ void link_init(void (*set_mic)(bool on));
 //   {"wifi_add": {"ssid", "password"}}       Wi-Fi 추가 등록 / {"wifi_clear": true} 추가한 것 모두 삭제
 //   {"bt_check": true}                      블루투스 스피커 시험: 칩 지원 범위 + 주변 기기 찾기 (결과는 시리얼 [bt-check])
 //   {"bt_check": "aa:bb:cc:dd:ee:ff"}       위 + 그 기기에 연결해 서비스 목록 읽기 ("all": 연결 가능한 기기 모두)
+//   {"ask": {"state", "q", "a", "done"}}     질문 화면: 받아 적은 질문과 나오는 중인 답 (askpanel.h)
+//   {"ask_mic": false}                       PC 에 쓸 수 있는 마이크가 없음 (말하기 버튼을 끈다)
 //   {"host": "PC 이름"}                      보낸 PC 의 이름 (블루투스 설정 화면에 보여준다)
 // usage 가 false 면 사용량("services")은 쓰지 않는다 (블루투스로 붙어 기다리는 중인 PC)
 void link_submit(Link from, const char *data, size_t len, bool usage = true);

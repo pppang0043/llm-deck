@@ -10,4 +10,5 @@ dependencies = [
     "pyserial>=3.5",
     "bleak>=0.22",
     "psutil>=5.9",
+    "faster-whisper>=1.1",
 ]

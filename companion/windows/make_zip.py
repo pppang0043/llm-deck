@@ -2,7 +2,7 @@
 
     companion/.venv/bin/python companion/windows/make_zip.py
 
-git 에 올라간 companion 파일만 담는다. config.toml 은 예시 파일에 이 PC 의 gist_id 만 채워 넣고,
+git 이 아는 companion 파일(커밋 전 새 파일 포함, .gitignore 에 든 것은 뺀다)만 담는다. config.toml 은 예시 파일에 이 PC 의 gist_id 만 채워 넣고,
 토큰 같은 비밀 값은 넣지 않는다.
 """
 
@@ -17,8 +17,9 @@ OUT = ROOT / "dist" / "llm-deck-companion-windows.zip"
 
 def main() -> None:
     files = subprocess.run(
-        ["git", "ls-files", "companion"], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "companion"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
+    files = [f for f in files if (ROOT / f).is_file()]  # 지웠지만 아직 커밋하지 않은 파일은 뺀다
     gist = ""
     config_path = ROOT / "companion" / "config.toml"
     if config_path.exists():

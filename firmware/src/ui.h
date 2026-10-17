@@ -2,7 +2,7 @@
 
 #include <ArduinoJson.h>
 
-// 화면 구성: 위쪽 상태줄(오른쪽 끝에 화면 돌리기 버튼) / 가운데 서비스별 페이지(좌우로 넘김) / 마이크 버튼
+// 화면 구성: 위쪽 상태줄(오른쪽 끝에 화면 돌리기 버튼) / 가운데 서비스별 페이지(위아래로 넘김, 맨 끝은 PC 상태) / 질문 버튼
 void ui_init(void (*on_mic_toggle)(), void (*on_rotate)());
 
 // 상태줄 왼쪽 글자 (현재 연결 방식)
@@ -25,8 +25,12 @@ void ui_set_usage(JsonArrayConst services);
 void ui_layout();
 
 void ui_set_mic(bool on);
+// 사용량 화면 아래 질문 버튼(누르고 말하기)의 모양을 다시 그린다 (askpanel.cpp 가 부른다)
+void ui_refresh_talk();
+// 사용량 화면의 질문 버튼을 누르고 있는 중인지
+bool ui_usage_talking();
 
-// 홈 화면 (아이콘 6개: 사용량, 카메라, 마이크, 단축키, PC 상태, 설정). 어디서든 오른쪽으로 밀면 홈으로 온다.
+// 홈 화면 (아이콘 5개: 사용량(맨 끝 페이지가 PC 상태), 카메라, 질문, 단축키, 설정). 어디서든 오른쪽으로 밀면 홈으로 온다.
 // 밝기와 정보는 설정 안(디스플레이, 정보)에 있다.
 void ui_show_home();
 // 홈의 카메라 아이콘을 눌렀을 때 할 일
@@ -37,7 +41,7 @@ bool ui_settings_visible();
 // 모든 화면 위에 잠깐 뜨는 알림 (ms 뒤에 사라진다)
 void ui_toast(const char *text, uint32_t ms = 4000);
 
-// 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "shortcuts"(= "programs") / "keywords" / "pc" (PC 에서 시험할 때)
+// 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "shortcuts"(= "programs") / "keywords" / "pc" / "ask" (PC 에서 시험할 때)
 void ui_show(const char *name);
 // 지금 화면을 RGB565 로 찍는다 (진단용). *pixels 는 free 로 해제.
 bool ui_screenshot(uint16_t **pixels, int *w, int *h);

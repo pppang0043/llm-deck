@@ -39,6 +39,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleVersion</key><string>1</string>
   <key>LSUIElement</key><true/>
   <key>NSBluetoothAlwaysUsageDescription</key><string>LLM Deck 기기와 블루투스로 연결합니다.</string>
+  <key>NSMicrophoneUsageDescription</key><string>기기에서 말로 질문할 때 이 Mac 마이크로 받아 적습니다.</string>
 </dict>
 </plist>
 EOF
