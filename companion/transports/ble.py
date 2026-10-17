@@ -4,7 +4,9 @@ import asyncio
 import concurrent.futures
 import json
 import struct
+import sys
 import threading
+from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
@@ -16,7 +18,11 @@ NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # PC -> 기기
 NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # 기기 -> PC
 AUDIO_HEADER = struct.Struct("<HhB")
 AUDIO_SIZE = AUDIO_HEADER.size + 160  # 20ms = 320샘플 x 4비트
-SCAN_SECONDS = 8
+# 찾으면 바로 끝나므로 넉넉히 둔다. Windows 는 블루투스 장치가 많이 붙어 있으면 광고를 자주 놓친다.
+SCAN_SECONDS = 20
+# 한 번 연결한 기기의 주소. Windows 는 주소만 알면 찾기(스캔) 없이 바로 연결할 수 있다.
+ADDRESS_FILE = Path.home() / ".llm-deck" / "ble_address"
+DIRECT_SECONDS = 10
 
 
 class BleTransport:
@@ -41,7 +47,7 @@ class BleTransport:
 
     def open(self) -> bool:
         try:
-            return self._run(self._connect(), SCAN_SECONDS + 20)
+            return self._run(self._connect(), DIRECT_SECONDS + SCAN_SECONDS + 20)
         except TimeoutError:
             # macOS 는 블루투스 권한이 없으면 오류 없이 계속 기다리기만 한다
             print("[Bluetooth] 응답이 없습니다. Mac 이라면 시스템 설정 > 개인정보 보호 및 보안 > Bluetooth 에서 터미널 앱을 허용했는지 확인하세요.")
@@ -55,14 +61,42 @@ class BleTransport:
             return False
 
     async def _connect(self) -> bool:
-        device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_SECONDS)
-        if device is None:
-            return False
-        client = BleakClient(device)
-        await client.connect()
+        client = await self._connect_known() if sys.platform == "win32" else None
+        if client is None:
+            device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_SECONDS)
+            if device is None:
+                return False
+            client = BleakClient(device)
+            await client.connect()
         await client.start_notify(NUS_TX, self._on_notify)
         self.client = client
+        if sys.platform == "win32":
+            try:
+                ADDRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                ADDRESS_FILE.write_text(client.address)
+            except OSError:
+                pass
         return True
+
+    async def _connect_known(self):
+        """지난번에 연결한 주소로 바로 붙어 본다. 안 되면 None (찾기로 넘어간다)."""
+        try:
+            address = ADDRESS_FILE.read_text().strip()
+        except OSError:
+            return None
+        if not address:
+            return None
+        client = BleakClient(address, timeout=DIRECT_SECONDS)
+        try:
+            await client.connect()
+        except (BleakError, OSError, asyncio.TimeoutError):
+            return None
+        # 같은 주소의 다른 기기일 수 있으니 LLM Deck 서비스가 있는지 확인한다
+        if not any(s.uuid.lower() == "6e400001-b5a3-f393-e0a9-e50e24dcca9e" for s in client.services):
+            await client.disconnect()
+            return None
+        print("[Bluetooth] 지난번 주소로 바로 연결했습니다.")
+        return client
 
     def _on_notify(self, _sender, data: bytearray) -> None:
         # 알림은 JSON 글자. 소리 묶음은 길이가 정해져 있어서(165바이트) 길이로 구별한다
@@ -78,6 +112,9 @@ class BleTransport:
             return
         seq, predictor, index = AUDIO_HEADER.unpack_from(data)
         self.on_audio(seq, adpcm.decode(bytes(data[AUDIO_HEADER.size :]), predictor, index))
+
+    def connected(self) -> bool:
+        return bool(self.client and self.client.is_connected)
 
     def send(self, message: dict) -> None:
         try:

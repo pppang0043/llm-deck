@@ -88,6 +88,12 @@ class UsbTransport:
             except OSError:
                 pass
 
+    def connected(self) -> bool:
+        # 케이블을 뽑으면 읽는 쪽이 오류로 끝나며 포트가 닫히거나, 포트 자체가 사라진다
+        if not self.ser or not self.ser.is_open:
+            return False
+        return self.port_name != "" or any(p.device == self.ser.port for p in list_ports.comports())
+
     def send(self, message: dict) -> None:
         if not self.confirmed and time.time() - self.opened_at > CONFIRM_SECONDS:
             # LLM Deck 이 아닌 ESP32 기기다 (다른 프로젝트 보드 등). 놓아주고 다시 찾지 않는다.

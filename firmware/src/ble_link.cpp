@@ -1,6 +1,7 @@
 #include "ble_link.h"
 
 #include <NimBLEDevice.h>
+#include <esp_bt.h>
 #include <nimble/porting/nimble/include/os/os_mbuf.h>
 #include <Preferences.h>
 #include <string>
@@ -127,6 +128,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *srv, NimBLEConnInfo &info) override {
     // 소리가 끊기지 않도록 통신 간격을 짧게(7.5~15ms) 요청한다
     srv->updateConnParams(info.getConnHandle(), 6, 12, 0, 200);
+    // 연결마다 송신 세기도 가장 세게 (연결 번호별로 따로 정해진다)
+    esp_ble_tx_power_set((esp_ble_power_type_t)(ESP_BLE_PWR_TYPE_CONN_HDL0 + (info.getConnHandle() & 7)), ESP_PWR_LVL_P20);
     std::string addr = info.getAddress().toString();
     int slot = -1;
     portENTER_CRITICAL(&peers_mux);
@@ -225,6 +228,12 @@ void ble_link_init() {
   prefs.begin("llm-deck");
   strlcpy(preferred, prefs.getString("ble_pref", "").c_str(), sizeof(preferred));
   NimBLEDevice::init(BLE_NAME);
+  // 회사처럼 PC 가 멀리 있어도 찾을 수 있게 송신 세기를 가장 세게(+20dBm, 기본 +9dBm) 올린다.
+  // 광고(찾기)와 연결 모두. 전기를 조금 더 쓰지만 책상 기기라 괜찮다.
+  esp_err_t adv_err = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P20);
+  esp_err_t def_err = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P20);
+  Serial.printf("[ble] tx power adv %d (err %d), default %d (err %d)\n", (int)esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV),
+                (int)adv_err, (int)esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT), (int)def_err);
   NimBLEDevice::setMTU(255);
 
   server = NimBLEDevice::createServer();

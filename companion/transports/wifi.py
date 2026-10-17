@@ -153,6 +153,10 @@ class WifiTransport:
         self.on_event({"photo": {"name": photo.get("name", "photo.jpg"), "size": len(data)}})
         self.on_photo(0, data)
 
+    def connected(self) -> bool:
+        # Wi-Fi 는 연결을 유지하지 않고 보낼 때마다 요청하므로, 끊김은 보낼 때 알게 된다
+        return True
+
     def send(self, message: dict) -> None:
         req = urllib.request.Request(
             f"http://{self.address}/usage",

@@ -340,7 +340,17 @@ def main() -> None:
                     transport.close()
                 sink.close()
                 return
-            time.sleep(INTERVAL if transport else 5)
+            if transport:
+                # 다음 전송까지 기다리되, 연결이 끊기면(기기를 껐다 켬, 블루투스 끊김) 바로 다시 연결한다
+                for _ in range(INTERVAL * 2):
+                    if not transport.connected():
+                        print(f"[device] {transport.name} 연결이 끊겼습니다. 다시 연결합니다.")
+                        transport.close()
+                        transport = None
+                        break
+                    time.sleep(0.5)
+            else:
+                time.sleep(2)
         except Exception:
             # 예상하지 못한 오류로 도우미가 꺼지지 않게 한다. Windows 의 자동 시작은 꺼지면 다음 로그인까지 다시 켜지지 않는다.
             print("[device] 오류가 나서 10초 뒤 다시 시작합니다:")
