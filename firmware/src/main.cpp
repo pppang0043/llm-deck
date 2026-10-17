@@ -59,7 +59,9 @@ static bool boot_button_pressed() {
 }
 
 // 화면 방향 = 기울기로 알아낸 방향 + 버튼으로 더 돌린 횟수.
-// 버튼으로 돌린 횟수는 저장해 두므로, 기울기 방향이 맞지 않으면 버튼으로 한 번 맞춰 두면 된다.
+// 자동 회전이 켜져 있으면 버튼은 잠깐만 돌린다: 기기를 다른 방향으로 세우면 다시 기울기를 따른다 (저장하지 않음).
+//   (전에는 버튼 횟수를 저장해서, 한 번 어긋나면 세울 때마다 계속 틀린 방향으로 돌았다)
+// 자동 회전을 끄면 버튼으로 맞춘 방향을 저장해 두고 그대로 쓴다.
 static Preferences prefs;
 static uint8_t rotate_offset = 0;
 static int tilt = 0;
@@ -74,13 +76,18 @@ static void apply_rotation() {
   Serial.printf("[main] screen rotation %d (tilt %d + button %d)\n", rotation, tilt, rotate_offset);
 }
 
+// 버튼으로 돌린 뒤 기울기가 이만큼 그대로면 기울기 방향으로 되돌린다 (설정 > 디스플레이 > 회전 되돌리기)
+#define ROTATE_RESTORE_MS (5 * 60 * 1000UL)
+static uint32_t stable_since = 0;
+
 static void rotate_by_button() {
   rotate_offset = (rotate_offset + 1) & 3;
-  prefs.putUChar("rot_offset", rotate_offset);
+  stable_since = millis();
+  if (!settings_auto_rotate()) prefs.putUChar("rot_fixed", (tilt + rotate_offset) & 3);
   apply_rotation();
 }
 
-// 기기를 돌려 세우면 화면도 따라 돈다. 같은 방향이 잠깐 유지되어야 바꾼다 (흔들림에 반응하지 않도록).
+// 기기를 돌려 세우면 화면도 따라 돈다. 같은 방향이 1초쯤 유지되어야 바꾼다 (들고 옮길 때 흔들림에 반응하지 않도록).
 // 눕혀 놓았거나 애매하게 기울어 있으면 마지막 방향을 유지한다.
 static void follow_tilt() {
   static uint32_t checked_ms = 0;
@@ -90,14 +97,33 @@ static void follow_tilt() {
   if (millis() - checked_ms < 150 || !settings_auto_rotate()) return;
   checked_ms = millis();
   int now = imu_rotation();
+  // 버튼으로 돌려 둔 상태: 기기가 움직이지 않고 5분 동안 그대로면 기울기 방향(눕혀 두었으면 마지막으로 세웠던 방향)으로
+  // 되돌린다. 들거나 흔들리거나 다른 방향으로 세우면 처음부터 다시 센다.
+  if (rotate_offset && settings_rotate_restore()) {
+    static float last_x = 0, last_y = 0, last_z = 0;
+    float x, y, z;
+    bool moved = true;
+    if (imu_read(&x, &y, &z)) {
+      moved = fabsf(x - last_x) + fabsf(y - last_y) + fabsf(z - last_z) > 0.15f;
+      last_x = x, last_y = y, last_z = z;
+    }
+    if (moved || (now >= 0 && now != tilt)) {
+      stable_since = millis();
+    } else if (millis() - stable_since >= ROTATE_RESTORE_MS) {
+      Serial.println("[main] rotation restored to tilt after 5 min steady");
+      rotate_offset = 0;
+      apply_rotation();
+    }
+  }
   if (now < 0 || now == tilt) {
     candidate = -1;
     return;
   }
   count = now == candidate ? count + 1 : 1;
   candidate = now;
-  if (count >= 4) {
+  if (count >= 7) {
     tilt = now;
+    rotate_offset = 0;  // 새로 세운 방향은 기울기 그대로 (버튼으로 돌린 것은 잊는다)
     candidate = -1;
     apply_rotation();
   }
@@ -226,12 +252,17 @@ void setup() {
   imu_init();
   battery_init();
   prefs.begin("llm-deck");
-  rotate_offset = prefs.getUChar("rot_offset", 0) & 3;
+  prefs.remove("rot_offset");  // 예전 펌웨어가 저장한 버튼 횟수 (어긋난 채 남아 있으면 계속 틀린 방향이 된다)
   settings_init();
   history_init();
   delay(50);  // 센서가 첫 값을 낼 때까지 잠깐 기다린다
   int start = imu_rotation();
   if (start >= 0) tilt = start;
+  if (!settings_auto_rotate() && prefs.isKey("rot_fixed")) {
+    // 자동 회전을 끈 채 버튼으로 맞춰 둔 방향
+    tilt = prefs.getUChar("rot_fixed", 0) & 3;
+    rotate_offset = 0;
+  }
   float ax = 0, ay = 0, az = 0;
   imu_read(&ax, &ay, &az);
   Serial.printf("[main] tilt %d (accel %.2f %.2f %.2f), button %d\n", start, ax, ay, az, rotate_offset);

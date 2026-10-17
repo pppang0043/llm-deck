@@ -28,6 +28,7 @@ LV_FONT_DECLARE(font_ko_20);
 static Preferences prefs;
 static uint8_t brightness = 80;
 static bool auto_rotate = true;
+static bool rotate_restore = true;
 static bool mic_sound = true;
 static bool auto_dim = true;
 static bool limit_alerts = true;
@@ -69,7 +70,7 @@ static Page current = PAGE_LIST;
 static lv_obj_t *wifi_value, *ble_value, *spk_value, *battery_value, *sd_value;
 
 static lv_obj_t *bright_slider, *bright_value;
-static lv_obj_t *rotate_sw, *sound_sw, *mirror_sw, *dim_sw, *alert_sw, *sd_sw, *sd_video_sw;
+static lv_obj_t *rotate_sw, *restore_sw, *sound_sw, *mirror_sw, *dim_sw, *alert_sw, *sd_sw, *sd_video_sw;
 static lv_obj_t *saver_lbl, *cam_value;
 static lv_obj_t *wifi_status, *wifi_ip, *wifi_signal, *wifi_list;
 static lv_obj_t *ble_status, *ble_none;
@@ -125,6 +126,7 @@ void settings_init() {
   prefs.begin("llm-deck");
   brightness = prefs.getUChar("bright", 80);
   auto_rotate = prefs.getBool("auto_rot", true);
+  rotate_restore = prefs.getBool("rot_restore", true);
   mic_sound = prefs.getBool("mic_sound", true);
   auto_dim = prefs.getBool("auto_dim", true);
   limit_alerts = prefs.getBool("lim_alert", true);
@@ -185,6 +187,10 @@ void settings_cycle_brightness() {
 
 bool settings_auto_rotate() {
   return auto_rotate;
+}
+
+bool settings_rotate_restore() {
+  return rotate_restore;
 }
 
 bool settings_mic_sound() {
@@ -458,6 +464,11 @@ static void alert_changed(lv_event_t *e) {
 static void rotate_changed(lv_event_t *e) {
   auto_rotate = lv_obj_has_state(rotate_sw, LV_STATE_CHECKED);
   prefs.putBool("auto_rot", auto_rotate);
+}
+
+static void restore_changed(lv_event_t *e) {
+  rotate_restore = lv_obj_has_state(restore_sw, LV_STATE_CHECKED);
+  prefs.putBool("rot_restore", rotate_restore);
 }
 
 static void sound_changed(lv_event_t *e) {
@@ -761,7 +772,10 @@ static void build_display(lv_obj_t *parent) {
 
   add_button(add_row(p, "화면 보호기", "안 쓰면 어두운 시계로"), "5분", saver_clicked, &saver_lbl);
   rotate_sw = add_switch(add_row(p, "자동 회전", "기울이면 따라 돌기"), auto_rotate, rotate_changed);
+  restore_sw = add_switch(add_row(p, "회전 되돌리기", "손으로 돌려도 5분 뒤 원래대로"), rotate_restore,
+                          restore_changed);
   add_note(p, "화면 보호기는 시계를 30초마다 옮기고 밝기를 낮춰 화면 잔상과 백라이트 닳음을 줄입니다.");
+  add_note(p, "회전 되돌리기: 화면 위 회전 버튼으로 돌린 뒤 기기를 5분 동안 같은 방향으로 세워 두면, 기울기에 맞는 방향으로 돌아옵니다 (자동 회전이 켜져 있을 때).");
 }
 
 static void build_battery(lv_obj_t *parent) {
@@ -1086,6 +1100,7 @@ void settings_refresh() {
   // 설정을 열 때마다 목록부터 (PC 에서 바뀐 값도 맞춘다)
   for (LinkOption &o : link_options) set_checked(o.sw, o.allowed);
   set_checked(rotate_sw, auto_rotate);
+  set_checked(restore_sw, rotate_restore);
   set_checked(dim_sw, auto_dim);
   set_checked(alert_sw, limit_alerts);
   set_checked(sound_sw, mic_sound);

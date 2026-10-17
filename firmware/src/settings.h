@@ -13,6 +13,8 @@ void settings_cycle_brightness();
 
 // 기울이면 화면이 따라 도는지
 bool settings_auto_rotate();
+// 회전 버튼으로 돌린 뒤 기기가 5분 동안 같은 방향이면 기울기 방향으로 되돌릴지 (자동 회전이 켜져 있을 때)
+bool settings_rotate_restore();
 // 마이크를 켜고 끌 때 알림음을 낼지 (블루투스 스피커가 있으면 그쪽, 없으면 PC 스피커)
 bool settings_mic_sound();
 // 배터리로만 쓸 때 만지지 않으면 화면을 어둡게(1분) 하고 끄는지(3분)
