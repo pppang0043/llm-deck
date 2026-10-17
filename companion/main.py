@@ -188,6 +188,7 @@ def main() -> None:
                         help="기기 화면 바꾸기: home / usage / info / settings, 설정 분류는 settings_wifi / settings_bluetooth / "
                              "settings_notify / settings_display / settings_battery / settings_camera / settings_sd / "
                              "settings_general (settings_end 는 지금 화면의 맨 아래)")
+    parser.add_argument("--sd-clear", action="store_true", help="기기 SD 카드의 사진을 모두 지운다 (USB)")
     parser.add_argument("--saver", action="store_true", help="기기의 화면 보호기를 지금 띄운다 (화면을 만지면 사라짐)")
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
@@ -265,6 +266,8 @@ def main() -> None:
                     message["view"] = args.view
                 if first and args.screenshot:
                     message["screenshot"] = True
+                if first and args.sd_clear:
+                    message["sd_clear"] = True
                 if first and args.saver:
                     message["saver"] = True
                 if first and args.test_video:
@@ -307,7 +310,7 @@ def main() -> None:
                 time.sleep(2)
                 transport.close()
                 return
-            if (args.view or args.saver) and not args.screenshot and transport and not first:
+            if (args.view or args.saver or args.sd_clear) and not args.screenshot and transport and not first:
                 time.sleep(1)
                 transport.close()
                 return

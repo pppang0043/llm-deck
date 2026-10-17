@@ -22,6 +22,7 @@
 #include "mic.h"
 #include "photo.h"
 #include "saver.h"
+#include "storage.h"
 #include "usb_link.h"
 #include "net.h"
 #include "ui.h"
@@ -222,7 +223,7 @@ void link_loop() {
           for (int i = 0; i < w * h; i++) px[i] = (px[i] << 8) | (px[i] >> 8);
           uint8_t *jpg;
           size_t len;
-          if (fmt2jpg((uint8_t *)px, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len);
+          if (fmt2jpg((uint8_t *)px, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len, false);
           free(px);
         }
       }
@@ -246,6 +247,8 @@ void link_loop() {
         }
       }
       if (doc["ble_use"].is<int>()) ble_peer_select(doc["ble_use"]);
+      // 진단용: SD 카드의 사진을 모두 지운다 (케이블로 연결한 PC 에서만)
+      if (doc["sd_clear"] == true && from == LINK_USB) storage_clear("/photos");
       if (doc["services"].is<JsonArrayConst>() && from == active && usage) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);

@@ -329,7 +329,7 @@ void camera_ui_command(const char *cmd) {
     }
     uint8_t *jpg;
     size_t len;
-    if (fmt2jpg(be, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len);
+    if (fmt2jpg(be, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len, false);
     free(be);
   } else if (strcmp(cmd, "record") == 0) {
     open_camera();

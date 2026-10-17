@@ -96,6 +96,7 @@ uv run main.py --test-sound        # 알림음 들어 보기
 uv run main.py --camera shoot      # 사진 찍기 (open / record / close / dump)
 uv run main.py --test-video 5      # 5초 녹화
 uv run main.py --saver             # 화면 보호기를 지금 띄워 보기 (만지면 사라짐)
+uv run main.py --sd-clear          # 기기 SD 카드의 사진 모두 지우기 (USB)
 uv run main.py --screenshot        # 기기 화면을 찍어 사진 폴더에 저장 (--view home|usage|info|settings 와 함께)
 uv run main.py --links ble=off     # 연결 방식 켜고 끄기 (USB 로만, USB 를 꺼 둬도 받는다)
 uv run main.py --camera-mount 0m   # 카메라 방향 (0~3, 좌우 반전이면 m)

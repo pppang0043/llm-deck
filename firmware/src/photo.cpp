@@ -101,13 +101,13 @@ static void make_name(char *out, size_t size) {
   }
 }
 
-const char *photo_save(uint8_t *jpg, size_t len) {
+const char *photo_save(uint8_t *jpg, size_t len, bool to_sd) {
   char name[40];
   make_name(name, sizeof(name));
 
   char path[56];
   snprintf(path, sizeof(path), "/photos/%s", name);
-  bool on_sd = settings_sd_photos() && storage_write(path, jpg, len);
+  bool on_sd = to_sd && settings_sd_photos() && storage_write(path, jpg, len);
 
   // Wi-Fi 로 받아 갈 수 있게 마지막 사진으로 둔다 (원본은 아래에서 PC 전송에 쓴다)
   uint8_t *copy = (uint8_t *)ps_malloc(len);
