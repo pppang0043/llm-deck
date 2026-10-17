@@ -478,7 +478,7 @@ static void ble_row_clicked(lv_event_t *e) {
   int slot = (intptr_t)lv_event_get_user_data(e);
   if (ble_peer_get(slot, nullptr, 0) == 1) {
     ble_peer_select(slot);
-    ui_toast("이 PC를 사용합니다\n마이크·사진·알림이 이 PC로 갑니다", 2500);
+    ui_toast("이 PC를 사용합니다\n마이크, 사진, 알림이 이 PC로 갑니다", 2500);
   }
 }
 
@@ -583,7 +583,7 @@ static void build_ble(lv_obj_t *parent) {
     lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
     ble_rows[i] = row;
   }
-  add_note(p, "기다리는 PC를 누르면 그 PC를 사용합니다. 마이크 소리·사진·알림음과 화면의 사용량은 사용 중인 PC 하나만 씁니다.");
+  add_note(p, "기다리는 PC를 누르면 그 PC를 사용합니다. 마이크 소리, 사진, 알림음과 화면의 사용량은 사용 중인 PC 하나만 씁니다.");
   add_note(p, "PC 운영체제에서 페어링하지 마세요. PC 도우미가 자동으로 찾아 연결합니다.");
 }
 
@@ -832,6 +832,10 @@ void settings_refresh() {
   set_checked(sound_sw, mic_sound);
   set_checked(sd_sw, sd_photos);
   show_page(PAGE_LIST);
+}
+
+void settings_redraw() {
+  refresh_live();
 }
 
 void settings_loop() {

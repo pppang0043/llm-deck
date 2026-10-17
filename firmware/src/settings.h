@@ -31,6 +31,8 @@ bool settings_sd_photos();
 
 // 설정 화면이 보이는 동안 loop() 에서 부른다 (연결 상태 등을 1초마다 고친다)
 void settings_loop();
+// 지금 바로 상태 글자를 고친다 (화면 찍기 직전)
+void settings_redraw();
 // 분류 화면에 들어가 있으면 목록으로 돌아가고 true (오른쪽으로 밀기)
 bool settings_back();
 // 분류 화면 바로 열기: "wifi" / "bluetooth" / "notify" / "display" / "battery" / "camera" / "sd" / "general"

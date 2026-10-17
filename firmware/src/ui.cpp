@@ -576,6 +576,11 @@ void ui_set_level(uint8_t pct) {
 }
 
 void ui_show(const char *name) {
+  // 설정 안의 어느 화면이든 그 화면 그대로 맨 아래로만 내린다
+  if (strcmp(name, "settings_end") == 0 && view == VIEW_SETTINGS) {
+    settings_open("end");
+    return;
+  }
   if (strcmp(name, "home") == 0) {
     view = VIEW_HOME;
   } else if (strcmp(name, "usage") == 0) {

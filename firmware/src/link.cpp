@@ -216,6 +216,7 @@ void link_loop() {
         // 진단용: 지금 화면을 사진처럼 PC 로 보낸다
         uint16_t *px;
         int w, h;
+        if (ui_settings_visible()) settings_redraw();
         lv_refr_now(NULL);
         if (ui_screenshot(&px, &w, &h)) {
           for (int i = 0; i < w * h; i++) px[i] = (px[i] << 8) | (px[i] >> 8);
