@@ -188,6 +188,7 @@ def main() -> None:
                         help="기기 화면 바꾸기: home / usage / info / settings, 설정 분류는 settings_wifi / settings_bluetooth / "
                              "settings_notify / settings_display / settings_battery / settings_camera / settings_sd / "
                              "settings_general (settings_end 는 지금 화면의 맨 아래)")
+    parser.add_argument("--sd-pull", action="store_true", help="기기 SD 카드의 마지막 동영상을 받아 온다 (USB, 진단용)")
     parser.add_argument("--sd-clear", action="store_true", help="기기 SD 카드의 사진을 모두 지운다 (USB)")
     parser.add_argument("--saver", action="store_true", help="기기의 화면 보호기를 지금 띄운다 (화면을 만지면 사라짐)")
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
@@ -266,6 +267,8 @@ def main() -> None:
                     message["view"] = args.view
                 if first and args.screenshot:
                     message["screenshot"] = True
+                if first and args.sd_pull:
+                    message["sd_pull"] = True
                 if first and args.sd_clear:
                     message["sd_clear"] = True
                 if first and args.saver:
@@ -314,7 +317,7 @@ def main() -> None:
                 time.sleep(1)
                 transport.close()
                 return
-            if (args.test_photo or args.screenshot or args.camera in ("shoot", "dump")) and transport and not first:
+            if (args.test_photo or args.screenshot or args.sd_pull or args.camera in ("shoot", "dump")) and transport and not first:
                 # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
                 for _ in range(60):
                     time.sleep(1)
