@@ -401,7 +401,7 @@ static const char *service_name(const NimBLEUUID &uuid) {
     case 0x1846: return "Coordinated Set";
     case 0x184D: return "Microphone Control";
     case 0x184E: return "LE Audio: Audio Stream Control  <- receives audio";
-    case 0x184F: return "LE Audio: Broadcast Audio Scan";
+    case 0x184F: return "LE Audio: Broadcast Audio Scan  <- receives audio";
     case 0x1850: return "LE Audio: Published Audio Capabilities";
     case 0x1853: return "LE Audio: Common Audio";
     case 0x1855: return "Telephony and Media Audio";
@@ -472,8 +472,11 @@ static void speaker_check_task(void *) {
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
   NimBLEScanResults results = scan->getResults(10000, false);
-  // LE Audio 서비스: 0x184E 소리 스트림 제어, 0x1850 지원 소리 형식, 0x1853 공통 오디오, 0x1852 방송 오디오
-  static const uint16_t LE_AUDIO[] = {0x184E, 0x1850, 0x1853, 0x1852};
+  // LE Audio 를 받는 쪽(스피커)이 광고하는 서비스: 0x184E 소리 스트림 제어, 0x184F 방송 소리 찾기, 0x1850 지원 소리 형식,
+  // 0x1853 공통 오디오. (0x1852 는 보내는 쪽의 방송 알림이라 넣지 않는다)
+  // 주의: 이 빌드는 NimBLE 확장 광고(CONFIG_BT_NIMBLE_EXT_ADV)를 켜지 않아 예전 방식 광고만 받는다.
+  // LE Audio 스피커는 확장 광고를 쓰므로, 여기서 안 보여도 LE Audio 가 없다고 확정할 수는 없다.
+  static const uint16_t LE_AUDIO[] = {0x184E, 0x184F, 0x1850, 0x1853};
   int speakers = 0, le_audio = 0;
   const NimBLEAdvertisedDevice *probe[CHECK_MAX_PROBE];
   int probes = 0;
