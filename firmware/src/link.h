@@ -23,6 +23,8 @@ void link_init(void (*set_mic)(bool on));
 //   {"photo_test": true}                    카메라 없이 무늬 사진으로 저장·전송을 시험한다
 //   {"battery_mv": 4123}                     멀티미터로 잰 배터리 전압. 기기의 전압 측정을 보정한다 (0: 보정 지움)
 //   {"wifi_add": {"ssid", "password"}}       Wi-Fi 추가 등록 / {"wifi_clear": true} 추가한 것 모두 삭제
+//   {"bt_check": true}                      블루투스 스피커 시험: 칩 지원 범위 + 주변 기기 찾기 (결과는 시리얼 [bt-check])
+//   {"bt_check": "aa:bb:cc:dd:ee:ff"}       위 + 그 기기에 연결해 서비스 목록 읽기 ("all": 연결 가능한 기기 모두)
 //   {"host": "PC 이름"}                      보낸 PC 의 이름 (블루투스 설정 화면에 보여준다)
 // usage 가 false 면 사용량("services")은 쓰지 않는다 (블루투스로 붙어 기다리는 중인 PC)
 void link_submit(Link from, const char *data, size_t len, bool usage = true);

@@ -32,3 +32,7 @@ int ble_peer_count();
 void ble_peer_select(int slot);
 // 이 PC 와의 연결을 끊는다
 void ble_peer_disconnect(int slot);
+
+// 블루투스 스피커 시험: 칩의 블루투스 지원 범위를 알리고 10초 동안 주변 기기를 찾아 시리얼로 적는다 ([bt-check])
+// target 이 주소(aa:bb:..)면 그 기기에, "all" 이면 연결할 수 있는 기기 모두에 연결해 서비스 목록을 읽는다
+void ble_speaker_check(const char *target = nullptr);

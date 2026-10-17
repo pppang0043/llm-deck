@@ -12,6 +12,8 @@
     uv run main.py --screenshot     기기 화면을 찍어 저장한다 (--view home 과 함께 쓰면 그 화면으로 바꾼 뒤)
     uv run main.py --test-photo     카메라 없이 무늬 사진을 찍은 것처럼 해서 SD 카드·PC 저장을 시험한다
     uv run main.py --test-sound     기기 알림에 쓰는 소리(마이크 켬·끔, 한도 알림)를 모두 들어 본다
+    uv run main.py --bt-check       기기가 블루투스 스피커에 붙을 수 있는지 시험한다 (칩 지원 범위 + 주변 기기 찾기, USB)
+    uv run main.py --bt-check all   위 + 연결할 수 있는 기기마다 붙어서 BLE 서비스 목록을 읽는다 (주소를 주면 그 기기만)
     uv run main.py --add-wifi       기기가 접속할 Wi-Fi 를 추가로 등록한다 (USB 로 연결한 상태에서)
     uv run main.py --clear-wifi     추가로 등록한 Wi-Fi 를 모두 지운다
     uv run main.py --sync-only      기기 없이, 이 PC 의 한도 사용률을 다른 PC 와 공유만 한다
@@ -195,6 +197,8 @@ def main() -> None:
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
     parser.add_argument("--test-sound", action="store_true", help="기기 알림에 쓰는 소리를 모두 들어 본다")
+    parser.add_argument("--bt-check", nargs="?", const=True, metavar="주소|all",
+                        help="기기가 블루투스 스피커에 붙을 수 있는지 시험한다 (USB). 주소나 all 을 주면 서비스 목록도 읽는다")
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     parser.add_argument("--log", metavar="FILE", help="출력을 파일에 덧붙여 쓴다 (창 없이 자동 실행할 때)")
@@ -272,6 +276,8 @@ def main() -> None:
                     message["sd_pull"] = True
                 if first and args.sd_clear:
                     message["sd_clear"] = True
+                if first and args.bt_check:
+                    message["bt_check"] = args.bt_check
                 if first and args.rotate:
                     message["rotate"] = True
                 if first and args.saver:
@@ -327,6 +333,15 @@ def main() -> None:
                     if receiver.buf is None and receiver.name:
                         break
                 transport.close()
+                return
+            if args.bt_check and transport and not first:
+                # 기기가 10초 동안 주변을 찾고 결과를 적는다 (USB 로그에 "기기> [bt-check]" 로 보인다)
+                # 서비스 목록까지 읽으면 기기마다 수 초씩 더 걸린다 (최대 8대)
+                time.sleep(20 if args.bt_check is True else 120)
+                transport.close()
+                print("[bt-check] 블루투스 스피커는 보통 클래식 블루투스(A2DP)로 소리를 받습니다.")
+                print("           위에 'Bluetooth Classic ... NO' 이면 이 기기의 칩으로는 그런 스피커에 소리를 보낼 수 없습니다.")
+                print("           [LE Audio] 표시가 있는 스피커가 있어도, ESP32-S3 는 LE Audio(BLE 5.2) 도 지원하지 않습니다.")
                 return
             if args.battery is not None and transport and not first:
                 print(f"[device] 배터리 전압 {args.battery:.3f}V 로 보정했습니다." if args.battery else "[device] 배터리 보정을 지웠습니다.")

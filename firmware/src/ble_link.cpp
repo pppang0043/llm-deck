@@ -2,6 +2,7 @@
 
 #include <NimBLEDevice.h>
 #include <esp_bt.h>
+#include <esp_chip_info.h>
 #include <nimble/porting/nimble/include/os/os_mbuf.h>
 #include <Preferences.h>
 #include <string>
@@ -376,4 +377,146 @@ void ble_peer_disconnect(int slot) {
   if (!used) return;
   server->disconnect(handle);
   Serial.printf("[ble] slot %d disconnected from settings\n", slot);
+}
+
+// 블루투스 스피커 연결 시험. 스피커 음악은 보통 "블루투스 클래식(A2DP)" 으로 가는데, 칩마다 지원이 다르다.
+// 1) 칩이 클래식·BLE 를 지원하는지 칩 정보로 확인하고, 2) 10초 동안 주변 BLE 기기를 모두 적는다.
+// 스피커로 보이는 것(모양 정보가 "오디오 출력")과 LE Audio(BLE 로 소리 보내기) 서비스를 가진 것을 표시한다.
+// 3) 대상(주소, 또는 "all" 이면 연결할 수 있는 기기 모두)에 연결해 그 기기가 BLE 로 받는 서비스 목록을 읽는다.
+static volatile bool checking = false;
+static char check_target[20] = "";
+#define CHECK_MAX_PROBE 8
+
+// 자주 보이는 서비스 이름 (16비트 번호). 소리를 받는 통로가 있는지 알아보기 쉽게 한다.
+static const char *service_name(const NimBLEUUID &uuid) {
+  if (uuid.bitSize() != 16) return "vendor (custom)";
+  switch (*(const uint16_t *)uuid.getValue()) {
+    case 0x1800: return "Generic Access";
+    case 0x1801: return "Generic Attribute";
+    case 0x180A: return "Device Information";
+    case 0x180F: return "Battery";
+    case 0x1812: return "HID (buttons)";
+    case 0x1844: return "Volume Control";
+    case 0x1845: return "Volume Offset";
+    case 0x1846: return "Coordinated Set";
+    case 0x184D: return "Microphone Control";
+    case 0x184E: return "LE Audio: Audio Stream Control  <- receives audio";
+    case 0x184F: return "LE Audio: Broadcast Audio Scan";
+    case 0x1850: return "LE Audio: Published Audio Capabilities";
+    case 0x1853: return "LE Audio: Common Audio";
+    case 0x1855: return "Telephony and Media Audio";
+    case 0x1848: return "Media Control";
+    case 0xFE2C: return "Google Fast Pair";
+    default: return "";
+  }
+}
+
+static std::string printable(const std::string &in) {
+  std::string out = in;
+  for (char &c : out) {
+    if ((uint8_t)c < 0x20 || (uint8_t)c > 0x7E) c = '?';  // PC 로그에 글자로 보이게
+  }
+  return out;
+}
+
+// 연결해서 서비스·특성 목록을 적는다. 읽을 수 있는 짧은 값(이름·제조사·모델 등)은 내용도 적는다.
+static void probe_services(const NimBLEAdvertisedDevice *d) {
+  Serial.printf("[bt-check] --- connecting to %s (%s) ---\n", d->getAddress().toString().c_str(),
+                d->getName().empty() ? "no name" : printable(d->getName()).c_str());
+  NimBLEClient *client = NimBLEDevice::createClient();
+  if (!client) {
+    Serial.println("[bt-check]   no free connection slot");
+    return;
+  }
+  client->setConnectTimeout(8000);
+  if (!client->connect(d)) {
+    Serial.println("[bt-check]   connect failed");
+    NimBLEDevice::deleteClient(client);
+    return;
+  }
+  const std::vector<NimBLERemoteService *> &services = client->getServices(true);
+  Serial.printf("[bt-check]   connected, %u services\n", (unsigned)services.size());
+  bool audio = false;
+  for (NimBLERemoteService *svc : services) {
+    const char *name = service_name(svc->getUUID());
+    audio = audio || strstr(name, "receives audio");
+    Serial.printf("[bt-check]   service %s  %s\n", svc->getUUID().toString().c_str(), name);
+    for (NimBLERemoteCharacteristic *chr : svc->getCharacteristics(true)) {
+      char props[24] = "";
+      if (chr->canRead()) strcat(props, "read ");
+      if (chr->canWrite()) strcat(props, "write ");
+      if (chr->canWriteNoResponse()) strcat(props, "write-nr ");
+      if (chr->canNotify()) strcat(props, "notify ");
+      if (chr->canIndicate()) strcat(props, "indicate");
+      std::string value;
+      if (chr->canRead()) {
+        NimBLEAttValue v = chr->readValue();
+        value.assign((const char *)v.data(), min((size_t)v.size(), (size_t)32));
+      }
+      Serial.printf("[bt-check]     char %s  [%s]%s%s\n", chr->getUUID().toString().c_str(), props,
+                    value.empty() ? "" : "  = ", printable(value).c_str());
+    }
+  }
+  Serial.printf("[bt-check]   audio input over BLE: %s\n", audio ? "YES (LE Audio)" : "none");
+  client->disconnect();
+  NimBLEDevice::deleteClient(client);
+}
+
+static void speaker_check_task(void *) {
+  esp_chip_info_t chip;
+  esp_chip_info(&chip);
+  Serial.printf("[bt-check] chip %s rev %d: Bluetooth Classic (A2DP speakers) %s, BLE %s\n", CONFIG_IDF_TARGET,
+                chip.revision / 100, (chip.features & CHIP_FEATURE_BT) ? "yes" : "NO",
+                (chip.features & CHIP_FEATURE_BLE) ? "yes" : "no");
+  Serial.println("[bt-check] scanning BLE for 10 s...");
+  NimBLEScan *scan = NimBLEDevice::getScan();
+  scan->setActiveScan(true);
+  NimBLEScanResults results = scan->getResults(10000, false);
+  // LE Audio 서비스: 0x184E 소리 스트림 제어, 0x1850 지원 소리 형식, 0x1853 공통 오디오, 0x1852 방송 오디오
+  static const uint16_t LE_AUDIO[] = {0x184E, 0x1850, 0x1853, 0x1852};
+  int speakers = 0, le_audio = 0;
+  const NimBLEAdvertisedDevice *probe[CHECK_MAX_PROBE];
+  int probes = 0;
+  for (int i = 0; i < results.getCount(); i++) {
+    const NimBLEAdvertisedDevice *d = results.getDevice(i);
+    // 모양 정보 0x0840~0x087F 는 "오디오 출력"(스피커·사운드바 등)
+    bool speaker = d->haveAppearance() && (d->getAppearance() >> 6) == 0x21;
+    bool audio = false;
+    for (uint16_t uuid : LE_AUDIO) audio = audio || d->isAdvertisingService(NimBLEUUID(uuid));
+    speakers += speaker;
+    le_audio += audio;
+    // 제조사 번호 (0x004C 애플, 0x0006 마이크로소프트, 0x0075 삼성 ...): 이름이 없는 기기를 알아보는 실마리
+    char maker[12] = "";
+    if (d->getManufacturerDataCount()) {
+      std::string m = d->getManufacturerData();
+      if (m.size() >= 2) snprintf(maker, sizeof(maker), " mfr %02X%02X", (uint8_t)m[1], (uint8_t)m[0]);
+    }
+    char uuids[48] = "";
+    for (int u = 0; u < d->getServiceUUIDCount() && strlen(uuids) < 36; u++) {
+      strlcat(uuids, " ", sizeof(uuids));
+      strlcat(uuids, d->getServiceUUID(u).toString().c_str(), sizeof(uuids));
+    }
+    std::string name = printable(d->getName());
+    Serial.printf("[bt-check]  %4d dBm  %s  %s%s%s%s%s%s\n", d->getRSSI(), d->getAddress().toString().c_str(),
+                  name.empty() ? "(no name)" : name.c_str(), d->isConnectable() ? "  connectable" : "", maker, uuids,
+                  speaker ? "  [speaker]" : "", audio ? "  [LE Audio]" : "");
+    bool wanted = strcmp(check_target, "all") == 0 ? d->isConnectable()
+                                                    : strcasecmp(check_target, d->getAddress().toString().c_str()) == 0;
+    if (wanted && probes < CHECK_MAX_PROBE) probe[probes++] = d;
+  }
+  Serial.printf("[bt-check] done: %d BLE devices, %d look like speakers, %d offer LE Audio\n", results.getCount(),
+                speakers, le_audio);
+  if (check_target[0] && !probes) Serial.printf("[bt-check] %s not found in scan\n", check_target);
+  for (int i = 0; i < probes; i++) probe_services(probe[i]);
+  if (check_target[0]) Serial.println("[bt-check] services done");
+  scan->clearResults();
+  checking = false;
+  vTaskDelete(nullptr);
+}
+
+void ble_speaker_check(const char *target) {
+  if (checking || !server) return;
+  checking = true;
+  strlcpy(check_target, target ? target : "", sizeof(check_target));
+  xTaskCreate(speaker_check_task, "bt_check", 8192, nullptr, 1, nullptr);
 }

@@ -94,6 +94,7 @@ uv run main.py --install-statusline  # Claude Code 한도 사용률 읽기 (PC �
 uv run main.py --add-wifi          # 기기에 Wi-Fi 추가 (USB 로 연결한 상태, 최대 5개, 2.4GHz)
 uv run main.py --setup-sync        # 여러 PC 가 사용률을 공유할 비공개 gist 만들기 (처음 한 번)
 uv run main.py --test-sound        # 알림음 들어 보기
+uv run main.py --bt-check          # 기기가 블루투스 스피커에 붙을 수 있는지 시험 (USB)
 uv run main.py --camera shoot      # 사진 찍기 (open / record / close / dump)
 uv run main.py --test-video 5      # 5초 녹화
 uv run main.py --saver             # 화면 보호기를 지금 띄워 보기 (만지면 사라짐)

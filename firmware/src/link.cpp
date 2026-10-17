@@ -250,6 +250,8 @@ void link_loop() {
         }
       }
       if (doc["ble_use"].is<int>()) ble_peer_select(doc["ble_use"]);
+      if (doc["bt_check"] == true) ble_speaker_check();
+      if (doc["bt_check"].is<const char *>()) ble_speaker_check(doc["bt_check"]);
       // 진단용: SD 카드의 마지막 동영상을 PC 로 보낸다 (케이블로 연결한 PC 에서만)
       if (doc["sd_pull"] == true && from == LINK_USB) {
         char name[40];
