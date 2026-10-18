@@ -80,8 +80,9 @@ dir = ""
 # model = "sonnet"          # CLI 모델 (빈 글자면 CLI 기본값)
 # idle_minutes = 30         # 이만큼 질문이 없으면 백그라운드 CLI 를 끈다
 # whisper_model = "small"   # 음성 인식 모델 (tiny / base / small / medium / large-v3-turbo). 클수록 정확하고 느리다. 폴더 경로도 된다
-#                           # Apple Silicon Mac 은 large-v3-turbo 를 권한다 (5초 말에 4초쯤, small 보다 오타가 적다)
-# beam_size = 5             # 1 이면 빠르고, 5 면 조금 느리고 더 정확하다
+#                           # Apple Silicon Mac 은 large-v3-turbo 를 권한다 (GPU 로 5초 말에 1초 안쪽, small 보다 오타가 적다)
+# engine = "auto"           # auto: Apple Silicon Mac 은 GPU(mlx), 그 밖은 CPU. "cpu" 면 늘 CPU
+# beam_size = 1             # CPU 로 받아 적을 때. 5 면 30%쯤 느리고 조금 더 정확하다
 # prompt = "받아쓰기, 펌웨어, 빌드, 커밋, 깃, 세션, 오르카, 클로드, 기기, 배터리, 코드, 스킬."  # 자주 쓰는 말 (잘 알아듣게)
 # input = ""                # 마이크 이름 일부 (비워 두면 PC 기본 마이크)
 # voice = "Yuna"            # 답 읽어 주기 목소리 (Mac 만. say -v '?' 로 목록). Windows 는 한국어 목소리를 저절로 고른다

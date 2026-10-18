@@ -555,7 +555,7 @@ class Assistant:
                 if isinstance(self.model, _MlxModel):
                     question = self.model.text(pcm, language, prompt)
                 else:
-                    segments, _ = self.model.transcribe(pcm, language=language, beam_size=self.cfg.get("beam_size", 5),
+                    segments, _ = self.model.transcribe(pcm, language=language, beam_size=self.cfg.get("beam_size", 1),
                                                         vad_filter=True, initial_prompt=prompt, hotwords=hints)
                     question = "".join(s.text for s in segments).strip()
                 kind = "받아쓰기" if self.dictate else "질문"

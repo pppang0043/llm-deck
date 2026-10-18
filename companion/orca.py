@@ -30,15 +30,24 @@ BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
 EXTRA_PATHS = [
     "/Applications/Orca.app/Contents/Resources/bin/orca",
     "~/Applications/Orca.app/Contents/Resources/bin/orca",
-    r"%LOCALAPPDATA%\Programs\orca\resources\bin\orca.cmd",
-    r"%LOCALAPPDATA%\Programs\orca\resources\bin\orca",
+    r"%LOCALAPPDATA%\Programs\orca\resources\bin\orca.exe",
 ]
+
+
+def _native(path: str) -> str:
+    # Windows 의 orca.cmd 는 cmd.exe 를 거치며 & | % ^ 나 줄바꿈이 든 글을 망가뜨리거나 명령으로 실행한다.
+    # 옆의 orca.exe 를 바로 부른다 (orca.cmd 도 그렇게 하라고 적혀 있다)
+    if path.lower().endswith((".cmd", ".bat")):
+        exe = os.path.splitext(path)[0] + ".exe"
+        if os.path.exists(exe):
+            return exe
+    return path
 
 
 def find_orca() -> str | None:
     path = shutil.which("orca")
     if path:
-        return path
+        return _native(path)
     for candidate in EXTRA_PATHS:
         path = os.path.expanduser(os.path.expandvars(candidate))
         if os.path.exists(path):
@@ -162,6 +171,46 @@ def fix_slash(text: str, commands: list[str], aliases: dict[str, str]) -> str:
 def _short_title(title: str) -> str:
     # ORCA 는 탭 이름 앞에 작업 중 표시(◐ ✳ 등)를 붙인다
     return re.sub(r"^[^\w가-힣/]+\s*", "", title or "").strip() or "터미널"
+
+
+def _front_windows() -> bool:
+    """Windows: ORCA 창을 앞으로 띄운다 (최소화돼 있으면 되살린다). 잘 되면 True."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _):
+        if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, 4):  # 4: GW_OWNER (딸린 작은 창은 뺀다)
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        process = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not process:
+            return True
+        try:
+            name = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(len(name))
+            if kernel32.QueryFullProcessImageNameW(process, 0, name, ctypes.byref(size)):
+                if os.path.basename(name.value).lower() == "orca.exe" and user32.GetWindowTextLengthW(hwnd):
+                    found.append(hwnd)
+                    return False
+        finally:
+            kernel32.CloseHandle(process)
+        return True
+
+    user32.EnumWindows(visit, 0)
+    if not found:
+        return False
+    hwnd = found[0]
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    # 뒤에서 도는 프로그램은 창을 앞으로 못 띄우게 막혀 있다. Alt 키를 한 번 눌렀다 떼면 허용된다
+    user32.keybd_event(0x12, 0, 0, 0)
+    user32.keybd_event(0x12, 0, 2, 0)
+    return bool(user32.SetForegroundWindow(hwnd))
 
 
 class Orca:
@@ -291,6 +340,8 @@ class Orca:
         self._wake.set()  # 순서가 바뀌었다
         if sys.platform == "darwin":
             subprocess.run(["open", "-b", BUNDLE_ID], capture_output=True, timeout=10)
+        elif sys.platform == "win32":
+            _front_windows()
         return handle
 
     def commands(self) -> list[str]:
