@@ -19,6 +19,8 @@ FETCH_INTERVAL = 60
 FETCH_INTERVAL_ANONYMOUS = 180
 # 숫자는 그대로이고 시각만 바뀐 경우, 이만큼 지나야 다시 올린다 (쓸 때마다 올리지 않도록)
 PUSH_INTERVAL = 300
+# 초기화 시각이 이만큼 안쪽으로 다르면 같은 구간으로 본다 (서버·상태줄·세션 기록이 몇 초씩 다르게 적는다)
+RESET_SLACK = 600
 
 
 def _request(method: str, url: str, token: str, body: dict | None = None) -> dict:
@@ -65,7 +67,7 @@ def combine(a: dict | None, b: dict | None) -> dict | None:
 
     기록된 시각은 믿을 수 없다. 쉬고 있는 Claude Code 세션이 며칠 전 값을 방금 것처럼 다시 내보내기 때문이다.
     대신 사용률은 한 구간 안에서 늘기만 하므로, 초기화 시각이 더 늦은 쪽(새 구간)이 최근이고,
-    초기화 시각이 같으면 사용률이 높은 쪽이 최근이다. 초기화 시각이 지난 구간은 버린다.
+    초기화 시각이 같으면(RESET_SLACK 안쪽) 사용률이 높은 쪽이 최근이다. 초기화 시각이 지난 구간은 버린다.
     """
     if not a or not b:
         return a or b
@@ -77,7 +79,15 @@ def combine(a: dict | None, b: dict | None) -> dict | None:
             if resets_at and resets_at <= now:
                 continue
             old = best.get(label)
-            if old is None or (resets_at, pct) > (old[2] or 0, old[1] or 0):
+            if old is None:
+                best[label] = window
+                continue
+            gap = resets_at - (old[2] or 0)
+            if abs(gap) < RESET_SLACK:
+                newer = (pct, gap) > (old[1] or 0, 0)
+            else:
+                newer = gap > 0
+            if newer:
                 best[label] = window
     # 짧은 구간(먼저 초기화되는 쪽)이 앞에 오게 한다: 5시간, 주간 순
     windows = sorted(best.values(), key=lambda w: w[2] or 0)

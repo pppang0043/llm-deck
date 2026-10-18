@@ -9,6 +9,9 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import sync
+from collectors import server
+
 NAME = "Codex"
 
 # 최근 파일 몇 개만 본다 (가장 최근 세션에 기록이 아직 없을 수 있다)
@@ -43,7 +46,15 @@ def _latest(path: Path) -> tuple[float, dict] | None:
 
 
 def snapshot(cfg: dict) -> dict | None:
-    """{"name": 제목, "as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 이 PC 에 값이 없으면 None."""
+    """{"name": 제목, "as_of": 시각, "windows": [[이름, 사용률 %, 초기화 시각], ...]}. 값이 없으면 None.
+
+    세션 기록의 값에 서버에서 직접 읽은 값(collectors/server.py)을 합친다. 설정 [codex] server = false 면 묻지 않는다.
+    """
+    return sync.combine(_from_sessions(), server.codex() if cfg.get("server", True) else None)
+
+
+def _from_sessions() -> dict | None:
+    """세션 기록에서 가장 최근 한도 값."""
     root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "sessions"
     if not root.is_dir():
         return None
