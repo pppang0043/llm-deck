@@ -211,8 +211,9 @@ def collect(cfg: dict) -> dict | None:
         month_row.append(fmt_usd(month_usd))
 
     # 설명 줄을 빼야 가로 화면에 다 들어간다. 이 PC 기록만 센다는 것은 시각 옆에 적는다.
+    # side: 기기에서 앞 페이지(구독제) 오른쪽에 둔다 (아래로 넘기면 그다음 페이지)
     page = {"name": "API Cost", "note": now.strftime("이 PC · %H:%M"), "headline": fmt_usd(total),
-            "table": [header, month_row, day_row]}
+            "table": [header, month_row, day_row], "side": True}
     if unknown:
         page["sub"] = "단가 모름: " + ", ".join(sorted(unknown))
     return page

@@ -325,9 +325,9 @@ static void add_limits_table(lv_obj_t *page, JsonArrayConst services) {
   }
 }
 
-static lv_obj_t *add_page(uint8_t index) {
-  // 서비스 페이지는 위아래로 넘긴다 (오른쪽으로 밀기는 홈으로 가기에 쓴다)
-  lv_obj_t *page = lv_tileview_add_tile(tiles, 0, index, LV_DIR_VER);
+static lv_obj_t *add_page(uint8_t index, uint8_t col = 0) {
+  // 서비스 페이지는 위아래로 넘긴다 (오른쪽으로 밀기는 홈으로 가기에 쓴다). 옆 페이지(col 1)는 왼쪽으로만 돌아간다.
+  lv_obj_t *page = lv_tileview_add_tile(tiles, col, index, col ? LV_DIR_LEFT : LV_DIR_VER);
   lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(page, 10, 0);
   lv_obj_set_style_pad_row(page, 6, 0);
@@ -799,6 +799,8 @@ static void render_usage() {
   lv_obj_t *active = lv_tileview_get_tile_act(tiles);
   int tile_h = lv_obj_get_height(tiles);
   uint8_t keep = active && tile_h > 0 ? lv_obj_get_y(active) / tile_h : 0;
+  int tile_w = lv_obj_get_width(tiles);
+  uint8_t keep_col = active && tile_w > 0 ? lv_obj_get_x(active) / tile_w : 0;
   // PC 상태를 보고 있었으면 페이지 수가 바뀌어도 PC 상태(맨 끝)에 머문다
   bool keep_pc = keep == pc_tile;
 
@@ -816,16 +818,27 @@ static void render_usage() {
   int limits = 0;
   for (JsonObjectConst svc : services) limits += is_limits_page(svc);
   bool limits_done = false;
+  lv_obj_t *prev = nullptr;  // 바로 앞 페이지 (옆 페이지가 오면 오른쪽으로도 넘기게 한다)
+  uint32_t side_rows = 0;  // 옆 페이지가 있는 줄
   for (JsonObjectConst svc : services) {
     if (limits >= 2 && is_limits_page(svc)) {
       if (limits_done) continue;
       limits_done = true;
-      lv_obj_t *page = add_page(index++);
+      lv_obj_t *page = prev = add_page(index++);
       add_row(page, "구독제", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14, COLOR_DIM);
       add_limits_table(page, services);
       continue;
     }
-    lv_obj_t *page = add_page(index);
+    // 옆 페이지: 앞 페이지 오른쪽에 둔다
+    bool side = svc["side"] == true && prev && index > 0 && !(side_rows & (1u << (index - 1)));
+    lv_obj_t *page;
+    if (side) {
+      ((lv_tileview_tile_t *)prev)->dir = (lv_dir_t)(LV_DIR_VER | LV_DIR_RIGHT);
+      side_rows |= 1u << (index - 1);
+      page = add_page(index - 1, 1);
+    } else {
+      page = prev = add_page(index);
+    }
 
     // 제목 오른쪽의 작은 글자는 이 값이 언제 것인지(시각)를 나타낸다
     add_row(page, svc["name"] | "?", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14,
@@ -850,11 +863,12 @@ static void render_usage() {
       add_row(page, row[0] | "", &font_ko_20, COLOR_DIM, row[1] | "", &font_ko_20,
               lv_color_white());
     }
-    index++;
+    if (!side) index++;
   }
   add_pc_tile(index);
 
-  lv_obj_set_tile_id(tiles, 0, keep_pc || keep > index ? index : keep, LV_ANIM_OFF);
+  uint8_t row = keep_pc || keep > index ? index : keep;
+  lv_obj_set_tile_id(tiles, keep_col && (side_rows & (1u << row)) ? 1 : 0, row, LV_ANIM_OFF);
   update_pc_watch();
 }
 
