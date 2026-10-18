@@ -210,17 +210,21 @@ class Assistant:
             # 새로 말하기 시작하면 읽던 답은 끊는다 (마이크에 PC 소리가 들어가지 않게)
             self.speaker.stop()
         if action == "start":
+            if self.busy or self.recording.is_set():
+                # 앞의 것을 받아 적는 중에 또 누르면 무시한다 (받아쓰기/질문 구분이 바뀌면 안 된다)
+                print("[assistant] 앞의 것을 처리하는 중이라 새로 누른 것은 무시합니다")
+                self.sent = None  # 기기에 지금 상태를 다시 보낸다
+                return
             self.dictate = event.get("mode") == "dictate"
             self.voice = bool(event.get("voice"))  # 60초가 넘어 스스로 끝낼 때 쓴다 (끝낼 때 다시 받는다)
             target = event.get("orca") if self.dictate else None
-            if not (self.busy or self.recording.is_set()):
-                self.orca_target = None
-                self.orca_pick = isinstance(target, str) and self.orca is not None
-                if self.orca_pick:
-                    # 말하는 동안 그 세션 탭으로 바꿔 둔다 (끝나면 그 세션에 넣는다)
-                    def activate() -> None:
-                        self.orca_target = self.orca.activate(target)
-                    threading.Thread(target=activate, daemon=True).start()
+            self.orca_target = None
+            self.orca_pick = isinstance(target, str) and self.orca is not None
+            if self.orca_pick:
+                # 말하는 동안 그 세션 탭으로 바꿔 둔다 (끝나면 그 세션에 넣는다)
+                def activate() -> None:
+                    self.orca_target = self.orca.activate(target)
+                threading.Thread(target=activate, daemon=True).start()
             self._start()
         elif action == "stop":
             self.voice = bool(event.get("voice"))
@@ -411,12 +415,14 @@ class Assistant:
         elif (local / "model.bin").is_file():
             name = str(local)
         print(f"[assistant] 음성 인식 모델 불러오는 중 ({name})")
+        loading = time.monotonic()
         try:
             try:
                 # 받아 둔 모델이 있으면 인터넷에 묻지 않는다 (Hugging Face 확인이 응답 없이 멈춘 적이 있다)
                 self.model = WhisperModel(name, device="cpu", compute_type="int8", local_files_only=True)
             except Exception:
                 self.model = WhisperModel(name, device="cpu", compute_type="int8")
+            print(f"[assistant] 음성 인식 모델을 불러왔습니다 ({time.monotonic() - loading:.1f}초)")
         except Exception as e:
             print(f"[assistant] 음성 인식 모델을 불러오지 못했습니다 ({name}): {e}")
             print(f"[assistant] 인터넷으로 받을 수 없으면, 다른 PC 에서 받은 모델 폴더를 {local} 에 복사하세요 (README.txt 참고)")
@@ -445,9 +451,14 @@ class Assistant:
                     self._set("error", a="소리가 녹음되지 않았습니다\n버튼을 누르고 말한 뒤\n다시 눌러 주세요")
                 return
             pcm = np.concatenate(self.chunks)[:, 0].astype(np.float32) / 32768
+            peak = float(np.abs(pcm).max())
+            print(f"[assistant] 녹음 {len(pcm) / SAMPLE_RATE:.1f}초, 가장 큰 소리 {peak:.3f}")
             self._set("thinking", a="받아 적는 중")
+            waited = time.monotonic()
             with self.lock:
                 self._load_model()
+                if time.monotonic() - waited > 2:
+                    print(f"[assistant] 모델 준비를 {time.monotonic() - waited:.1f}초 기다렸습니다")
                 start = time.monotonic()
                 # ORCA 세션에 받아쓰기할 때는 / 명령 이름을 영어로 알아듣게 돕는다
                 hints = self.orca.hotwords() if self.dictate and self.orca_pick and self.orca else None

@@ -23,6 +23,7 @@
 """
 
 import argparse
+import faulthandler
 import getpass
 import json
 import platform
@@ -210,6 +211,10 @@ def main() -> None:
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     parser.add_argument("--log", metavar="FILE", help="출력을 파일에 덧붙여 쓴다 (창 없이 자동 실행할 때)")
     args = parser.parse_args()
+    if hasattr(faulthandler, "register"):
+        import signal
+        # 멈춘 것 같을 때 kill -USR1 <pid> 로 어디서 기다리는지 기록에 남긴다 (Mac, Linux)
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
     if args.log:
         log = open(Path(args.log).expanduser(), "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stderr = log
