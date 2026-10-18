@@ -6,7 +6,7 @@
 
 API 수집기(COLLECTORS): collect(cfg) 가 config.toml 전체를 받아 기기 화면 한 페이지에 해당하는 dict 를 돌려준다.
     {"name": 제목, "note": 값의 시각, "headline": 큰 글자, "sub": 설명,
-     "bars": [{"label", "note", "text", "pct"}], "rows": [[이름, 값], ...],
+     "bars": [{"label", "note", "text", "pct", "resets"(초기화 시각, 없을 수 있음)}], "rows": [[이름, 값], ...],
      "table": [[열 제목, ...], [줄 이름, 값, ...], ...]}
 
 표시할 것이 없으면(키 미설정 등) None 을 돌려준다.

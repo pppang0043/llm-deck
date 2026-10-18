@@ -40,7 +40,10 @@ def limit_bar(label: str, used_pct: float, resets_at: float | None) -> dict:
     when = datetime.fromtimestamp(resets_at) if resets_at else None
     note = "" if not when else when.strftime("%H:%M") if when.date() == datetime.now().date() \
         else f"{when.day}일 {when:%H:%M}"
-    return {"label": WINDOW_LABELS.get(label, label), "note": note, "text": f"{pct}%", "pct": pct}
+    bar = {"label": WINDOW_LABELS.get(label, label), "note": note, "text": f"{pct}%", "pct": pct}
+    if resets_at:
+        bar["resets"] = int(resets_at)  # 기기가 소진 예상 시각을 초기화 시각과 견준다
+    return bar
 
 
 def _with_all_windows(windows: list) -> list:
