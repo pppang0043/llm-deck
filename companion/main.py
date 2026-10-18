@@ -67,8 +67,14 @@ def load_config() -> dict:
     path = Path(__file__).parent / "config.toml"
     if not path.exists():
         return {}
-    with path.open("rb") as f:
-        return tomllib.load(f)
+    # Windows 메모장이 앞에 붙이는 BOM 은 떼고 읽는다
+    text = path.read_bytes().decode("utf-8-sig")
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        # 고친 설정에 틀린 곳이 있으면 어디인지 알려 주고 멈춘다 (Windows 경로의 \ 는 작은따옴표 '...' 로 적어야 한다)
+        sys.exit(f"config.toml 을 읽지 못했습니다: {e}\n"
+                 "Windows 경로는 작은따옴표로 적으세요 (예: model_dir = 'D:\\LLM Deck\\models')")
 
 
 # 설정 섹션 이름 -> (마지막 호출 시각, 마지막 결과)
@@ -325,7 +331,7 @@ def main() -> None:
     apps = launcher.Launcher()
     pc = pcstats.PcStats()
     keys = typer.Typer()
-    ask = assistant.Assistant(cfg.get("assistant", {}))
+    ask = assistant.Assistant(cfg.get("assistant", {}), cfg.get("storage", {}).get("model_dir", ""))
     ask.other_audio = lambda: getattr(sink, "stream", None) is not None
     # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
     sessions = orca.Orca(cfg.get("orca", {}))

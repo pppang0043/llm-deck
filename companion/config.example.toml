@@ -92,3 +92,31 @@ dir = ""
 # enabled = true
 # 받아쓰기에서 "슬래시 ○○" 를 / 명령으로 바꿀 때, 저절로 못 알아듣는 말을 더한다 (들린 말 = 명령 이름)
 # slash_words = { "깃 푸시" = "git-push" }
+
+# 저장 위치: PC 용량이 적을 때 큰 것을 다른 드라이브(예: D:)에 둔다. 비워 두면 기본 자리.
+# 바꾼 뒤에는 install.cmd 를 다시 실행하세요 (Mac 은 도우미를 다시 켜면 model_dir 만 적용됩니다).
+# Windows 경로는 작은따옴표로 적습니다. 예: model_dir = 'D:\LLM Deck\models'  (큰따옴표면 \ 를 \\ 로 두 번)
+# 도우미 부품(.venv, 약 300MB)은 이 폴더(llm-deck-companion\app) 안에 깔립니다. 폴더째 D: 에 두면 함께 옮겨집니다.
+# 사진·동영상 폴더는 위의 [photos] [videos] 에서 정합니다.
+[storage]
+# 음성 인식 모델 (small 약 480MB, 처음 말로 질문할 때 받는다). 비우면 C:\Users\내이름\.cache\huggingface
+# 다른 PC 에서 받아 온 모델 폴더(faster-whisper-small)도 이 폴더 바로 아래에 넣는다 (비우면 .llm-deck\models 아래)
+model_dir = ""
+# Windows 설치용: 설치할 때 받은 부품 보관함 (수백 MB). 비우면 %LOCALAPPDATA%\uv\cache
+uv_cache_dir = ""
+# Windows 설치용: 도우미가 쓰는 Python (약 100MB). 비우면 %APPDATA%\uv\python. 바꾸면 install.cmd 가 새로 받는다
+python_dir = ""
+# Windows 설치용: true 면 설치가 끝난 뒤 부품 보관함을 비워 자리를 돌려받는다 (다음 설치 때 다시 받아 조금 느려진다)
+clean_cache = false
+
+# 회사망: 보안 프로그램이나 프록시 때문에 설치(install.cmd)에서 받기가 막힐 때만 채웁니다. 보통은 비워 둡니다.
+# 설치할 때만 씁니다 (도우미가 켜진 뒤에는 Windows 의 인증서·프록시 설정을 그대로 따릅니다). 바꾼 뒤 install.cmd 를 다시 실행하세요.
+[network]
+# "certificate", "인증서", "SSL" 오류가 날 때 true. 회사 보안 프로그램이 넣은 Windows 인증서를 믿는다
+system_certs = false
+# 회사 프록시 주소. 예: proxy = 'http://proxy.example.com:8080'  (모르면 IT 부서에 묻습니다)
+proxy = ""
+# PyPI(pypi.org)가 막혀 회사 안 부품 저장소를 쓸 때. 예: index_url = 'https://nexus.example.com/repository/pypi/simple'
+index_url = ""
+# Python 을 받는 곳(github.com)이 막혀 회사 안 복사본을 쓸 때. 보통 비워 둡니다
+python_mirror = ""

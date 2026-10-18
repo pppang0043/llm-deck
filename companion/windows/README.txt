@@ -9,6 +9,8 @@ LLM Deck 기기에 사용량을 보내고, 기기와 PC 를 이어 주는 프로
 ---------
   install.cmd    설치 (고친 뒤 다시 켤 때도 이것)
   uninstall.cmd  제거
+  config.cmd     설정(app\config.toml)을 메모장으로 연다. 고친 뒤 install.cmd 다시 실행
+  INSTALL.txt    설치 방법 (용량이 적을 때, 음성 인식 모델, 회사 PC)
   mirror.cmd     기기 화면을 작은 창으로 보고 눌러서 조작 (USB·Wi-Fi 연결일 때)
                  시작 메뉴의 "LLM Deck 미러링" 으로도 엽니다. 아래 "미러링" 참고.
   app 폴더       도우미 본체. 건드리지 않아도 됩니다.
@@ -16,14 +18,8 @@ LLM Deck 기기에 사용량을 보내고, 기기와 PC 를 이어 주는 프로
 
 설치
 ----
-1. 이 폴더를 지우지 않을 곳에 둡니다. (예: C:\Users\내이름\llm-deck-companion)
-   설치 뒤에도 이 폴더에서 실행되므로, 옮기거나 지우면 다시 설치해야 합니다.
-   예전 버전이 있으면 그 폴더의 uninstall.cmd(예전엔 windows 폴더 안)를 먼저 누르고 폴더를 지웁니다.
-2. install.cmd 를 더블클릭합니다.
-   - "Windows의 PC 보호" 창이 뜨면 [추가 정보] > [실행]
-   - 관리자 확인 창이 뜨면 [예] (Wi-Fi 연결용 방화벽 허용)
-   - 처음에는 필요한 부품을 받느라 몇 분 걸립니다.
-3. "설치했습니다" 가 나오면 끝입니다.
+설치 방법은 INSTALL.txt 에 있습니다. (준비, 설치 순서, 용량이 적을 때 저장 위치 바꾸기, 음성 인식 모델 설치, 제거)
+짧게: 이 폴더를 지우지 않을 곳에 두고 install.cmd 를 더블클릭합니다.
 
 기기와는 USB 케이블, 블루투스, 같은 Wi-Fi 중 되는 것으로 알아서 연결합니다.
 블루투스는 PC 블루투스를 켜 두기만 하면 됩니다. (Windows 에서 따로 페어링하지 않습니다)
@@ -34,7 +30,7 @@ LLM Deck 기기에 사용량을 보내고, 기기와 PC 를 이어 주는 프로
   사진     사진\LLM Deck
   동영상   비디오\LLM Deck   (.mov 가 안 열리면 VLC 로)
   기록     C:\Users\내이름\.llm-deck\companion.log
-  설정     app\config.toml   (메모장으로 고친 뒤 install.cmd 다시 실행)
+  설정     app\config.toml   (config.cmd 로 열어 고친 뒤 install.cmd 다시 실행)
 
 여러 PC 의 한도 사용률은 설정의 gist 로 함께 봅니다 (미리 채워 둠). 받기만 할 때는 할 일이 없고,
 이 PC 의 값을 올리려면 GitHub CLI 로그인(gh auth login -s gist)이 필요합니다.
@@ -61,6 +57,12 @@ LLM Deck 기기에 사용량을 보내고, 기기와 PC 를 이어 주는 프로
 브라우저로 엽니다. 주소는 늘 http://127.0.0.1:4013/ 이라 즐겨찾기해 둬도 됩니다.
 
 
+PC 용량이 부족할 때
+-------------------
+app\config.toml 의 [storage] 에 음성 인식 모델·Python·설치 부품 보관함을 둘 폴더를 적을 수 있습니다.
+INSTALL.txt 의 "4. 저장 위치 바꾸기" 를 보세요.
+
+
 음성 질문이 안 될 때
 --------------------
 - "Windows 가 마이크를 막았습니다"
@@ -71,7 +73,4 @@ LLM Deck 기기에 사용량을 보내고, 기기와 PC 를 이어 주는 프로
 - "음성 질문 부품을 켜지 못했습니다" (설치할 때)
     https://aka.ms/vs/17/release/vc_redist.x64.exe 를 설치하고 install.cmd 를 다시 실행합니다.
 - "음성 인식 모델을 불러오지 못했습니다" (회사망이 막을 때)
-    Mac 에서 만든 llm-deck-whisper-small.zip 을 USB 로 옮겨 풀고,
-    안의 faster-whisper-small 폴더를 통째로 아래에 넣은 뒤 install.cmd 를 다시 실행합니다.
-      C:\Users\내이름\.llm-deck\models\faster-whisper-small   (안에 model.bin 이 바로 보여야 함)
-    (Mac 에서 만들기: companion/.venv/bin/python companion/windows/pack_model.py)
+    모델을 직접 받아 넣습니다. INSTALL.txt 의 "5. 음성 인식 모델 설치" 방법 B 를 보세요.

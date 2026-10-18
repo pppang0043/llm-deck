@@ -158,15 +158,15 @@ def _mlx_ready() -> bool:
 class _MlxModel:
     """mlx-whisper (Apple GPU). 5초 말을 large-v3-turbo 로 1초 안쪽에 받아 적는다 (CPU 는 4초쯤)."""
 
-    def __init__(self, repo: str):
+    def __init__(self, repo: str, cache_dir: str | None):
         import numpy as np
         from huggingface_hub import snapshot_download
 
         try:
             # 받아 둔 모델이 있으면 인터넷에 묻지 않는다
-            self.path = snapshot_download(repo, local_files_only=True)
+            self.path = snapshot_download(repo, cache_dir=cache_dir, local_files_only=True)
         except Exception:
-            self.path = snapshot_download(repo)
+            self.path = snapshot_download(repo, cache_dir=cache_dir)
         self.text(np.zeros(SAMPLE_RATE, dtype=np.float32), "ko", None)  # 무게를 GPU 에 올려 둔다
 
     def text(self, pcm, language: str, prompt: str | None) -> str:
@@ -273,8 +273,10 @@ class Session:
 
 
 class Assistant:
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, model_dir: str = ""):
         self.cfg = cfg
+        # 음성 인식 모델을 받아 두는 폴더 (설정의 [storage] model_dir). 비우면 Hugging Face 기본 자리(~/.cache/huggingface)
+        self.model_dir = str(Path(os.path.expandvars(model_dir)).expanduser()) if model_dir else None
         self.idle_seconds = cfg.get("idle_minutes", 30) * 60
         self.command: tuple[str, str] | None = None
         self.session: Session | None = None
@@ -534,7 +536,7 @@ class Assistant:
             print(f"[assistant] 음성 인식 모델 불러오는 중 ({name}, GPU)")
             loading = time.monotonic()
             try:
-                self.model = _MlxModel(MLX_MODELS[name])
+                self.model = _MlxModel(MLX_MODELS[name], self.model_dir)
                 print(f"[assistant] 음성 인식 모델을 불러왔습니다 ({time.monotonic() - loading:.1f}초)")
                 return
             except Exception as e:
@@ -543,7 +545,7 @@ class Assistant:
 
         # 회사망은 Hugging Face 에서 모델을 받지 못할 수 있다. 다른 PC 에서 받아 복사해 둔 폴더가 있으면 그것을 쓴다
         # (Mac 에서 companion/windows/pack_model.py 로 만든다)
-        local = Path.home() / ".llm-deck" / "models" / f"faster-whisper-{name}"
+        local = Path(self.model_dir or Path.home() / ".llm-deck" / "models") / f"faster-whisper-{name}"
         if Path(name).expanduser().is_dir():
             name = str(Path(name).expanduser())
         elif (local / "model.bin").is_file():
@@ -553,9 +555,10 @@ class Assistant:
         try:
             try:
                 # 받아 둔 모델이 있으면 인터넷에 묻지 않는다 (Hugging Face 확인이 응답 없이 멈춘 적이 있다)
-                self.model = WhisperModel(name, device="cpu", compute_type="int8", local_files_only=True)
+                self.model = WhisperModel(name, device="cpu", compute_type="int8", download_root=self.model_dir,
+                                          local_files_only=True)
             except Exception:
-                self.model = WhisperModel(name, device="cpu", compute_type="int8")
+                self.model = WhisperModel(name, device="cpu", compute_type="int8", download_root=self.model_dir)
             print(f"[assistant] 음성 인식 모델을 불러왔습니다 ({time.monotonic() - loading:.1f}초)")
         except Exception as e:
             print(f"[assistant] 음성 인식 모델을 불러오지 못했습니다 ({name}): {e}")

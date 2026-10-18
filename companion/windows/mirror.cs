@@ -53,7 +53,7 @@ class MirrorForm : Form
     readonly ToolStripMenuItem[] zoomItems = new ToolStripMenuItem[3];
     IntPtr sysMenu;
     bool pressing;
-    int lastX, lastY, lastMove, lastSwipe, wheel;
+    int lastMove, lastSwipe, wheel;
 
     [STAThread]
     static void Main()
@@ -429,8 +429,6 @@ class MirrorForm : Form
     void Touch(int cx, int cy, bool down)
     {
         if (w == 0) return;
-        lastX = cx;
-        lastY = cy;
         int x = Math.Max(0, Math.Min(w - 1, (int)Math.Floor(cx / (double)zoom)));
         int y = Math.Max(0, Math.Min(h - 1, (int)Math.Floor(cy / (double)zoom)));
         Post("touch", Json(x, y, down));
@@ -463,10 +461,12 @@ class MirrorForm : Form
     protected override void OnMouseCaptureChanged(EventArgs e)
     {
         base.OnMouseCaptureChanged(e);
-        // 누른 채로 다른 창으로 넘어가면 그 자리에서 뗀다
+        // 손을 떼면 Windows 가 OnMouseUp 보다 이것을 먼저 부른다. 누른 채로 다른 창이 마우스를 가져가도 여기로 온다.
+        // 어느 쪽이든 지금 마우스 자리에서 뗀다
         if (!pressing) return;
         pressing = false;
-        Touch(lastX, lastY, false);
+        Point p = PointToClient(Cursor.Position);
+        Touch(p.X, p.Y, false);
     }
 
     // 밀기: 화면 가운데를 지나 한쪽에서 다른 쪽으로 끄는 점들 (기기가 10ms 마다 하나씩 쓴다)

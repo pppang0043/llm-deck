@@ -1,0 +1,167 @@
+﻿LLM Deck PC 도우미 설치 방법 (Windows)
+======================================
+
+설정 파일은 app\config.toml 하나입니다. 맨 위의 config.cmd 를 누르면 메모장으로 열립니다.
+고친 뒤에는 저장하고 install.cmd 를 다시 실행합니다.
+
+이 압축 파일에는 도우미 프로그램만 들어 있습니다. 음성 인식(Whisper) 모델은 들어 있지 않으며,
+아래 "5. 음성 인식 모델 설치" 에 적은 방법 중 하나로 따로 받습니다.
+
+
+1. 준비
+-------
+- Windows 10 / 11 (64비트)
+- 처음 설치할 때 인터넷 연결 (Python 과 부품을 받습니다)
+- 빈 공간 (모두 C: 에 둘 때)
+    도우미 부품    약 300MB
+    Python        약 100MB
+    설치 부품 보관함 수백 MB (설치가 끝나면 비울 수 있습니다)
+    음성 인식 모델  75MB ~ 1.5GB (말로 질문할 때만. 아래 5 참고)
+  C: 가 모자라면 "4. 저장 위치 바꾸기" 로 D: 등에 둡니다.
+
+
+2. 압축 풀기
+------------
+1) 압축 파일을 지우지 않을 곳에 풉니다. 설치한 뒤에도 이 폴더에서 실행되므로, 옮기거나 지우면 다시 설치해야 합니다.
+     예: C:\Users\내이름\llm-deck-companion   또는 용량이 적으면  D:\llm-deck-companion
+   도우미 부품(약 300MB)은 이 폴더 안(app\.venv)에 깔리므로, D: 에 풀면 그만큼 C: 를 아낍니다.
+2) 예전 버전이 깔려 있으면 그 폴더의 uninstall.cmd 를 먼저 누르고 그 폴더를 지웁니다.
+   (설정을 이어 쓰려면 예전 app\config.toml 을 새 폴더의 app 안에 덮어씁니다)
+
+
+3. 설치
+-------
+1) (용량이 적으면 먼저) "4. 저장 위치 바꾸기" 대로 app\config.toml 을 고칩니다.
+2) install.cmd 를 더블클릭합니다.
+   - "Windows의 PC 보호" 창이 뜨면 [추가 정보] > [실행]
+   - 관리자 확인 창이 뜨면 [예] (Wi-Fi 연결용 방화벽 허용. [아니요] 여도 USB·블루투스는 됩니다)
+   - 처음에는 부품을 받느라 몇 분 걸립니다.
+3) 단계가 [1/7] 부터 [7/7] 까지 지나가고 "설치했습니다" 가 나오면 끝입니다.
+   도우미는 창 없이 뒤에서 돌고, 로그인할 때마다 저절로 켜집니다.
+4) 기기를 USB 케이블로 꽂거나, PC 블루투스를 켜 두거나, 같은 Wi-Fi 에 두면 알아서 연결합니다.
+   (블루투스는 Windows 에서 따로 페어링하지 않습니다)
+
+설치 단계
+  [1/7] Python 도구(uv) 확인       없으면 인터넷에서 설치합니다
+  [2/7] 설정 파일과 저장 위치        app\config.toml 을 만들고 [storage] 를 읽습니다
+  [3/7] 도우미 준비                Python 과 부품을 받습니다
+  [4/7] Claude Code 한도 사용률     Claude Code 가 있는 PC 만
+  [5/7] Windows 방화벽             Wi-Fi 연결용
+  [6/7] 미러링 앱                  기기 화면 창 (시작 메뉴 "LLM Deck 미러링")
+  [7/7] 로그인할 때 자동 실행
+
+
+4. 저장 위치 바꾸기 (C: 용량이 적을 때)
+---------------------------------------
+config.cmd 로 설정(app\config.toml)을 열고 [storage] 칸에 폴더를 적은 뒤, install.cmd 를 다시 실행합니다.
+(예전에 설치한 config.toml 에 이 칸이 없으면 install.cmd 가 끝에 더해 줍니다. 한 번 실행한 뒤 고치면 됩니다.
+ [network] 칸도 같습니다)
+
+  [storage]
+  model_dir = 'D:\LLM Deck\models'        음성 인식 모델     (비우면 C:\Users\내이름\.cache\huggingface)
+  uv_cache_dir = 'D:\LLM Deck\uv-cache'   설치 부품 보관함   (비우면 %LOCALAPPDATA%\uv\cache)
+  python_dir = 'D:\LLM Deck\python'       Python            (비우면 %APPDATA%\uv\python)
+  clean_cache = true                      설치가 끝나면 보관함을 비웁니다 (다음 설치가 조금 느려집니다)
+
+- 경로는 꼭 작은따옴표(' ')로 감쌉니다. 큰따옴표로 쓰면 \ 를 \\ 처럼 두 번 적어야 합니다.
+  틀리게 적으면 install.cmd 가 어디가 틀렸는지 알려 주고 멈춥니다.
+- 폴더가 없으면 install.cmd 가 만듭니다.
+- 사진·동영상 폴더는 같은 파일의 [photos] dir, [videos] dir 에 적습니다.
+- 옮긴 뒤 예전 자리(%APPDATA%\uv\python, %LOCALAPPDATA%\uv\cache, C:\Users\내이름\.cache\huggingface)는
+  다른 프로그램이 쓰지 않으면 지워도 됩니다.
+
+
+5. 음성 인식 모델 설치
+----------------------
+기기에서 말로 질문하거나 받아쓰기할 때만 필요합니다. 쓰지 않으면 설치하지 않아도 됩니다.
+모델 크기는 app\config.toml 의 [assistant] whisper_model 로 고릅니다. (앞의 # 을 지우고 적습니다)
+
+  whisper_model   크기     비고
+  tiny            약 75MB   가장 작고 빠름, 오타가 많음
+  base            약 145MB  용량이 적을 때 권장
+  small           약 460MB  기본값
+  medium          약 1.5GB  더 정확하지만 느림
+
+방법 A. 저절로 받기 (인터넷이 되면 이것)
+  할 일이 없습니다. 처음 말로 질문할 때 인터넷에서 받아 [storage] model_dir (비우면 C:\Users\내이름\.cache\huggingface)
+  에 둡니다. 받는 동안 첫 질문만 오래 걸립니다.
+
+방법 B. 직접 받아 넣기 (회사망 등에서 저절로 받지 못할 때)
+  1) 인터넷이 되는 PC 의 브라우저에서 아래 주소를 엽니다 (small 이면 small, base 면 base 로 바꿉니다).
+       https://huggingface.co/Systran/faster-whisper-small/tree/main
+  2) 파일 4개를 받습니다. (파일 이름 옆의 내려받기 단추)
+       config.json  model.bin  tokenizer.json  vocabulary.txt
+  3) 모델 폴더 아래에 faster-whisper-<이름> 폴더를 만들고 4개를 넣습니다.
+       [storage] model_dir 를 정했으면   D:\LLM Deck\models\faster-whisper-small\model.bin
+       비워 두었으면                    C:\Users\내이름\.llm-deck\models\faster-whisper-small\model.bin
+     (폴더 안에 model.bin 이 바로 보여야 합니다. 폴더 이름의 끝은 whisper_model 과 같아야 합니다)
+  4) install.cmd 를 다시 실행하면 "[3/7]" 단계에 "음성 인식 모델: 복사해 둔 폴더를 씁니다" 가 나옵니다.
+
+방법 C. Mac 에서 만든 묶음 쓰기
+  Mac 의 저장소에서 companion/.venv/bin/python companion/windows/pack_model.py 로 만든
+  llm-deck-whisper-small.zip 을 USB 로 옮겨 풀고, 안의 faster-whisper-small 폴더를 방법 B 의 3) 자리에 넣습니다.
+
+음성 질문 부품이 켜지지 않을 때
+  설치 중 "음성 질문 부품을 켜지 못했습니다" 가 나오면
+  https://aka.ms/vs/17/release/vc_redist.x64.exe 를 설치하고 install.cmd 를 다시 실행합니다.
+  (음성 질문 말고는 그대로 쓸 수 있습니다)
+
+
+6. 고친 뒤 다시 켜기, 새 버전으로 바꾸기
+----------------------------------------
+- 설정(app\config.toml)을 고쳤으면 install.cmd 를 다시 실행합니다.
+- 새 버전: 새 압축 파일을 같은 자리에 덮어 풀고 install.cmd 를 실행합니다. (app\config.toml 은 압축 파일의 것으로
+  덮이므로, 고친 적이 있으면 먼저 따로 복사해 두었다가 다시 넣습니다)
+
+
+7. 제거
+-------
+uninstall.cmd 를 누릅니다. 자동 실행, 방화벽 규칙, 미러링 앱과 시작 메뉴, Claude Code 상태줄 설정을 되돌립니다.
+그 뒤 이 폴더를 지웁니다. [storage] 로 다른 곳에 둔 모델·Python·보관함 폴더도 필요 없으면 지웁니다.
+
+
+8. 기록과 도움
+--------------
+- 기록: C:\Users\내이름\.llm-deck\companion.log  (안 될 때 이 파일 끝부분을 보면 이유가 적혀 있습니다)
+- 쓰는 방법, 미러링, 마이크 문제: README.txt
+
+
+9. 회사 PC (보안 프로그램·회사망)
+---------------------------------
+회사 PC 는 보안 프로그램이나 회사망 때문에 설치 중 인터넷으로 받는 단계가 막힐 수 있습니다.
+install.cmd 가 멈춘 자리의 문구를 보고 아래에서 찾습니다. 설정은 config.cmd 로 열어 [network] 칸에 적고
+install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니다. 도우미가 켜진 뒤에는 Windows 의 인증서·프록시를 따릅니다)
+막히는 것을 직접 풀 수 없으면 IT 부서에 "아래 주소 허용" 이나 "이 폴더 예외" 를 부탁합니다.
+
+  [network]
+  system_certs = true                                   인증서 오류가 날 때
+  proxy = 'http://proxy.example.com:8080'                회사 프록시를 거쳐야 할 때
+  index_url = 'https://nexus.example.com/repository/pypi/simple'   pypi.org 가 막혀 사내 저장소를 쓸 때
+  python_mirror = ''                                    github.com 이 막혀 사내 Python 복사본을 쓸 때
+  (프록시·사내 저장소 주소는 IT 부서에 묻습니다)
+
+문구별로
+- "certificate", "인증서", "SSL", "invalid peer certificate"
+    보안 프로그램이 연결을 검사하는 회사입니다. system_certs = true
+- "connection", "timed out", "연결" (집에서는 되는데 회사에서만)
+    프록시가 필요할 수 있습니다. proxy 를 적습니다.
+- [1/7] 에서 "uv 를 설치하지 못했습니다"
+    uv 를 직접 받아 둡니다.
+    1) 브라우저로 https://github.com/astral-sh/uv/releases/latest 를 열고
+       uv-x86_64-pc-windows-msvc.zip 을 받습니다.
+    2) 압축을 풀어 uv.exe 와 uvw.exe 를 install.cmd 가 있는 폴더(맨 위)에 넣습니다.
+    3) install.cmd 를 다시 실행하면 [1/7] 아래에 그 uv.exe 경로가 나옵니다.
+- [3/7] 에서 "도우미 준비에 실패했습니다"
+    pypi.org (부품) 나 github.com (Python) 이 막힌 것입니다. 위 오류 문구에 나온 주소를 보고
+    인증서면 system_certs, 프록시면 proxy, 아예 막혔으면 IT 부서에 사내 저장소 주소를 물어 index_url / python_mirror 에 적습니다.
+- [6/7] 미러링 앱 "건너뜁니다"
+    보안 프로그램이 C# 컴파일러(csc.exe)나 새로 만든 exe 를 막은 것입니다. mirror.cmd 가 대신 브라우저로 엽니다.
+    앱이 꼭 필요하면 IT 부서에 app\windows 폴더 예외를 부탁합니다.
+- 음성 인식 모델을 받지 못할 때 (huggingface.co 가 막힘)
+    "5. 음성 인식 모델 설치" 의 방법 B (집 PC 에서 받아 USB 로 옮기기) 를 씁니다.
+- PowerShell 이 막혀 install.cmd 가 바로 끝날 때 ("스크립트를 실행할 수 없습니다", "실행 정책")
+    회사가 PowerShell 스크립트 실행을 막아 둔 것입니다. 사용자가 풀 수 없으니 IT 부서에 부탁합니다.
+- 로그인해도 도우미가 켜지지 않을 때
+    자동 실행이 막혔을 수 있습니다. 기록 파일에 오늘 줄이 없으면 install.cmd 를 다시 실행하면 지금 켜집니다.
+- 보안 프로그램이 파일을 지우거나 격리할 때
+    IT 부서에 이 폴더(llm-deck-companion)와 %APPDATA%\uv, %LOCALAPPDATA%\uv 예외를 부탁합니다.

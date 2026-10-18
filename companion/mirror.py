@@ -321,7 +321,11 @@ def open_window() -> bool:
             subprocess.run(["open", str(MAC_APP)], check=True, timeout=10)
             return True
         if sys.platform == "win32" and WIN_APP.exists():
-            subprocess.Popen([str(WIN_APP)])
+            # uv 가 이 파이썬을 작업 묶음(job)에 넣어 두면 파이썬이 끝날 때 앱도 같이 꺼진다. 묶음 밖으로 띄우고, 막혀 있으면 그냥 띄운다
+            try:
+                subprocess.Popen([str(WIN_APP)], creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.DETACHED_PROCESS)
+            except OSError:
+                subprocess.Popen([str(WIN_APP)], creationflags=subprocess.DETACHED_PROCESS)
             return True
     except (OSError, subprocess.SubprocessError) as e:
         print(f"[mirror] 미러링 앱을 열지 못해 브라우저로 엽니다: {e}")

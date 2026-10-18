@@ -4,7 +4,7 @@
     companion/.venv/bin/python companion/windows/pack_model.py base     # config 의 whisper_model 과 같은 이름으로
 
 dist/llm-deck-whisper-<이름>.zip 이 생긴다. USB 로 옮겨 Windows PC 에서 압축을 풀고,
-안의 faster-whisper-<이름> 폴더를 C:\\Users\\내이름\\.llm-deck\\models\\ 아래에 넣는다.
+안의 faster-whisper-<이름> 폴더를 C:\\Users\\내이름\\.llm-deck\\models\\ 아래에 넣는다 (설정의 [storage] model_dir 를 정했으면 그 아래).
 도우미(assistant.py)는 그 폴더가 있으면 인터넷으로 받지 않고 그것을 쓴다.
 """
 
@@ -21,6 +21,7 @@ GUIDE = """이 압축 파일 안의 {folder} 폴더를 통째로 아래에 넣�
     C:\\Users\\내이름\\.llm-deck\\models\\{folder}
 
 (.llm-deck 폴더는 도우미를 설치하면 생깁니다. models 폴더가 없으면 만드세요.)
+도우미 설정(app\\config.toml)의 [storage] model_dir 를 정했으면 그 폴더 바로 아래에 넣습니다.
 폴더 안에 model.bin 이 바로 보여야 합니다. 넣은 뒤 도우미를 다시 켜면(로그아웃 후 로그인, 또는 install.cmd)
 기록 파일에 "음성 인식 모델 불러오는 중 (...\\.llm-deck\\models\\{folder})" 가 나옵니다.
 """
