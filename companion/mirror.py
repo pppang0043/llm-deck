@@ -1,8 +1,8 @@
 """기기 화면 미러링. 이 PC 의 브라우저에서 기기 화면을 보고, 눌러서 기기를 조작한다 (USB 나 Wi-Fi 로 연결했을 때).
 
-도우미가 이 PC 안에서만 열리는 작은 웹 서버(127.0.0.1)를 띄운다. 주소에는 도우미를 켤 때마다 바뀌는 비밀 글자가
-들어 있어서, 다른 웹 페이지가 몰래 기기를 누르지 못한다. 주소는 ~/.llm-deck/mirror_url.txt 에 적어 두고,
-`uv run main.py --mirror` 가 그 주소를 브라우저로 연다.
+도우미가 이 PC 안에서만 열리는 작은 웹 서버를 띄운다. 주소는 늘 http://127.0.0.1:4013/ 이라 즐겨찾기해 두면 되고,
+`uv run main.py --mirror` 가 그 주소를 브라우저로 연다. 다른 웹 페이지가 몰래 기기를 누르지 못하게,
+브라우저가 붙여 보내는 "어디서 온 요청인지"(Origin, Sec-Fetch-Site)를 보고 이 페이지에서 온 것만 받는다.
 
 창이 열려 있는 동안(페이지가 화면을 받아 가는 동안)만 기기에 {"mirror": true} 를 2초마다 보낸다.
 기기는 화면이 바뀔 때만 한 장을 보낸다 (펌웨어 mirror.h). 같은 색이 이어지는 것만 줄인 RGB565 라서 브라우저가 풀어 그린다. 창에서 누르기·끌기·떼기는 {"touch": {...}} 로,
@@ -10,7 +10,6 @@
 """
 
 import json
-import secrets
 import struct
 import threading
 import time
@@ -18,7 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PORT = 4013  # 4012 는 도우미가 하나만 돌게 잡는 포트 (main.py)
-URL_FILE = Path.home() / ".llm-deck" / "mirror_url.txt"
+URL = f"http://127.0.0.1:{PORT}/"
+OLD_URL_FILE = Path.home() / ".llm-deck" / "mirror_url.txt"  # 예전에 주소가 바뀌던 때 쓰던 파일
 HEAD = struct.Struct("<IIIHH")  # 장 번호, 위치, 장 크기, 폭, 높이
 # 페이지가 이만큼 화면을 받아 가지 않으면 창이 닫힌 것으로 본다
 VIEWER_SECONDS = 3
@@ -140,7 +140,6 @@ poll();
 class Mirror:
     def __init__(self, cfg: dict, get_transport):
         self.get_transport = get_transport
-        self.token = secrets.token_urlsafe(16)
         self.cond = threading.Condition()
         # 누르기를 보낸 차례대로 기기에 닿게 한다 (Wi-Fi 는 보낼 때마다 따로 요청한다)
         self.send_lock = threading.Lock()
@@ -161,10 +160,8 @@ class Mirror:
             return
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        url = f"http://127.0.0.1:{PORT}/{self.token}/"
-        URL_FILE.parent.mkdir(parents=True, exist_ok=True)
-        URL_FILE.write_text(url, encoding="utf-8")
-        print(f"[mirror] 미러링 창: uv run main.py --mirror (또는 {URL_FILE} 의 주소)")
+        OLD_URL_FILE.unlink(missing_ok=True)
+        print(f"[mirror] 미러링 창: {URL} (uv run main.py --mirror 로도 열린다)")
 
     def on_frame(self, body: bytes) -> None:
         """기기가 보낸 화면 조각을 모은다 (transports/frames.py 가 부른다)"""
@@ -210,14 +207,20 @@ class Mirror:
                 pass
 
             def _allowed(self) -> str | None:
-                """비밀 글자 뒤의 경로. 다른 곳에서 온 요청이면 None"""
+                """요청 경로 ("/" 뒤). 다른 곳에서 온 요청이면 None"""
+                hosts = (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
                 # 다른 사이트가 이름(DNS)을 바꿔 이 서버에 붙는 것을 막는다
-                if self.headers.get("Host", "") not in (f"127.0.0.1:{PORT}", f"localhost:{PORT}"):
+                if self.headers.get("Host", "") not in hosts:
                     return None
-                prefix = f"/{mirror.token}/"
-                if not self.path.startswith(prefix):
+                # 다른 웹 페이지가 보낸 요청은 브라우저가 출처를 붙여 보낸다. 주소창에서 연 것과 이 페이지에서 온 것만 받는다
+                origin = self.headers.get("Origin")
+                if origin and origin not in [f"http://{h}" for h in hosts]:
                     return None
-                return self.path[len(prefix) :]
+                if self.headers.get("Sec-Fetch-Site", "none") not in ("none", "same-origin"):
+                    return None
+                if not self.path.startswith("/"):
+                    return None
+                return self.path[1:]
 
             def _reply(self, code: int, body: bytes, kind: str, extra: dict | None = None) -> None:
                 try:
@@ -301,8 +304,12 @@ def open_window() -> bool:
     """켜져 있는 도우미의 미러링 창을 브라우저로 연다"""
     import webbrowser
 
-    if not URL_FILE.exists():
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(URL, timeout=3).close()
+    except OSError:
         print("[mirror] 도우미가 켜져 있지 않거나 미러링이 꺼져 있습니다.")
         return False
-    webbrowser.open(URL_FILE.read_text(encoding="utf-8").strip())
+    webbrowser.open(URL)
     return True
