@@ -119,6 +119,63 @@ def spoken_text(question: str, answer: str) -> str:
     return " ".join(sentences[:2])
 
 
+# Apple Silicon Mac 에서 GPU 로 받아 적을 때 쓰는 모델 (Hugging Face 이름)
+MLX_MODELS = {
+    "tiny": "mlx-community/whisper-tiny-mlx", "base": "mlx-community/whisper-base-mlx",
+    "small": "mlx-community/whisper-small-mlx", "medium": "mlx-community/whisper-medium-mlx",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo", "turbo": "mlx-community/whisper-large-v3-turbo",
+}
+
+
+def _mlx_ready() -> bool:
+    if sys.platform != "darwin":
+        return False
+    try:
+        import mlx_whisper  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class _MlxModel:
+    """mlx-whisper (Apple GPU). 5초 말을 large-v3-turbo 로 1초 안쪽에 받아 적는다 (CPU 는 4초쯤)."""
+
+    def __init__(self, repo: str):
+        import numpy as np
+        from huggingface_hub import snapshot_download
+
+        try:
+            # 받아 둔 모델이 있으면 인터넷에 묻지 않는다
+            self.path = snapshot_download(repo, local_files_only=True)
+        except Exception:
+            self.path = snapshot_download(repo)
+        self.text(np.zeros(SAMPLE_RATE, dtype=np.float32), "ko", None)  # 무게를 GPU 에 올려 둔다
+
+    def text(self, pcm, language: str, prompt: str | None) -> str:
+        import mlx_whisper
+        from faster_whisper.vad import get_speech_timestamps
+
+        # 말이 없는 녹음은 넘기지 않는다 (조용한 소리에서 없는 말을 지어낸다)
+        if len(pcm) > SAMPLE_RATE and not get_speech_timestamps(pcm):
+            return ""
+        result = mlx_whisper.transcribe(pcm, path_or_hf_repo=self.path, language=language, initial_prompt=prompt,
+                                        condition_on_previous_text=False)
+        return result["text"].strip()
+
+
+class _Held:
+    """이미 잡은 잠금을 with 블록이 끝날 때 놓는다."""
+
+    def __init__(self, lock: threading.Lock):
+        self.lock = lock
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *exc) -> None:
+        self.lock.release()
+
+
 class Session:
     """백그라운드에 띄워 둔 CLI 하나. 질문을 넣으면 답이 나오는 대로 on_text 를 부른다."""
 
@@ -330,7 +387,11 @@ class Assistant:
                 self.mic, self.mic_reason = False, reason
             self._set("error", a=reason)
 
-        with self._audio_lock:
+        if not self._audio_lock.acquire(timeout=3):
+            # 앞 녹음의 마이크가 아직 닫히지 않았다
+            fail("마이크가 아직 닫히는 중입니다\n잠시 뒤 다시 눌러 주세요", False)
+            return
+        with _Held(self._audio_lock):
             ok, reason = self._check_mic(refresh=not self.mic)  # 없던 마이크를 방금 꽂았을 수 있다
             if not ok:
                 fail(reason, True)
@@ -370,14 +431,28 @@ class Assistant:
                         print(f"[assistant] {MAX_RECORD_SECONDS}초가 지나 녹음을 끝냅니다")
                         threading.Thread(target=self._stop, daemon=True).start()
                 finally:
-                    stream.stop()
-                    # 멈춘 동안 쌓인 소리는 버린다 (다음 녹음에 앞 소리가 섞이지 않게)
-                    while stream.read_available:
-                        stream.read(stream.read_available)
+                    self._halt(stream)
             except Exception as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
                 self._close_stream()
                 self._mic_failed_until = time.monotonic() + 300
                 fail(f"PC 마이크를 열지 못했습니다\n{str(e)[:60]}", True)
+
+    def _halt(self, stream) -> None:
+        """녹음을 멈춘다. Mac 에서 stream.stop() 이 돌아오지 않아 다음 녹음이 모두 막힌 적이 있다.
+        abort() 는 쌓인 소리도 버린다. 1초 안에 안 끝나면 그 스트림은 버리고 다음에 새로 연다."""
+        done = threading.Event()
+
+        def abort() -> None:
+            try:
+                stream.abort()
+            except Exception:
+                pass
+            done.set()
+
+        threading.Thread(target=abort, daemon=True).start()
+        if not done.wait(1.0):
+            print("[assistant] 마이크가 바로 멈추지 않아 다음에는 새로 엽니다")
+            self._stream = None
 
     def _close_stream(self) -> None:
         stream, self._stream = self._stream, None
@@ -408,9 +483,18 @@ class Assistant:
     def _load_model(self) -> None:
         if self.model is not None:
             return
+        name = self.cfg.get("whisper_model", "small")
+        if self.cfg.get("engine", "auto") in ("auto", "mlx") and name in MLX_MODELS and _mlx_ready():
+            print(f"[assistant] 음성 인식 모델 불러오는 중 ({name}, GPU)")
+            loading = time.monotonic()
+            try:
+                self.model = _MlxModel(MLX_MODELS[name])
+                print(f"[assistant] 음성 인식 모델을 불러왔습니다 ({time.monotonic() - loading:.1f}초)")
+                return
+            except Exception as e:
+                print(f"[assistant] GPU 모델을 불러오지 못해 CPU 로 받아 적습니다: {e}")
         from faster_whisper import WhisperModel
 
-        name = self.cfg.get("whisper_model", "small")
         # 회사망은 Hugging Face 에서 모델을 받지 못할 수 있다. 다른 PC 에서 받아 복사해 둔 폴더가 있으면 그것을 쓴다
         # (Mac 에서 companion/windows/pack_model.py 로 만든다)
         local = Path.home() / ".llm-deck" / "models" / f"faster-whisper-{name}"
@@ -466,11 +550,14 @@ class Assistant:
                 start = time.monotonic()
                 # ORCA 세션에 받아쓰기할 때는 / 명령 이름을 영어로 알아듣게 돕는다
                 hints = self.orca.hotwords() if self.dictate and self.orca_pick and self.orca else None
-                segments, _ = self.model.transcribe(pcm, language=self.cfg.get("language", "ko"),
-                                                    beam_size=self.cfg.get("beam_size", 5), vad_filter=True,
-                                                    initial_prompt=self.cfg.get("prompt", DEFAULT_PROMPT) or None,
-                                                    hotwords=hints)
-                question = "".join(s.text for s in segments).strip()
+                language = self.cfg.get("language", "ko")
+                prompt = self.cfg.get("prompt", DEFAULT_PROMPT) or None
+                if isinstance(self.model, _MlxModel):
+                    question = self.model.text(pcm, language, prompt)
+                else:
+                    segments, _ = self.model.transcribe(pcm, language=language, beam_size=self.cfg.get("beam_size", 5),
+                                                        vad_filter=True, initial_prompt=prompt, hotwords=hints)
+                    question = "".join(s.text for s in segments).strip()
                 kind = "받아쓰기" if self.dictate else "질문"
                 print(f"[assistant] {kind} ({len(pcm) / SAMPLE_RATE:.1f}초 녹음, {time.monotonic() - start:.1f}초): {question}")
                 if self.dictate:

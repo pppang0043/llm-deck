@@ -21,7 +21,8 @@ import time
 from pathlib import Path
 
 POLL_SECONDS = 10
-MAX_SESSIONS = 8
+MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
+RECENT_FILE = Path.home() / ".llm-deck" / "orca_recent.json"
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
 
@@ -170,6 +171,12 @@ class Orca:
         self.cli: str | None = None
         self.handles: dict[str, str] = {}  # 기기에 보낸 짧은 id -> orca 터미널 handle
         self.workdirs: list[str] = []
+        # 기기에서 세션을 연 시각 (handle -> time.time()). 최근에 연 것을 앞에 둔다. 도우미를 다시 켜도 남긴다
+        self.recent: dict[str, float] = {}
+        try:
+            self.recent = json.loads(RECENT_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
         self.state: dict | None = None
         self.sent: dict | None = None
         self.pending_toast: str | None = None
@@ -233,8 +240,14 @@ class Orca:
             rows.append({"id": short, "t": _short_title(term.get("title"))[:30], "p": Path(path).name[:20],
                          "s": state})
             handles[short] = handle
-        # AI 세션이 먼저, 그다음 AI 없는 터미널
-        rows.sort(key=lambda r: r["s"] == "shell")
+        # 프로젝트별로 모으고, 최근에 연 세션(과 그 프로젝트)이 앞에. 연 적이 없으면 AI 세션, 그다음 터미널
+        def rank(row: dict) -> tuple:
+            return (-self.recent.get(handles[row["id"]], 0), row["s"] == "shell")
+
+        best: dict[str, tuple] = {}
+        for row in rows:
+            best[row["p"]] = min(best.get(row["p"], rank(row)), rank(row))
+        rows.sort(key=lambda r: (best[r["p"]], r["p"], rank(r)))
         self.handles = handles
         self.workdirs = sorted({t.get("worktreePath") for t in terms.get("terminals", []) if t.get("worktreePath")})
         return {"ok": True, "list": rows[:MAX_SESSIONS]}
@@ -267,6 +280,15 @@ class Orca:
             return None
         if self._run("terminal", "switch", "--terminal", handle) is None:
             print(f"[orca] {short} 로 바꾸지 못했습니다")
+        self.recent[handle] = time.time()
+        live = set(self.handles.values())
+        self.recent = {h: t for h, t in self.recent.items() if h in live}  # 닫힌 세션은 지운다
+        try:
+            RECENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            RECENT_FILE.write_text(json.dumps(self.recent), encoding="utf-8")
+        except OSError:
+            pass
+        self._wake.set()  # 순서가 바뀌었다
         if sys.platform == "darwin":
             subprocess.run(["open", "-b", BUNDLE_ID], capture_output=True, timeout=10)
         return handle

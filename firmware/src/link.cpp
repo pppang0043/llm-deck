@@ -218,20 +218,6 @@ void link_loop() {
         display_poke();
         ui_show(doc["view"]);
       }
-      if (doc["screenshot"] == true) {
-        // 진단용: 지금 화면을 사진처럼 PC 로 보낸다
-        uint16_t *px;
-        int w, h;
-        if (ui_settings_visible()) settings_redraw();
-        lv_refr_now(NULL);
-        if (ui_screenshot(&px, &w, &h)) {
-          for (int i = 0; i < w * h; i++) px[i] = (px[i] << 8) | (px[i] >> 8);
-          uint8_t *jpg;
-          size_t len;
-          if (fmt2jpg((uint8_t *)px, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len, false);
-          free(px);
-        }
-      }
       if (doc["camera_mount"].is<JsonObjectConst>()) {
         camera_set_mount(doc["camera_mount"]["rot"] | 0, doc["camera_mount"]["mirror"] | false);
       }
@@ -292,6 +278,20 @@ void link_loop() {
         serializeJson(services, shown);
         Serial.printf("[link] usage via %s: %u services (%s)\n", link_tag(from), (unsigned)services.size(),
                       doc["host"] | "?");
+      }
+      if (doc["screenshot"] == true) {
+        // 진단용: 지금 화면을 사진처럼 PC 로 보낸다 (같이 온 목록, 알림까지 그린 뒤)
+        uint16_t *px;
+        int w, h;
+        if (ui_settings_visible()) settings_redraw();
+        lv_refr_now(NULL);
+        if (ui_screenshot(&px, &w, &h)) {
+          for (int i = 0; i < w * h; i++) px[i] = (px[i] << 8) | (px[i] >> 8);
+          uint8_t *jpg;
+          size_t len;
+          if (fmt2jpg((uint8_t *)px, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len, false);
+          free(px);
+        }
       }
     }
   }
