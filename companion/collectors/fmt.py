@@ -36,7 +36,10 @@ def limit_bar(label: str, used_pct: float, resets_at: float | None) -> dict:
     if resets_at and resets_at <= time.time():
         return {"label": WINDOW_LABELS.get(label, label), "note": "", "text": "0%", "pct": 0}
     pct = max(0, min(100, round(used_pct)))
-    note = fmt_when(resets_at) if resets_at else ""
+    # 기기에서 두 서비스를 한 표에 나란히 보이므로 짧게: 오늘이면 시각만, 아니면 "23일 15:00"
+    when = datetime.fromtimestamp(resets_at) if resets_at else None
+    note = "" if not when else when.strftime("%H:%M") if when.date() == datetime.now().date() \
+        else f"{when.day}일 {when:%H:%M}"
     return {"label": WINDOW_LABELS.get(label, label), "note": note, "text": f"{pct}%", "pct": pct}
 
 

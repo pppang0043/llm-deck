@@ -234,6 +234,97 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
   if (pct >= 70) lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
 }
 
+// 한도 막대만 있는 페이지(Claude Code, Codex 같은 구독)인지
+static bool is_limits_page(JsonObjectConst svc) {
+  return svc["bars"].as<JsonArrayConst>().size() > 0 && !svc["headline"].is<const char *>() &&
+         !svc["table"].is<JsonArrayConst>() && !svc["rows"].is<JsonArrayConst>();
+}
+
+// 구독 한도 표의 한 칸: 큰 숫자, 막대, 초기화 시각. 누르면 기록 그래프.
+static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst bar, int width_pct) {
+  lv_obj_t *cell = lv_obj_create(row);
+  lv_obj_remove_style_all(cell);
+  lv_obj_set_size(cell, lv_pct(width_pct), LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_left(cell, 8, 0);
+  lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+  lv_obj_set_style_pad_row(cell, 3, 0);
+  if (bar.isNull()) return;
+
+  int pct = constrain(bar["pct"] | 0, 0, 100);
+  lv_color_t color = pct >= 90 ? COLOR_FULL : pct >= 70 ? COLOR_WARN : lv_color_white();
+  add_label(cell, bar["text"] | "", &lv_font_montserrat_28, color);
+  lv_obj_t *b = lv_bar_create(cell);
+  lv_obj_set_size(b, lv_pct(100), 8);
+  lv_bar_set_range(b, 0, 100);
+  lv_bar_set_value(b, pct, LV_ANIM_OFF);
+  if (pct >= 70) lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
+  const char *when = bar["note"] | "";
+  lv_obj_t *note = add_label(cell, when[0] ? when : "-", &font_ko_14, COLOR_DIM);
+  lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_max_width(note, lv_pct(100), 0);
+  if (gauge_count < MAX_GAUGES) {
+    GaugeKey &k = gauge_keys[gauge_count];
+    strlcpy(k.service, service, sizeof(k.service));
+    strlcpy(k.label, bar["label"] | "", sizeof(k.label));
+    lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(cell, gauge_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)gauge_count);
+    gauge_count++;
+  }
+}
+
+// 구독 한도 페이지 여럿을 한 페이지에 표로: 열은 서비스, 줄은 구간(5시간, 주간)
+static void add_limits_table(lv_obj_t *page, JsonArrayConst services) {
+  JsonObjectConst list[4];
+  int n = 0;
+  for (JsonObjectConst svc : services) {
+    if (is_limits_page(svc) && n < 4) list[n++] = svc;
+  }
+  // 이름 칸 24% ("5시간" 이 한 줄에 들어가게), 나머지를 서비스가 나눠 쓴다
+  int other = 76 / n;
+  lv_obj_t *head = lv_obj_create(page);
+  lv_obj_remove_style_all(head);
+  lv_obj_set_size(head, lv_pct(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+  // 서비스 이름은 오른쪽 끝을 아래 칸에 맞추고 왼쪽으로 조금 더 써서 세로 화면에서도 한 줄에 ("Claude Code")
+  int head_w = 80 / n;
+  lv_obj_set_width(add_label(head, "", &font_ko_14, COLOR_DIM), lv_pct(100 - head_w * n));
+  for (int i = 0; i < n; i++) {
+    lv_obj_t *name = add_label(head, list[i]["name"] | "?", &font_ko_14, COLOR_ACCENT);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(name, lv_pct(head_w));
+    lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_RIGHT, 0);
+  }
+  // 구간 이름은 첫 서비스 순서대로, 다른 서비스에만 있는 구간은 뒤에
+  const char *labels[6];
+  int nl = 0;
+  for (int i = 0; i < n; i++) {
+    for (JsonObjectConst bar : list[i]["bars"].as<JsonArrayConst>()) {
+      const char *label = bar["label"] | "";
+      bool seen = false;
+      for (int j = 0; j < nl; j++) seen |= strcmp(labels[j], label) == 0;
+      if (!seen && nl < 6) labels[nl++] = label;
+    }
+  }
+  for (int j = 0; j < nl; j++) {
+    lv_obj_t *row = lv_obj_create(page);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_t *name = add_label(row, labels[j], &font_ko_20, COLOR_DIM);
+    lv_obj_set_width(name, lv_pct(24));
+    lv_obj_set_style_pad_top(name, 6, 0);
+    for (int i = 0; i < n; i++) {
+      JsonObjectConst found;
+      for (JsonObjectConst bar : list[i]["bars"].as<JsonArrayConst>()) {
+        if (strcmp(bar["label"] | "", labels[j]) == 0) found = bar;
+      }
+      add_limit_cell(row, list[i]["name"] | "?", found, other);
+    }
+  }
+}
+
 static lv_obj_t *add_page(uint8_t index) {
   // 서비스 페이지는 위아래로 넘긴다 (오른쪽으로 밀기는 홈으로 가기에 쓴다)
   lv_obj_t *page = lv_tileview_add_tile(tiles, 0, index, LV_DIR_VER);
@@ -719,7 +810,19 @@ static void render_usage() {
   lv_obj_clean(tiles);
   gauge_count = 0;
   uint8_t index = 0;
+  // 구독 한도 페이지가 둘 이상이면 처음 것 자리에 "구독제" 한 페이지로 모은다
+  int limits = 0;
+  for (JsonObjectConst svc : services) limits += is_limits_page(svc);
+  bool limits_done = false;
   for (JsonObjectConst svc : services) {
+    if (limits >= 2 && is_limits_page(svc)) {
+      if (limits_done) continue;
+      limits_done = true;
+      lv_obj_t *page = add_page(index++);
+      add_row(page, "구독제", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14, COLOR_DIM);
+      add_limits_table(page, services);
+      continue;
+    }
     lv_obj_t *page = add_page(index);
 
     // 제목 오른쪽의 작은 글자는 이 값이 언제 것인지(시각)를 나타낸다
@@ -749,7 +852,7 @@ static void render_usage() {
   }
   add_pc_tile(index);
 
-  lv_obj_set_tile_id(tiles, 0, keep <= count ? keep : count, LV_ANIM_OFF);
+  lv_obj_set_tile_id(tiles, 0, keep <= index ? keep : index, LV_ANIM_OFF);
   update_pc_watch();
 }
 
