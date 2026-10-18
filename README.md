@@ -68,7 +68,7 @@ sh macos/install.sh uninstall  # 제거
 
 ### Windows
 
-`dist/llm-deck-companion-windows.zip` 을 풀고 `windows\install.cmd` 를 더블클릭한다. 자세한 내용은 압축 안의 `README.txt`.
+`dist/llm-deck-companion-windows.zip` 을 풀고 맨 위의 `install.cmd` 를 더블클릭한다 (도우미 코드는 `app` 폴더). 자세한 내용은 압축 안의 `README.txt`.
 설치는 uv(파이썬 도구) 설치, 방화벽 허용(같은 공유기 안에서만), Claude Code 상태줄 연결, 자동 실행 등록을 한다.
 기록: `C:\Users\<이름>\.llm-deck\companion.log`.
 

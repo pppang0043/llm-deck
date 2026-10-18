@@ -301,7 +301,8 @@ def main() -> None:
             time.sleep(INTERVAL)
 
     if args.mirror:
-        mirror.open_window()
+        if not mirror.open_window():
+            sys.exit(1)  # mirror.cmd 가 창을 닫지 않고 이유를 보여 주게
         return
 
     if args.dry_run:

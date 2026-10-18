@@ -1,7 +1,8 @@
 ﻿# LLM Deck PC 도우미 설치 (Windows)
 #   install.cmd    설치하고 로그인할 때 자동으로 켜지게 한다 (다시 실행해도 된다)
 #   uninstall.cmd  자동 실행과 Claude Code 상태줄 설정을 되돌린다
-param([switch]$Uninstall)
+#   mirror.cmd     켜져 있는 도우미의 미러링 창(기기 화면)을 브라우저로 연다
+param([switch]$Uninstall, [switch]$Mirror)
 $ErrorActionPreference = 'Stop'
 $Dir = Split-Path -Parent $PSScriptRoot
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -50,6 +51,13 @@ function Stop-Companion {
     Get-CimInstance Win32_Process |
         Where-Object { $_.CommandLine -and $_.CommandLine -like '*main.py*' -and ($_.CommandLine -like "*$Dir*" -or $_.CommandLine -like '*llm-deck*') } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+if ($Mirror) {
+    $uv = Find-Uv
+    if (-not $uv) { Write-Host '먼저 install.cmd 로 설치하세요.'; exit 1 }
+    & $uv run --directory $Dir main.py --mirror
+    exit $LASTEXITCODE
 }
 
 if ($Uninstall) {

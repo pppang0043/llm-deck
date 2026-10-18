@@ -4,6 +4,9 @@
 
 git 이 아는 companion 파일(커밋 전 새 파일 포함, .gitignore 에 든 것은 뺀다)만 담는다. config.toml 은 예시 파일에 이 PC 의 gist_id 만 채워 넣고,
 토큰 같은 비밀 값은 넣지 않는다.
+
+풀었을 때 맨 위에는 누를 파일과 README 만 두고, 도우미 코드는 app 폴더에 넣는다.
+    llm-deck-companion/  install.cmd  uninstall.cmd  mirror.cmd  README.txt  app/
 """
 
 import subprocess
@@ -13,13 +16,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "dist" / "llm-deck-companion-windows.zip"
+TOP = ("install.cmd", "uninstall.cmd", "mirror.cmd", "README.txt")
+# Windows 에서 쓰지 않는 것 (Mac 설치, 이 Mac 에서만 돌리는 도구)
+SKIP = ("companion/macos/", "companion/windows/make_zip.py", "companion/windows/pack_model.py")
 
 
 def main() -> None:
     files = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "companion"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
-    files = [f for f in files if (ROOT / f).is_file()]  # 지웠지만 아직 커밋하지 않은 파일은 뺀다
+    files = [f for f in files if (ROOT / f).is_file() and not f.startswith(SKIP)]  # 지웠지만 아직 커밋하지 않은 파일도 뺀다
     gist = ""
     config_path = ROOT / "companion" / "config.toml"
     if config_path.exists():
@@ -30,11 +36,13 @@ def main() -> None:
     OUT.parent.mkdir(exist_ok=True)
     with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED) as z:
         for f in files:
-            arc = "llm-deck-companion/" + f[len("companion/") :]
-            if arc.endswith("windows/README.txt"):
-                z.write(ROOT / f, "llm-deck-companion/README.txt")  # 맨 위에도 하나
+            name = f[len("companion/") :]
+            if name.startswith("windows/") and name[len("windows/") :] in TOP:
+                arc = "llm-deck-companion/" + name[len("windows/") :]
+            else:
+                arc = "llm-deck-companion/app/" + name
             z.write(ROOT / f, arc)
-        z.writestr("llm-deck-companion/config.toml", config.replace("\n", "\r\n"))
+        z.writestr("llm-deck-companion/app/config.toml", config.replace("\n", "\r\n"))
 
     # 토큰이 섞여 들어가지 않았는지 확인한다
     with zipfile.ZipFile(OUT) as z:
