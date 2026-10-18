@@ -61,6 +61,22 @@ EXTRA_DIRS = [
 
 # 받아 적을 때 앞 문맥으로 주는 낱말들. 이런 말을 더 잘 알아듣는다 (config 의 prompt 로 바꿀 수 있다)
 DEFAULT_PROMPT = "받아쓰기, 펌웨어, 빌드, 커밋, 깃, 세션, 오르카, 클로드, 기기, 배터리, 코드, 스킬."
+# 음성 인식이 조용한 소리·잡음에서 지어내는 말 (동영상 자막으로 배운 끝인사). 받아 적은 글 전체가 이것뿐이면 알아듣지 못한 것으로 본다
+MADE_UP = {"감사합니다", "고맙습니다", "시청해주셔서감사합니다", "시청해주셔서고맙습니다", "구독과좋아요부탁드립니다",
+           "다음영상에서만나요", "안녕히계세요", "thankyou", "thanksforwatching", "you"}
+# 이 정도보다 작은 소리만 녹음됐으면 알아듣지 못했을 때 마이크 가까이에서 말하라고 알린다
+QUIET_PEAK = 0.1
+
+
+def _heard(no_speech: float, logprob: float) -> bool:
+    """한 구간이 실제 말인지 (음성 인식 스스로 "말이 아닌 것 같다"고 하면서 자신도 없으면 버린다)"""
+    return not (no_speech > 0.6 and logprob < -1.0) and no_speech < 0.9
+
+
+def _drop_made_up(text: str) -> str:
+    """지어낸 말뿐이면 빈 글로 바꾼다"""
+    bare = "".join(ch for ch in text.lower() if ch.isalnum())
+    return "" if bare in MADE_UP else text
 
 
 def _which(name: str) -> str | None:
@@ -162,7 +178,7 @@ class _MlxModel:
             return ""
         result = mlx_whisper.transcribe(pcm, path_or_hf_repo=self.path, language=language, initial_prompt=prompt,
                                         condition_on_previous_text=False)
-        return result["text"].strip()
+        return "".join(s["text"] for s in result["segments"] if _heard(s["no_speech_prob"], s["avg_logprob"])).strip()
 
 
 class _Held:
@@ -587,14 +603,23 @@ class Assistant:
                 else:
                     segments, _ = self.model.transcribe(pcm, language=language, beam_size=self.cfg.get("beam_size", 1),
                                                         vad_filter=True, initial_prompt=prompt, hotwords=hints)
-                    question = "".join(s.text for s in segments).strip()
+                    question = "".join(s.text for s in segments if _heard(s.no_speech_prob, s.avg_logprob)).strip()
                 kind = "받아쓰기" if self.dictate else "질문"
                 print(f"[assistant] {kind} ({len(pcm) / SAMPLE_RATE:.1f}초 녹음, {time.monotonic() - start:.1f}초): {question}")
+                if _drop_made_up(question) != question:
+                    print(f"[assistant] 조용한 소리에서 지어낸 말로 보여 버립니다: {question}")
+                    question = ""
+                if not question:
+                    hint = "마이크 가까이에서\n다시 말해 주세요" if peak < QUIET_PEAK else "다시 말해 주세요"
+                    if self.dictate:
+                        self._set("idle", mode="dictate")
+                        self.orca_target = None
+                        self.pending_toast = f"알아듣지 못했습니다\n{hint}"
+                    else:
+                        self._set("error", a=f"알아듣지 못했습니다\n{hint}")
+                    return
                 if self.dictate:
                     self._finish_dictation(question)
-                    return
-                if not question:
-                    self._set("error", a="알아듣지 못했습니다. 다시 말해 주세요")
                     return
                 self._set("thinking", q=question, a="")
                 self._open_session()
@@ -619,11 +644,7 @@ class Assistant:
             self.busy = False
 
     def _finish_dictation(self, text: str) -> None:
-        """받아 적은 글을 PC 의 커서 자리에 입력한다. 결과는 기기 알림으로."""
-        if not text:
-            self._set("idle", mode="dictate")
-            self.pending_toast = "알아듣지 못했습니다\n다시 말해 주세요"
-            return
+        """받아 적은 글을 PC 의 커서 자리에 입력한다. 결과는 기기 알림으로. (빈 글은 부르는 쪽이 먼저 걸러 낸다)"""
         if self.orca:
             fixed = orca.fix_slash(text, self.orca.commands(), self.orca.aliases)
             if fixed != text:
