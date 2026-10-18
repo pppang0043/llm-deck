@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from . import keys
+from . import budget, keys
 from .fmt import fmt_tokens, fmt_usd
 
 BASE = "https://api.anthropic.com/v1/organizations"
@@ -44,19 +44,17 @@ def collect(cfg: dict) -> dict | None:
     month_start = today.replace(day=1)
     iso = "%Y-%m-%dT%H:%M:%SZ"
 
-    month_cents = today_cents = 0.0
     try:
-        costs = _get_all("cost_report", {"starting_at": month_start.strftime(iso), "limit": 31}, key)
+        costs = _get_all("cost_report", {"starting_at": budget.start(cfg, month_start).strftime(iso), "limit": 31}, key)
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403):
             raise
         return keys.rejected_page("Anthropic API", "anthropic_api", key, cfg, e.code, "platform.claude.com/settings/admin-keys")
     keys.mark_ok("anthropic_api", key)
-    for bucket in costs:
-        cents = sum(float(r["amount"]) for r in bucket["results"])
-        month_cents += cents
-        if bucket["starting_at"].startswith(today.strftime("%Y-%m-%d")):
-            today_cents = cents
+    # {"YYYY-MM-DD": USD}. amount 는 센트 단위
+    daily = {b["starting_at"][:10]: sum(float(r["amount"]) for r in b["results"]) / 100 for b in costs}
+    month = month_start.strftime("%Y-%m")
+    month_usd = sum(usd for day, usd in daily.items() if day.startswith(month))
 
     tokens_in = tokens_out = cache_read = 0
     usage = _get_all("usage_report/messages", {"starting_at": today.strftime(iso), "bucket_width": "1d"}, key)
@@ -69,12 +67,15 @@ def collect(cfg: dict) -> dict | None:
 
     return {
         "name": "Anthropic API",
-        "headline": fmt_usd(month_cents / 100),
+        "headline": fmt_usd(month_usd),
         "sub": now.strftime("%B") + " so far (UTC)" + keys.expiry_note(cfg),
-        "rows": [
-            ["Cost today", fmt_usd(today_cents / 100)],
-            ["Input today", fmt_tokens(tokens_in)],
-            ["Output today", fmt_tokens(tokens_out)],
-            ["Cache read today", fmt_tokens(cache_read)],
-        ],
+        "rows": budget.fit(
+            [["Cost today", fmt_usd(daily.get(today.strftime("%Y-%m-%d"), 0.0))]],
+            budget.rows(cfg, daily, month),
+            [
+                ["Input today", fmt_tokens(tokens_in)],
+                ["Output today", fmt_tokens(tokens_out)],
+                ["Cache read today", fmt_tokens(cache_read)],
+            ],
+        ),
     }

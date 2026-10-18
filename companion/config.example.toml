@@ -27,12 +27,22 @@ enabled = true
 admin_key = ""
 # 키를 만들 때 고른 만료일 (예: "2027-01-18"). 7일 전부터 화면에 알리고, 지나면 새 키를 넣으라고 알립니다. 만료 없음이면 비워 둡니다.
 expires = ""
+# 월 지출 한도 (USD, 예: 100). Anthropic 은 API 로 읽을 수 없어서 콘솔 '지출 한도' 값을 적습니다. 비우면 안 보입니다.
+monthly_limit = ""
+# 크레딧 잔액 (USD, 예: 99.52) 과 그 값을 본 날짜. 두 회사 모두 잔액 API 가 없어서, 적은 날부터 쓴 금액을 빼서 보여줍니다.
+credit = ""
+credit_date = ""
 
 [openai_api]
 # OpenAI Admin 키 (sk-admin-...). 일반 키(sk-proj-...)로는 안 됩니다. platform.openai.com > Settings > Organization > Admin keys
 admin_key = ""
 # 키를 만들 때 고른 만료일 (예: "2027-01-18"). 7일 전부터 화면에 알리고, 지나면 새 키를 넣으라고 알립니다. 만료 없음이면 비워 둡니다.
 expires = ""
+# 월 지출 한도 (USD). 비우면 OpenAI 에 설정된 조직 한도를 읽어 옵니다.
+monthly_limit = ""
+# 크레딧 잔액 (USD, 예: 99.52) 과 그 값을 본 날짜. 두 회사 모두 잔액 API 가 없어서, 적은 날부터 쓴 금액을 빼서 보여줍니다.
+credit = ""
+credit_date = ""
 
 [sync]
 # 한도 사용률을 여러 PC 가 함께 쓰기 위한 비공개 GitHub gist. 비워 두면 이 PC 의 값만 씁니다.
