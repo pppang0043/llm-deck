@@ -14,7 +14,13 @@ LV_FONT_DECLARE(font_ko_20);
 #define COLOR_TALK lv_color_hex(0x2E7D5B)
 #define COLOR_TALKING lv_color_hex(0xC8372D)
 #define TALK_H 56
+// 가로 화면에서는 말하기 버튼을 오른쪽에 세로로 둔다 (홈 화면 마이크 버튼처럼)
+#define TALK_W 60
 
+#define GUIDE_TALL "아래 버튼을 누르고 PC 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다."
+#define GUIDE_WIDE "오른쪽 버튼을 누르고 PC 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다."
+
+static bool wide = false;  // 가로 화면 (askpanel_layout 이 정한다)
 static lv_obj_t *panel, *state_lbl, *new_btn, *mute_btn, *mute_lbl, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
 static bool talking = false;  // 녹음 중 (한 번 눌러 시작, 다시 눌러 끝)
 static bool dictating = false;  // 지금 누른 것이 받아쓰기(사용량 화면 버튼)인지
@@ -50,10 +56,19 @@ void askpanel_refresh() {
   int st = askpanel_talk_state();
   lv_obj_set_style_bg_color(talk_btn, st == ASK_TALKING ? COLOR_TALKING : st == ASK_READY ? COLOR_TALK : COLOR_ROW, 0);
   lv_obj_set_style_text_color(talk_lbl, st == ASK_READY || st == ASK_TALKING ? lv_color_white() : COLOR_DIM, 0);
-  lv_label_set_text(talk_lbl, st == ASK_TALKING ? LV_SYMBOL_AUDIO "  다 말하면 다시 누르기"
-                              : st == ASK_NO_PC ? "PC 연결 없음"
-                              : st == ASK_NO_MIC ? "PC 마이크 없음"
-                                                 : LV_SYMBOL_AUDIO "  눌러서 말하기");
+  // 가로 화면의 버튼은 좁아서 작은 글씨로 여러 줄로 쓴다
+  lv_obj_set_style_text_font(talk_lbl, wide ? &font_ko_14 : &font_ko_20, 0);
+  if (wide) {
+    lv_label_set_text(talk_lbl, st == ASK_TALKING ? LV_SYMBOL_AUDIO "\n\n다\n말하면\n다시\n누르기"
+                                : st == ASK_NO_PC ? "PC\n연결\n없음"
+                                : st == ASK_NO_MIC ? "PC\n마이크\n없음"
+                                                   : LV_SYMBOL_AUDIO "\n\n눌러서\n말하기");
+  } else {
+    lv_label_set_text(talk_lbl, st == ASK_TALKING ? LV_SYMBOL_AUDIO "  다 말하면 다시 누르기"
+                                : st == ASK_NO_PC ? "PC 연결 없음"
+                                : st == ASK_NO_MIC ? "PC 마이크 없음"
+                                                   : LV_SYMBOL_AUDIO "  눌러서 말하기");
+  }
   ui_refresh_talk();
 }
 
@@ -188,8 +203,7 @@ void askpanel_build(lv_obj_t *parent) {
   q_lbl = add_label(text_box, "", &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(q_lbl, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(q_lbl, lv_pct(100));
-  a_lbl = add_label(text_box, "아래 버튼을 누르고 PC 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다.", &font_ko_20,
-                    lv_color_white());
+  a_lbl = add_label(text_box, GUIDE_TALL, &font_ko_20, lv_color_white());
   lv_label_set_long_mode(a_lbl, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(a_lbl, lv_pct(100));
 
@@ -197,7 +211,9 @@ void askpanel_build(lv_obj_t *parent) {
   lv_obj_set_style_radius(talk_btn, 14, 0);
   lv_obj_set_style_shadow_width(talk_btn, 0, 0);
   lv_obj_add_event_cb(talk_btn, talk_event, LV_EVENT_CLICKED, NULL);
+  lv_obj_set_style_pad_all(talk_btn, 0, 0);
   talk_lbl = add_label(talk_btn, "", &font_ko_20, lv_color_white());
+  lv_obj_set_style_text_align(talk_lbl, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(talk_lbl);
   askpanel_refresh();
 }
@@ -212,10 +228,23 @@ void askpanel_layout(int x, int y, int w, int h) {
   // 상태 글자는 제목과 음소거 버튼 사이에 (좁으면 끝을 줄인다)
   lv_label_set_long_mode(state_lbl, LV_LABEL_LONG_DOT);
   lv_obj_set_width(state_lbl, inner_w - 48 - 68 - 6 - 40 - 6);
-  lv_obj_set_size(text_box, inner_w, inner_h - 34 - TALK_H - 8);
+  wide = w > h;
+  if (wide) {
+    lv_obj_set_size(text_box, inner_w - TALK_W - 8, inner_h - 34);
+    lv_obj_set_size(talk_btn, TALK_W, inner_h - 34);
+    lv_obj_set_pos(talk_btn, inner_w - TALK_W, 34);
+  } else {
+    lv_obj_set_size(text_box, inner_w, inner_h - 34 - TALK_H - 8);
+    lv_obj_set_size(talk_btn, inner_w, TALK_H);
+    lv_obj_set_pos(talk_btn, 0, inner_h - TALK_H);
+  }
   lv_obj_set_pos(text_box, 0, 34);
-  lv_obj_set_size(talk_btn, inner_w, TALK_H);
-  lv_obj_set_pos(talk_btn, 0, inner_h - TALK_H);
+  // 처음 안내 글은 버튼이 있는 쪽을 가리킨다
+  const char *guide = lv_label_get_text(a_lbl);
+  if (strcmp(guide, GUIDE_TALL) == 0 || strcmp(guide, GUIDE_WIDE) == 0) {
+    lv_label_set_text(a_lbl, wide ? GUIDE_WIDE : GUIDE_TALL);
+  }
+  askpanel_refresh();
 }
 
 void askpanel_show(bool on) {
