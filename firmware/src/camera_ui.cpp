@@ -5,6 +5,7 @@
 
 #include "camera.h"
 #include "display.h"
+#include "gallery.h"
 #include "photo.h"
 #include "ui.h"
 #include "link.h"
@@ -20,6 +21,7 @@ static lv_obj_t *overlay;
 static lv_obj_t *preview;
 static lv_obj_t *shutter;
 static lv_obj_t *close_btn;
+static lv_obj_t *gallery_btn;
 static lv_obj_t *record_btn;
 static lv_obj_t *record_dot;
 static lv_obj_t *rec_lbl;
@@ -45,6 +47,7 @@ static void stop_recording() {
   lv_obj_set_size(record_dot, 22, 22);
   lv_obj_add_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(shutter, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(gallery_btn, LV_OBJ_FLAG_HIDDEN);
   if (result) show_message(result, 2500);
 }
 
@@ -59,8 +62,9 @@ static void start_recording() {
   lv_obj_set_style_radius(record_dot, 3, 0);
   lv_obj_set_size(record_dot, 18, 18);
   lv_obj_clear_flag(rec_lbl, LV_OBJ_FLAG_HIDDEN);
-  // 녹화 중에는 사진 찍기를 숨긴다
+  // 녹화 중에는 사진 찍기와 갤러리를 숨긴다
   lv_obj_add_flag(shutter, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(gallery_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void close_camera() {
@@ -129,6 +133,12 @@ static void record_clicked(lv_event_t *e) {
 
 static void close_clicked(lv_event_t *e) {
   close_camera();
+}
+
+// 갤러리를 보는 동안은 카메라를 끄고 (열이 나지 않게), 닫으면 다시 켠다
+static void open_gallery() {
+  close_camera();
+  gallery_show(open_camera);
 }
 
 static lv_obj_t *round_button(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb) {
@@ -208,6 +218,8 @@ void camera_ui_init() {
 
   // 왼쪽 위: 닫기. (카메라 방향은 촬영 중 실수로 바뀌지 않게 설정 화면에서만 바꾼다)
   close_btn = round_button(overlay, LV_SYMBOL_CLOSE, close_clicked);
+  // 오른쪽 위: SD 카드의 사진·동영상 보기 (gallery.h)
+  gallery_btn = round_button(overlay, LV_SYMBOL_IMAGE, [](lv_event_t *e) { open_gallery(); });
 
   msg_lbl = lv_label_create(overlay);
   lv_obj_set_style_text_font(msg_lbl, &font_ko_20, 0);
@@ -246,6 +258,7 @@ void camera_ui_layout() {
   lv_obj_align(rec_lbl, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_align(send_lbl, LV_ALIGN_TOP_MID, 0, 14);
   lv_obj_align(close_btn, LV_ALIGN_TOP_LEFT, 6, 6);
+  lv_obj_align(gallery_btn, LV_ALIGN_TOP_RIGHT, -6, 6);
   lv_obj_center(msg_lbl);
   lv_obj_center(preview);
 }
@@ -350,6 +363,12 @@ void camera_ui_command(const char *cmd) {
     }
   } else if (strcmp(cmd, "close") == 0) {
     close_camera();
+  } else if (strcmp(cmd, "gallery") == 0) {
+    if (is_open) {
+      open_gallery();
+    } else {
+      gallery_show(nullptr);
+    }
   }
 }
 

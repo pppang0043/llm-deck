@@ -7,6 +7,7 @@
 #include "ble_link.h"
 #include "camera.h"
 #include "camera_ui.h"
+#include "gallery.h"
 #include "cloud.h"
 #include "display.h"
 #include "imu.h"
@@ -74,6 +75,7 @@ static void apply_rotation() {
   display_set_rotation(rotation);
   ui_layout();
   camera_ui_layout();
+  gallery_layout();
   saver_layout();
   Serial.printf("[main] screen rotation %d (tilt %d + button %d)\n", rotation, tilt, rotate_offset);
 }
@@ -254,6 +256,7 @@ void setup() {
   camera_init();
   mem_log("camera");
   camera_ui_init();
+  gallery_init();
   mem_log("camera_ui");
   saver_init();
   ui_set_home_actions(camera_ui_show);
@@ -319,6 +322,7 @@ void loop() {
   battery_loop();
   show_clock();
   camera_ui_loop();
+  gallery_loop();
   sd_video_loop();
   mirror_loop();
   health_loop();

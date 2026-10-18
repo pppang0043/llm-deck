@@ -242,7 +242,7 @@ def main() -> None:
     parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
     parser.add_argument("--battery", type=float, metavar="V", help="멀티미터로 잰 배터리 전압(V)으로 기기를 보정한다")
-    parser.add_argument("--camera", choices=["open", "shoot", "record", "close", "dump"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기")
+    parser.add_argument("--camera", choices=["open", "shoot", "record", "close", "dump", "gallery"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기 / 갤러리")
     parser.add_argument("--camera-mount", choices=["0", "1", "2", "3", "0m", "1m", "2m", "3m"],
                         help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
     parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
@@ -420,7 +420,7 @@ def main() -> None:
                 time.sleep(1)
                 transport.close()
                 return
-            if (args.camera in ("open", "close") or args.camera_mount or args.links) and transport and not first:
+            if (args.camera in ("open", "close", "gallery") or args.camera_mount or args.links) and transport and not first:
                 time.sleep(2)
                 transport.close()
                 return
