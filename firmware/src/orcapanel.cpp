@@ -15,8 +15,8 @@ LV_FONT_DECLARE(font_ko_20);
 #define COLS 2
 #define ROWS 3
 #define PER_PAGE (COLS * ROWS)
-#define MAX_PAGES 8  // 프로젝트마다 줄을 새로 시작하므로 세션이 24개면 많아야 8쪽
-#define HEAD_H 20     // 프로젝트 이름 줄
+#define MAX_PAGES ((MAX_ROWS + PER_PAGE - 1) / PER_PAGE)
+#define HEAD_H 20  // 버튼 위 프로젝트 이름 자리
 #define GAP 6
 #define KEEP_ORDER_MS 15000  // 누른 뒤 이만큼은 순서를 바꾸지 않는다 (누르려던 자리에 다른 세션이 오지 않게)
 
@@ -35,11 +35,9 @@ static uint32_t touched_at = 0;
 
 struct Page {
   lv_obj_t *page, *index;
-  lv_obj_t *head[ROWS];  // 줄 위의 프로젝트 이름
+  lv_obj_t *head[PER_PAGE];  // 버튼 위의 프로젝트 이름 (프로젝트가 바뀌는 버튼, 쪽의 첫 버튼에만)
   lv_obj_t *btn[PER_PAGE], *lbl[PER_PAGE];
-  int session[PER_PAGE];  // 버튼마다 보여 주는 세션 번호 (-1 이면 빈 칸). 줄 r 의 칸은 r*COLS ...
-  bool titled[ROWS];      // 그 줄 위에 프로젝트 이름을 다는지 (프로젝트의 첫 줄, 또는 쪽의 첫 줄)
-  int rows;
+  int session[PER_PAGE];  // 버튼마다 보여 주는 세션 번호 (-1 이면 빈 칸)
 };
 static Page pages[MAX_PAGES];
 static int page_count = 0;
@@ -132,28 +130,14 @@ static void set_btn_text(lv_obj_t *lbl, const char *text) {
   lv_obj_center(lbl);
 }
 
-// 세션들을 줄에 담는다: 프로젝트가 바뀌면 이름을 달고 새 줄, 한 줄에 2칸. 3줄이 차면 다음 쪽.
-// (PC 가 보낸 순서: 프로젝트별로 모아 최근에 연 것이 앞)
+// 세션들을 6칸씩 쪽에 담는다 (PC 가 보낸 순서: 프로젝트별로 모아 최근에 연 것이 앞)
 static void lay_out_pages() {
-  page_count = 0;
-  int col = COLS;
-  for (int i = 0; i < count; i++) {
-    bool new_project = i == 0 || strcmp(sessions[i].project, sessions[i - 1].project) != 0;
-    if (new_project || col == COLS) {
-      Page *p = page_count ? &pages[page_count - 1] : nullptr;
-      if (!p || p->rows == ROWS) {
-        if (page_count == MAX_PAGES) break;
-        p = &pages[page_count++];
-        p->rows = 0;
-        for (int k = 0; k < PER_PAGE; k++) p->session[k] = -1;
-      }
-      // 쪽의 첫 줄은 앞 쪽에서 이어지는 프로젝트라도 이름을 단다
-      p->titled[p->rows] = new_project || p->rows == 0;
-      p->rows++;
-      col = 0;
+  page_count = (count + PER_PAGE - 1) / PER_PAGE;
+  for (int n = 0; n < page_count; n++) {
+    for (int k = 0; k < PER_PAGE; k++) {
+      int i = n * PER_PAGE + k;
+      pages[n].session[k] = i < count ? i : -1;
     }
-    Page &p = pages[page_count - 1];
-    p.session[(p.rows - 1) * COLS + col++] = i;
   }
 }
 
@@ -182,23 +166,16 @@ void orcapanel_refresh() {
     } else {
       lv_label_set_text(p.index, "");
     }
-    // 줄마다: 프로젝트 이름(달 때만), 그 아래 버튼들
-    int y = 0;
-    for (int row = 0; row < ROWS; row++) {
-      if (row < p.rows && p.titled[row]) {
-        lv_label_set_text(p.head[row], sessions[p.session[row * COLS]].project);
-        lv_obj_set_pos(p.head[row], 0, y + 1);
-        lv_obj_clear_flag(p.head[row], LV_OBJ_FLAG_HIDDEN);
-        y += HEAD_H;
-      } else {
-        lv_obj_add_flag(p.head[row], LV_OBJ_FLAG_HIDDEN);
-        if (row < p.rows) y += HEAD_H / 2;  // 같은 프로젝트의 다음 줄
-      }
-      for (int c = 0; c < COLS; c++) lv_obj_set_pos(p.btn[row * COLS + c], c * (btn_w + GAP), y);
-      y += btn_h + GAP;
-    }
     for (int k = 0; k < PER_PAGE; k++) {
       int i = p.session[k];
+      // 앞 버튼과 프로젝트가 이어지지 않으면 (또는 쪽의 첫 버튼이면) 위에 프로젝트 이름
+      bool titled = i >= 0 && (k == 0 || strcmp(sessions[i].project, sessions[i - 1].project) != 0);
+      if (titled) {
+        lv_label_set_text(p.head[k], sessions[i].project);
+        lv_obj_clear_flag(p.head[k], LV_OBJ_FLAG_HIDDEN);
+      } else {
+        lv_obj_add_flag(p.head[k], LV_OBJ_FLAG_HIDDEN);
+      }
       lv_obj_set_user_data(p.btn[k], (void *)(intptr_t)i);
       if (i < 0) {
         lv_obj_add_flag(p.btn[k], LV_OBJ_FLAG_HIDDEN);
@@ -312,16 +289,19 @@ void orcapanel_layout(int x, int y, int w, int h) {
   lv_obj_align(state_lbl, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_size(pager, w, h);
   lv_obj_set_pos(pager, 0, 0);
-  // 줄마다 프로젝트 이름이 붙을 수 있으므로 그 자리까지 빼고 나눈다 (버튼 자리는 orcapanel_refresh)
+  // 버튼마다 위에 프로젝트 이름 자리를 둔다
   int inner_w = w - 16, inner_h = h - 16 - ROWS * HEAD_H;
   btn_w = (inner_w - GAP * (COLS - 1)) / COLS;
   btn_h = (inner_h - GAP * (ROWS - 1)) / ROWS;
   label_w = btn_w - 12;
   for (Page &p : pages) {
     lv_obj_set_size(p.page, w, h);
-    for (lv_obj_t *head : p.head) lv_obj_set_width(head, inner_w - 40);
     for (int k = 0; k < PER_PAGE; k++) {
+      int x = (k % COLS) * (btn_w + GAP), y = (k / COLS) * (HEAD_H + btn_h + GAP);
+      lv_obj_set_pos(p.head[k], x + 2, y + 1);
+      lv_obj_set_width(p.head[k], k == COLS - 1 ? btn_w - 34 : btn_w - 2);  // 첫 줄 오른쪽은 쪽 번호 자리
       lv_obj_set_size(p.btn[k], btn_w, btn_h);
+      lv_obj_set_pos(p.btn[k], x, y + HEAD_H);
       lv_obj_set_width(p.lbl[k], label_w);
     }
   }
