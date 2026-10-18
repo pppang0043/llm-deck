@@ -40,6 +40,9 @@ bool ui_info_visible();
 bool ui_settings_visible();
 // 모든 화면 위에 잠깐 뜨는 알림 (ms 뒤에 사라진다)
 void ui_toast(const char *text, uint32_t ms = 4000);
+// 지금까지 뜬 알림 (최근 것부터 최대 30개, 한 줄에 하나: "14:05  내용"). 설정 > 알림 기록.
+#define TOAST_HISTORY_SIZE 3200
+void ui_toast_history(char *out, size_t size);
 
 // 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "shortcuts"(= "programs") / "keywords" / "pc" / "ask" / "orca" (PC 에서 시험할 때)
 void ui_show(const char *name);

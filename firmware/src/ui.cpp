@@ -1120,8 +1120,66 @@ bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
 static lv_obj_t *toast;
 static lv_timer_t *toast_timer;
 
+// 지나간 알림 (설정 > 알림 기록). PSRAM 에 돌려 쓴다.
+#define TOAST_LOG 30
+struct ToastLog {
+  time_t at;       // 시계를 못 맞췄으면 0
+  uint32_t ms;     // 켠 뒤 시간
+  char text[96];
+};
+static ToastLog *toast_log = nullptr;
+static int toast_log_head = 0, toast_log_count = 0;
+
+static void log_toast(const char *text) {
+  if (!toast_log) toast_log = (ToastLog *)ps_calloc(TOAST_LOG, sizeof(ToastLog));
+  if (!toast_log) return;
+  char line[96];
+  strlcpy(line, text, sizeof(line));
+  for (char *p = line; *p; p++) {
+    if (*p == '\n') *p = ' ';
+  }
+  // 같은 알림이 곧바로 또 뜨면 (10초 안) 시각만 고친다
+  if (toast_log_count) {
+    ToastLog &prev = toast_log[(toast_log_head + TOAST_LOG - 1) % TOAST_LOG];
+    if (strcmp(prev.text, line) == 0 && millis() - prev.ms < 10000) {
+      prev.ms = millis();
+      return;
+    }
+  }
+  time_t now = time(nullptr);
+  ToastLog &e = toast_log[toast_log_head];
+  e.at = now > 1700000000 ? now : 0;
+  e.ms = millis();
+  strlcpy(e.text, line, sizeof(e.text));
+  toast_log_head = (toast_log_head + 1) % TOAST_LOG;
+  if (toast_log_count < TOAST_LOG) toast_log_count++;
+}
+
+void ui_toast_history(char *out, size_t size) {
+  out[0] = '\0';
+  size_t used = 0;
+  for (int i = 0; i < toast_log_count && used < size; i++) {
+    const ToastLog &e = toast_log[(toast_log_head + TOAST_LOG - 1 - i) % TOAST_LOG];
+    char when[16];
+    if (e.at) {
+      struct tm t;
+      localtime_r(&e.at, &t);
+      strftime(when, sizeof(when), "%H:%M", &t);
+    } else {
+      snprintf(when, sizeof(when), "켠 뒤 %lu분", (unsigned long)(e.ms / 60000));
+    }
+    used += snprintf(out + used, size - used, "%s%s  %s", i ? "\n" : "", when, e.text);
+  }
+  if (used >= size) out[size - 1] = '\0';
+}
+
+static void toast_hide(lv_timer_t *t) {
+  lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN);
+  lv_timer_pause(t);
+}
 
 void ui_toast(const char *text, uint32_t ms) {
+  log_toast(text);
   if (!toast) {
     // 모든 화면(카메라 포함) 위에 뜨는 알림
     toast = lv_label_create(lv_layer_sys());

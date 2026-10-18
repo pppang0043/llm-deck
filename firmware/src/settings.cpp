@@ -62,8 +62,8 @@ static LinkOption link_options[] = {
 // 아이폰 설정처럼 첫 화면은 분류 목록이고, 누르면 그 분류의 화면으로 들어간다.
 // 들어간 화면에서 오른쪽으로 밀거나 "< 설정" 을 누르면 목록으로 돌아온다.
 enum Page { PAGE_LIST, PAGE_WIFI, PAGE_BLE, PAGE_SPEAKER, PAGE_NOTIFY, PAGE_DISPLAY, PAGE_BATTERY, PAGE_CAMERA, PAGE_SD,
-            PAGE_GENERAL, PAGE_INFO, PAGE_COUNT };
-static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "speaker", "notify", "display", "battery", "camera", "sd", "general", "info"};
+            PAGE_GENERAL, PAGE_INFO, PAGE_ALERTS, PAGE_COUNT };
+static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "speaker", "notify", "display", "battery", "camera", "sd", "general", "info", "alerts"};
 static lv_obj_t *pages[PAGE_COUNT];
 static Page current = PAGE_LIST;
 
@@ -81,7 +81,7 @@ static lv_obj_t *ble_status, *ble_none;
 static lv_obj_t *ble_rows[BLE_MAX_PEERS], *ble_names[BLE_MAX_PEERS], *ble_states[BLE_MAX_PEERS];
 static lv_obj_t *bat_level, *bat_state, *bat_left;
 static lv_obj_t *sd_status, *sd_space, *sd_count, *sd_vcount;
-static lv_obj_t *uptime_value, *boot_value, *crash_value, *info_text;
+static lv_obj_t *uptime_value, *boot_value, *crash_value, *info_text, *alerts_text;
 static lv_obj_t *spk_status, *spk_target, *spk_on_sw, *spk_keep_sw, *spk_vol_lbl, *spk_none, *spk_find_lbl;
 static lv_obj_t *spk_rows[SPK_MAX_FOUND], *spk_names[SPK_MAX_FOUND], *spk_signals[SPK_MAX_FOUND];
 
@@ -665,6 +665,7 @@ static void build_list(lv_obj_t *parent) {
 
   g = add_group(p);
   add_menu(g, LV_SYMBOL_BELL, 0xE0483C, "알림 및 사운드", PAGE_NOTIFY, nullptr);
+  add_menu(g, LV_SYMBOL_LIST, 0xE0A030, "알림 기록", PAGE_ALERTS, nullptr);
   add_menu(g, LV_SYMBOL_EYE_OPEN, 0x2F7DE1, "디스플레이", PAGE_DISPLAY, nullptr);
   add_menu(g, LV_SYMBOL_BATTERY_FULL, 0x4CAF50, "배터리", PAGE_BATTERY, &battery_value);
   add_menu(g, LV_SYMBOL_IMAGE, 0x6B7280, "카메라", PAGE_CAMERA, nullptr);
@@ -844,6 +845,21 @@ static void build_info(lv_obj_t *parent) {
   lv_obj_set_style_text_line_space(info_text, 6, 0);
 }
 
+// 알림 기록: 화면에 잠깐 떴던 알림 (최근 것부터, 켜 있는 동안만 남는다)
+static void build_alerts(lv_obj_t *parent) {
+  lv_obj_t *p = add_sub_page(parent, PAGE_ALERTS, "알림 기록");
+  alerts_text = add_note_label(p, "");
+  lv_obj_set_style_text_color(alerts_text, lv_color_white(), 0);
+  lv_obj_set_style_text_line_space(alerts_text, 6, 0);
+  add_note(p, "기기를 다시 켜면 지워집니다.");
+}
+
+static void show_alerts() {
+  static char buf[TOAST_HISTORY_SIZE];
+  ui_toast_history(buf, sizeof(buf));
+  lv_label_set_text(alerts_text, buf[0] ? buf : "아직 알림이 없습니다");
+}
+
 bool settings_info_visible() {
   return ui_settings_visible() && current == PAGE_INFO;
 }
@@ -865,6 +881,7 @@ void settings_build(lv_obj_t *parent) {
   build_sd(parent);
   build_general(parent);
   build_info(parent);
+  build_alerts(parent);
   // 켤 때는 값만 숨기고 보이기만 한다 (SD 카드 등은 설정을 열 때 읽는다)
   lv_obj_clear_flag(pages[PAGE_LIST], LV_OBJ_FLAG_HIDDEN);
 }
@@ -1113,6 +1130,9 @@ static void refresh_page() {
       break;
     case PAGE_SPEAKER:
       show_spk_vol();
+      break;
+    case PAGE_ALERTS:
+      show_alerts();
       break;
     default:
       break;
