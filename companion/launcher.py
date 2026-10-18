@@ -15,9 +15,12 @@ APPS = {
     "excel": ("엑셀을", "excel", "Microsoft Excel"),
     "powerpoint": ("파워포인트를", "powerpnt", "Microsoft PowerPoint"),
     "orca": ("ORCA를", "Orca", "Orca"),
-    "powershell": ("파워쉘을", "powershell", None),
-    "powershell_admin": ("관리자 파워쉘을", "powershell", None),
+    # Mac 에는 파워쉘 대신 터미널을 연다 (관리자도 같다: Mac 은 sudo 로 그때그때 권한을 얻는다)
+    "powershell": ("파워쉘을", "powershell", "Terminal"),
+    "powershell_admin": ("관리자 파워쉘을", "powershell", "Terminal"),
 }
+# Mac 에서 다른 프로그램을 열 때 기기에 보일 이름
+MAC_LABELS = {"powershell": "터미널을", "powershell_admin": "터미널을"}
 # 관리자 권한으로 여는 것 (Windows 가 "허용하시겠습니까?" 를 묻는다. PC 에서 직접 눌러야 열린다)
 ADMIN = {"powershell_admin"}
 # App Paths 에 등록하지 않는 프로그램이 사용자 폴더에 깔리는 자리 (Windows)
@@ -69,7 +72,9 @@ class Launcher:
         if sys.platform != "win32" and mac_name is None:
             self.pending_toast = f"{label} 열 수 없습니다\nWindows 에서만 됩니다"
             return
-        admin = name in ADMIN
+        admin = name in ADMIN and sys.platform == "win32"
+        if sys.platform == "darwin":
+            label = MAC_LABELS.get(name, label)
 
         # 관리자 권한은 사용자가 PC 에서 "예" 를 누를 때까지 기다리므로, 기기와 주고받는 일을 막지 않게 따로 연다
         def run() -> None:
