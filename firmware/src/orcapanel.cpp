@@ -13,11 +13,8 @@ LV_FONT_DECLARE(font_ko_20);
 #define COLOR_ACCENT lv_color_hex(0xD97757)
 #define COLOR_TALKING lv_color_hex(0xC8372D)
 #define MAX_ROWS 24  // companion/orca.py 의 MAX_SESSIONS
-#define COLS 2
-#define ROWS 3
-#define PER_PAGE (COLS * ROWS)
-// 한 줄에는 한 프로젝트만 두므로 빈칸이 생긴다. 세션이 다 프로젝트 하나씩이어도 들어가게 넉넉히.
-#define MAX_PAGES ((MAX_ROWS + ROWS - 1) / ROWS)
+#define PER_PAGE 6  // 가로 화면 2줄 x 3칸, 세로 화면 3줄 x 2칸 (orcapanel_layout)
+#define MAX_PAGES ((MAX_ROWS + PER_PAGE - 1) / PER_PAGE)
 #define HEAD_H 20  // 버튼 위 프로젝트 이름 자리
 #define GAP 6
 // 세션을 띄우면 아래에서 세션 버튼 위에 겹쳐 뜨는 단축키 팝업 (버튼을 여러 칸으로)
@@ -49,6 +46,7 @@ static int page_count = 0;
 static lv_obj_t *panel, *pager, *state_lbl;
 static int label_w = 80;  // 버튼 안 글자 폭 (orcapanel_layout)
 static int btn_w = 100, btn_h = 60;
+static int cols = 3, rows = 2;
 // 오른쪽 팝업: 띄운 세션(active_id)에 보낼 키워드와 키. 닫으면 다음에 세션을 띄울 때 다시 뜬다.
 static lv_obj_t *pop, *pop_title, *pop_list;
 static lv_obj_t *pop_btns[POP_MAX];
@@ -143,36 +141,15 @@ static void set_btn_text(lv_obj_t *lbl, const char *text) {
   lv_obj_center(lbl);
 }
 
-// 세션들을 쪽(2칸 x 3줄)에 담는다. PC 가 보낸 순서(프로젝트별로 모아 최근에 연 것이 앞)를 지키면서
-// 한 줄에는 한 프로젝트만 둔다 (세션이 홀수면 오른쪽이 빈다). 세션이 하나뿐인 프로젝트끼리는 한 줄을 나눠 쓴다.
-// 한 프로젝트가 쪽 끝에서 잘릴 것 같으면 (한 쪽에 다 들어가는 크기라면) 다음 쪽부터 시작한다.
+// 세션들을 쪽(6칸)에 PC 가 보낸 순서(프로젝트별로 모아 최근에 연 것이 앞)대로 빈칸 없이 채운다.
 static void lay_out_pages() {
   for (Page &p : pages) {
     for (int &i : p.session) i = -1;
   }
   page_count = 0;
-  int row = ROWS;  // 지금 쪽에서 다음에 채울 줄 (ROWS 면 새 쪽)
-  for (int i = 0; i < count;) {
-    int n = 1;
-    while (i + n < count && strcmp(sessions[i + n].project, sessions[i].project) == 0) n++;
-    // 혼자인 프로젝트 둘을 한 줄에
-    bool pair = n == 1 && i + 1 < count &&
-                (i + 2 >= count || strcmp(sessions[i + 2].project, sessions[i + 1].project) != 0);
-    int take = pair ? 2 : n;
-    int rows = pair ? 1 : (n + COLS - 1) / COLS;
-    if (row + rows > ROWS && (row > 0 && rows <= ROWS)) row = ROWS;
-    for (int k = 0; k < take; k++) {
-      if (!pair && k % COLS == 0 && k > 0) row++;
-      if (row >= ROWS) {
-        if (page_count == MAX_PAGES) return;  // 더는 못 담는다
-        page_count++;
-        row = 0;
-      }
-      int col = pair ? k : k % COLS;
-      pages[page_count - 1].session[row * COLS + col] = i + k;
-    }
-    row++;
-    i += take;
+  for (int i = 0; i < count && i < MAX_PAGES * PER_PAGE; i++) {
+    if (i % PER_PAGE == 0) page_count++;
+    pages[i / PER_PAGE].session[i % PER_PAGE] = i;
   }
 }
 
@@ -209,8 +186,8 @@ void orcapanel_refresh() {
     int prev = -1;  // 이 쪽에서 앞에 놓인 세션
     for (int k = 0; k < PER_PAGE; k++) {
       int i = p.session[k];
-      // 프로젝트가 바뀌는 버튼과 쪽의 첫 버튼, 같은 프로젝트라도 줄이 바뀌면 위에 프로젝트 이름
-      bool titled = i >= 0 && (prev < 0 || k % COLS == 0 || strcmp(sessions[i].project, sessions[prev].project) != 0);
+      // 프로젝트가 바뀌는 버튼과 쪽의 첫 버튼에만 위에 프로젝트 이름
+      bool titled = i >= 0 && (prev < 0 || strcmp(sessions[i].project, sessions[prev].project) != 0);
       if (i >= 0) prev = i;
       if (titled) {
         lv_label_set_text(p.head[k], sessions[i].project);
@@ -473,17 +450,20 @@ void orcapanel_layout(int x, int y, int w, int h) {
   lv_obj_set_size(pager, w, h);
   lv_obj_set_pos(pager, 0, 0);
   place_pop();
+  // 세로 화면은 폭이 좁아 2칸으로 (이름이 ... 으로 잘리지 않게). 홈 아이콘과 같다 (ui.cpp layout_home).
+  cols = w > h ? 3 : 2;
+  rows = PER_PAGE / cols;
   // 버튼마다 위에 프로젝트 이름 자리를 둔다
-  int inner_w = w - 16, inner_h = h - 16 - ROWS * HEAD_H;
-  btn_w = (inner_w - GAP * (COLS - 1)) / COLS;
-  btn_h = (inner_h - GAP * (ROWS - 1)) / ROWS;
+  int inner_w = w - 16, inner_h = h - 16 - rows * HEAD_H;
+  btn_w = (inner_w - GAP * (cols - 1)) / cols;
+  btn_h = (inner_h - GAP * (rows - 1)) / rows;
   label_w = btn_w - 12;
   for (Page &p : pages) {
     lv_obj_set_size(p.page, w, h);
     for (int k = 0; k < PER_PAGE; k++) {
-      int x = (k % COLS) * (btn_w + GAP), y = (k / COLS) * (HEAD_H + btn_h + GAP);
+      int x = (k % cols) * (btn_w + GAP), y = (k / cols) * (HEAD_H + btn_h + GAP);
       lv_obj_set_pos(p.head[k], x + 2, y + 1);
-      lv_obj_set_width(p.head[k], k == COLS - 1 ? btn_w - 34 : btn_w - 2);  // 첫 줄 오른쪽은 쪽 번호 자리
+      lv_obj_set_width(p.head[k], k == cols - 1 ? btn_w - 34 : btn_w - 2);  // 첫 줄 오른쪽은 쪽 번호 자리
       lv_obj_set_size(p.btn[k], btn_w, btn_h);
       lv_obj_set_pos(p.btn[k], x, y + HEAD_H);
       lv_obj_set_width(p.lbl[k], label_w);
