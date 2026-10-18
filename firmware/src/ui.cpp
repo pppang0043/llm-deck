@@ -42,6 +42,7 @@ static lv_obj_t *mic_lbl;
 static void (*mic_toggle_cb)();
 static void (*rotate_cb)();
 static lv_obj_t *rotate_btn;
+static lv_obj_t *back_btn;  // 상태줄 왼쪽 끝. 홈이 아닐 때만 보인다
 static lv_obj_t *clock_lbl;
 static lv_obj_t *bat_icon;
 static lv_obj_t *bat_fill;
@@ -410,12 +411,31 @@ static void rotate_btn_event(lv_event_t *e) {
   if (rotate_cb) rotate_cb();
 }
 
-static void screen_gesture(lv_event_t *e) {
-  // 어디서든 오른쪽으로 밀면 홈으로
-  // 설정의 분류 화면에서는 먼저 목록으로 돌아간다 (아이폰의 뒤로 가기처럼)
-  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_RIGHT || view == VIEW_HOME) return;
+// 뒤로 가기: 설정의 분류 화면에서는 먼저 목록으로 돌아가고 (아이폰의 뒤로 가기처럼), 나머지는 홈으로
+static void go_back() {
+  if (view == VIEW_HOME) return;
   if (view == VIEW_SETTINGS && settings_back()) return;
   ui_show_home();
+}
+
+static void screen_gesture(lv_event_t *e) {
+  // 어디서든 오른쪽으로 밀면 뒤로
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_RIGHT) go_back();
+}
+
+// 상태줄 왼쪽: [뒤로 버튼] [연결 방식]. 뒤로 버튼이 숨으면 글자가 왼쪽 끝으로 간다.
+static void layout_status_right();
+static void layout_status_left() {
+  bool back = view != VIEW_HOME;
+  if (back) {
+    lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 2, 2);
+    lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 2 + 40 + 6, (STATUS_H - 16) / 2);
+  } else {
+    lv_obj_add_flag(back_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, (STATUS_H - 16) / 2);
+  }
+  layout_status_right();
 }
 
 static void home_icon_event(lv_event_t *e) {
@@ -551,6 +571,7 @@ static void apply_view() {
   } else {
     lv_obj_add_flag(settings_panel, LV_OBJ_FLAG_HIDDEN);
   }
+  layout_status_left();
 }
 
 void ui_show_home() {
@@ -586,7 +607,16 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   status_lbl = add_label(scr, "시작 중...", &font_ko_14, COLOR_DIM);
-  lv_obj_align(status_lbl, LV_ALIGN_TOP_LEFT, 8, (STATUS_H - 16) / 2);
+
+  // 뒤로 버튼: 화면 돌리기 버튼과 같은 모양으로 상태줄 왼쪽 끝에 (오른쪽으로 밀기와 같다)
+  back_btn = lv_btn_create(scr);
+  lv_obj_set_size(back_btn, 40, STATUS_H - 4);
+  lv_obj_set_style_bg_color(back_btn, COLOR_MIC_OFF, 0);
+  lv_obj_set_style_shadow_width(back_btn, 0, 0);
+  lv_obj_set_style_pad_all(back_btn, 0, 0);
+  lv_obj_set_ext_click_area(back_btn, 8);
+  lv_obj_add_event_cb(back_btn, [](lv_event_t *e) { go_back(); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_center(add_label(back_btn, LV_SYMBOL_LEFT, &lv_font_montserrat_20, lv_color_white()));
 
   // 화면 돌리기 버튼: 상태줄 오른쪽 끝에 작게. 누르기 쉽도록 반응 영역만 넓힌다.
   rotate_btn = lv_btn_create(scr);
