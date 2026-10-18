@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -173,6 +174,42 @@ def fix_slash(text: str, commands: list[str], aliases: dict[str, str]) -> str:
 
 # --- 세션 목록 ---
 
+# ORCA 앱 설정 폴더 (Electron). 탭에 사용자가 붙인 이름은 CLI 가 알려주지 않아 여기 저장된 것을 읽는다
+if sys.platform == "darwin":
+    ORCA_DATA = Path.home() / "Library" / "Application Support" / "orca"
+elif sys.platform == "win32":
+    ORCA_DATA = Path(os.environ.get("APPDATA", Path.home())) / "orca"
+else:
+    ORCA_DATA = Path.home() / ".config" / "orca"
+
+
+def _custom_titles() -> dict[str, str]:
+    """탭 id -> 사용자가 붙인 탭 이름 (ORCA 에서 탭 이름 바꾸기). 못 읽으면 빈 dict.
+
+    ORCA 는 탭 목록을 profiles/<프로필>/profile-state.db 의 workspaceSession 문서(JSON)에 저장한다.
+    terminal list 의 title 은 Claude 가 붙인 자동 제목이라, 이 이름이 있으면 이것을 쓴다.
+    """
+    titles: dict[str, str] = {}
+    for db in ORCA_DATA.glob("profiles/*/profile-state.db"):
+        try:
+            # 읽기만 한다 (ORCA 가 쓰는 중이어도 막지 않게)
+            con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=1)
+            try:
+                row = con.execute(
+                    "select payload from profile_state_documents where domain = 'workspaceSession'").fetchone()
+            finally:
+                con.close()
+            session = json.loads(row[0]) if row else {}
+        except (sqlite3.Error, ValueError, TypeError):
+            continue
+        for tabs in (session.get("tabsByWorktree") or {}).values():
+            for tab in tabs or []:
+                name = (tab.get("customTitle") or "").strip() if isinstance(tab, dict) else ""
+                if name and tab.get("id"):
+                    titles[tab["id"]] = name
+    return titles
+
+
 def _short_title(title: str) -> str:
     # ORCA 는 탭 이름 앞에 작업 중 표시(◐ ✳ 등)를 붙인다
     return re.sub(r"^[^\w가-힣/]+\s*", "", title or "").strip() or "터미널"
@@ -279,6 +316,7 @@ class Orca:
             for agent in wt.get("agents", []):
                 agents[agent.get("paneKey")] = agent
         rows, handles = [], {}
+        custom = _custom_titles()
         for term in terms.get("terminals", []):
             if term.get("orphaned") or not term.get("connected"):
                 continue
@@ -291,7 +329,9 @@ class Orca:
             else:
                 state = "working" if term.get("agentIdentity") else "shell"
             path = term.get("worktreePath") or ""
-            rows.append({"id": short, "t": _short_title(term.get("title"))[:30], "p": Path(path).name[:20],
+            # 사용자가 탭에 붙인 이름이 있으면 그것, 없으면 Claude 가 붙인 자동 제목
+            title = custom.get(term.get("tabId")) or _short_title(term.get("title"))
+            rows.append({"id": short, "t": title[:30], "p": Path(path).name[:20],
                          "s": state})
             handles[short] = handle
         # 프로젝트별로 모으고, 최근에 연 세션(과 그 프로젝트)이 앞에. 연 적이 없으면 AI 세션, 그다음 터미널
