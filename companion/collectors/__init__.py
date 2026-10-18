@@ -11,7 +11,7 @@ API 수집기(COLLECTORS): collect(cfg) 가 기기 화면 한 페이지에 해�
 표시할 것이 없으면(키 미설정 등) None 을 돌려준다.
 """
 
-from . import anthropic_api, claude_code, codex, openai_api
+from . import anthropic_api, api_cost, claude_code, codex, openai_api
 
 # (설정 섹션 이름, 모듈). 화면에 이 순서대로 나온다.
 LIMITS = [
@@ -21,6 +21,7 @@ LIMITS = [
 
 # (설정 섹션 이름, 모듈, 최소 호출 간격 초). 한도 페이지 뒤에 이 순서대로 나온다.
 COLLECTORS = [
+    ("api_cost", api_cost, 300),
     ("anthropic_api", anthropic_api, 300),
     ("openai_api", openai_api, 300),
 ]

@@ -17,13 +17,22 @@ enabled = true
 # Codex(ChatGPT 구독) 한도 사용률. Codex CLI 를 쓴 적이 있으면 자동으로 나옵니다.
 enabled = true
 
+[api_cost]
+# Claude Code / Codex 대화 기록의 토큰 수에 API 단가를 곱한 "API 로 썼다면 든 비용". 키 필요 없음.
+enabled = true
+
 [anthropic_api]
-# Admin API 키 (sk-ant-admin01-...). 조직 계정에서만 만들 수 있습니다.
+# 실제 API 청구액 (API 키로 쓴 것만, 구독 사용분은 안 들어감). 일반 API 키(sk-ant-api03-...)로는 안 되고 Admin 키여야 합니다.
+# Anthropic Admin 키 (sk-ant-admin01-...). platform.claude.com/settings/admin-keys. 조직 계정에서만 만들 수 있습니다.
 admin_key = ""
+# 키를 만들 때 고른 만료일 (예: "2027-01-18"). 7일 전부터 화면에 알리고, 지나면 새 키를 넣으라고 알립니다. 만료 없음이면 비워 둡니다.
+expires = ""
 
 [openai_api]
-# Admin 키 (sk-admin-...). platform.openai.com > Settings > Organization > Admin keys
+# OpenAI Admin 키 (sk-admin-...). 일반 키(sk-proj-...)로는 안 됩니다. platform.openai.com > Settings > Organization > Admin keys
 admin_key = ""
+# 키를 만들 때 고른 만료일 (예: "2027-01-18"). 7일 전부터 화면에 알리고, 지나면 새 키를 넣으라고 알립니다. 만료 없음이면 비워 둡니다.
+expires = ""
 
 [sync]
 # 한도 사용률을 여러 PC 가 함께 쓰기 위한 비공개 GitHub gist. 비워 두면 이 PC 의 값만 씁니다.

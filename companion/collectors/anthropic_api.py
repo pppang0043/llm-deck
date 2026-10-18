@@ -5,10 +5,12 @@ Admin API 키가 필요하며, 개인 계정에서는 쓸 수 없다. 날짜 경
 """
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+from . import keys
 from .fmt import fmt_tokens, fmt_usd
 
 BASE = "https://api.anthropic.com/v1/organizations"
@@ -43,7 +45,14 @@ def collect(cfg: dict) -> dict | None:
     iso = "%Y-%m-%dT%H:%M:%SZ"
 
     month_cents = today_cents = 0.0
-    for bucket in _get_all("cost_report", {"starting_at": month_start.strftime(iso), "limit": 31}, key):
+    try:
+        costs = _get_all("cost_report", {"starting_at": month_start.strftime(iso), "limit": 31}, key)
+    except urllib.error.HTTPError as e:
+        if e.code not in (401, 403):
+            raise
+        return keys.rejected_page("Anthropic API", "anthropic_api", key, cfg, e.code, "platform.claude.com/settings/admin-keys")
+    keys.mark_ok("anthropic_api", key)
+    for bucket in costs:
         cents = sum(float(r["amount"]) for r in bucket["results"])
         month_cents += cents
         if bucket["starting_at"].startswith(today.strftime("%Y-%m-%d")):
@@ -61,7 +70,7 @@ def collect(cfg: dict) -> dict | None:
     return {
         "name": "Anthropic API",
         "headline": fmt_usd(month_cents / 100),
-        "sub": now.strftime("%B") + " so far (UTC)",
+        "sub": now.strftime("%B") + " so far (UTC)" + keys.expiry_note(cfg),
         "rows": [
             ["Cost today", fmt_usd(today_cents / 100)],
             ["Input today", fmt_tokens(tokens_in)],
