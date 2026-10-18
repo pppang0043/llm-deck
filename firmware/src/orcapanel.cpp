@@ -2,6 +2,7 @@
 
 #include "askpanel.h"
 #include "link.h"
+#include "pcpanel.h"
 #include "ui.h"
 
 LV_FONT_DECLARE(font_ko_14);
@@ -15,9 +16,13 @@ LV_FONT_DECLARE(font_ko_20);
 #define COLS 2
 #define ROWS 3
 #define PER_PAGE (COLS * ROWS)
-#define MAX_PAGES ((MAX_ROWS + PER_PAGE - 1) / PER_PAGE)
+// 한 줄에는 한 프로젝트만 두므로 빈칸이 생긴다. 세션이 다 프로젝트 하나씩이어도 들어가게 넉넉히.
+#define MAX_PAGES ((MAX_ROWS + ROWS - 1) / ROWS)
 #define HEAD_H 20  // 버튼 위 프로젝트 이름 자리
 #define GAP 6
+// 세션을 띄우면 아래에서 세션 버튼 위에 겹쳐 뜨는 단축키 팝업 (버튼을 여러 칸으로)
+#define POP_BTN_H 32
+#define POP_MAX 10
 #define KEEP_ORDER_MS 15000  // 누른 뒤 이만큼은 순서를 바꾸지 않는다 (누르려던 자리에 다른 세션이 오지 않게)
 
 struct Session {
@@ -44,6 +49,13 @@ static int page_count = 0;
 static lv_obj_t *panel, *pager, *state_lbl;
 static int label_w = 80;  // 버튼 안 글자 폭 (orcapanel_layout)
 static int btn_w = 100, btn_h = 60;
+// 오른쪽 팝업: 띄운 세션(active_id)에 보낼 키워드와 키. 닫으면 다음에 세션을 띄울 때 다시 뜬다.
+static lv_obj_t *pop, *pop_title, *pop_list;
+static lv_obj_t *pop_btns[POP_MAX];
+static int pop_count = 0;
+static bool pop_open = false;
+static int area_w, area_h;  // 마지막 배치 (팝업 자리를 정한다)
+static void set_pop(bool open);
 
 // 작업 상태는 버튼 색으로 (orca.py 의 s)
 struct StateLook {
@@ -98,6 +110,7 @@ static void btn_event(lv_event_t *e) {
     snprintf(json, sizeof(json), "{\"orca\":\"activate\",\"id\":\"%s\"}", s.id);
     link_send_event(json);
     snprintf(active_id, sizeof(active_id), "%s", s.id);
+    set_pop(true);
     orcapanel_refresh();
     return;
   }
@@ -130,14 +143,36 @@ static void set_btn_text(lv_obj_t *lbl, const char *text) {
   lv_obj_center(lbl);
 }
 
-// 세션들을 6칸씩 쪽에 담는다 (PC 가 보낸 순서: 프로젝트별로 모아 최근에 연 것이 앞)
+// 세션들을 쪽(2칸 x 3줄)에 담는다. PC 가 보낸 순서(프로젝트별로 모아 최근에 연 것이 앞)를 지키면서
+// 한 줄에는 한 프로젝트만 둔다 (세션이 홀수면 오른쪽이 빈다). 세션이 하나뿐인 프로젝트끼리는 한 줄을 나눠 쓴다.
+// 한 프로젝트가 쪽 끝에서 잘릴 것 같으면 (한 쪽에 다 들어가는 크기라면) 다음 쪽부터 시작한다.
 static void lay_out_pages() {
-  page_count = (count + PER_PAGE - 1) / PER_PAGE;
-  for (int n = 0; n < page_count; n++) {
-    for (int k = 0; k < PER_PAGE; k++) {
-      int i = n * PER_PAGE + k;
-      pages[n].session[k] = i < count ? i : -1;
+  for (Page &p : pages) {
+    for (int &i : p.session) i = -1;
+  }
+  page_count = 0;
+  int row = ROWS;  // 지금 쪽에서 다음에 채울 줄 (ROWS 면 새 쪽)
+  for (int i = 0; i < count;) {
+    int n = 1;
+    while (i + n < count && strcmp(sessions[i + n].project, sessions[i].project) == 0) n++;
+    // 혼자인 프로젝트 둘을 한 줄에
+    bool pair = n == 1 && i + 1 < count &&
+                (i + 2 >= count || strcmp(sessions[i + 2].project, sessions[i + 1].project) != 0);
+    int take = pair ? 2 : n;
+    int rows = pair ? 1 : (n + COLS - 1) / COLS;
+    if (row + rows > ROWS && (row > 0 && rows <= ROWS)) row = ROWS;
+    for (int k = 0; k < take; k++) {
+      if (!pair && k % COLS == 0 && k > 0) row++;
+      if (row >= ROWS) {
+        if (page_count == MAX_PAGES) return;  // 더는 못 담는다
+        page_count++;
+        row = 0;
+      }
+      int col = pair ? k : k % COLS;
+      pages[page_count - 1].session[row * COLS + col] = i + k;
     }
+    row++;
+    i += take;
   }
 }
 
@@ -154,6 +189,11 @@ void orcapanel_refresh() {
   } else {
     lv_obj_add_flag(state_lbl, LV_OBJ_FLAG_HIDDEN);
   }
+  // 팝업: 띄운 세션이 목록에서 사라졌으면 닫는다
+  int active = 0;
+  while (active < count && strcmp(sessions[active].id, active_id) != 0) active++;
+  if (pop_open && (problem || active == count)) set_pop(false);
+  if (pop_open) lv_label_set_text(pop_title, sessions[active].title);
   for (int n = 0; n < MAX_PAGES; n++) {
     Page &p = pages[n];
     if (n >= page_count || problem) {
@@ -166,10 +206,12 @@ void orcapanel_refresh() {
     } else {
       lv_label_set_text(p.index, "");
     }
+    int prev = -1;  // 이 쪽에서 앞에 놓인 세션
     for (int k = 0; k < PER_PAGE; k++) {
       int i = p.session[k];
-      // 앞 버튼과 프로젝트가 이어지지 않으면 (또는 쪽의 첫 버튼이면) 위에 프로젝트 이름
-      bool titled = i >= 0 && (k == 0 || strcmp(sessions[i].project, sessions[i - 1].project) != 0);
+      // 프로젝트가 바뀌는 버튼과 쪽의 첫 버튼, 같은 프로젝트라도 줄이 바뀌면 위에 프로젝트 이름
+      bool titled = i >= 0 && (prev < 0 || k % COLS == 0 || strcmp(sessions[i].project, sessions[prev].project) != 0);
+      if (i >= 0) prev = i;
       if (titled) {
         lv_label_set_text(p.head[k], sessions[i].project);
         lv_obj_clear_flag(p.head[k], LV_OBJ_FLAG_HIDDEN);
@@ -200,6 +242,143 @@ void orcapanel_refresh() {
       }
     }
   }
+}
+
+// 팝업 버튼: 띄운 세션에만 보낸다 (PC 의 앞 창이 아니라 ORCA 로, companion/orca.py)
+static void pop_event(lv_event_t *e) {
+  const char *key = (const char *)lv_event_get_user_data(e);
+  if (!pc_connected()) {
+    ui_toast("연결된 PC가 없습니다", 2000);
+    return;
+  }
+  touched_at = lv_tick_get();
+  char json[96];
+  snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"%s\"}", active_id, key);
+  link_send_event(json);
+}
+
+static void add_pop_btn(const char *key, const char *name, uint32_t color) {
+  if (pop_count >= POP_MAX) return;
+  lv_obj_t *b = lv_btn_create(pop_list);
+  pop_btns[pop_count++] = b;
+  lv_obj_set_style_radius(b, 8, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_set_style_pad_all(b, 2, 0);
+  lv_obj_set_style_bg_color(b, lv_color_hex(color), 0);
+  lv_obj_add_event_cb(b, pop_event, LV_EVENT_CLICKED, (void *)key);
+  lv_obj_t *lbl = add_label(b, name, &font_ko_14, lv_color_white());
+  lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);  // 한 줄로, 넘치면 ...
+  lv_obj_set_size(lbl, LV_PCT(100), lv_font_get_line_height(&font_ko_14));
+  lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_center(lbl);
+}
+
+static void build_pop() {
+  pop = lv_obj_create(panel);
+  lv_obj_remove_style_all(pop);
+  lv_obj_set_style_bg_color(pop, lv_color_hex(0x1C232B), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(pop, 12, 0);
+  lv_obj_set_style_pad_all(pop, 6, 0);
+  // 세션 버튼 위에 떠 있는 느낌: 테두리와 그림자
+  lv_obj_set_style_border_width(pop, 1, 0);
+  lv_obj_set_style_border_color(pop, lv_color_hex(0x3A4350), 0);
+  lv_obj_set_style_shadow_width(pop, 24, 0);
+  lv_obj_set_style_shadow_color(pop, lv_color_black(), 0);
+  lv_obj_set_style_shadow_opa(pop, LV_OPA_80, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(pop, LV_OBJ_FLAG_HIDDEN);
+  // 맨 위: 보낼 세션 이름과 닫기
+  pop_title = add_label(pop, "", &font_ko_14, COLOR_ACCENT);
+  lv_label_set_long_mode(pop_title, LV_LABEL_LONG_DOT);
+  lv_obj_align(pop_title, LV_ALIGN_TOP_LEFT, 0, 2);
+  lv_obj_t *close = lv_btn_create(pop);
+  lv_obj_set_size(close, 24, 22);
+  lv_obj_set_style_bg_opa(close, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_shadow_width(close, 0, 0);
+  lv_obj_set_style_pad_all(close, 0, 0);
+  lv_obj_set_ext_click_area(close, 8);
+  lv_obj_align(close, LV_ALIGN_TOP_RIGHT, 0, 0);
+  // 닫으면 띄운 세션도 잊는다: 다시 누르면 받아쓰기가 아니라 다시 띄우고 팝업을 연다
+  lv_obj_add_event_cb(close, [](lv_event_t *e) {
+    active_id[0] = 0;
+    set_pop(false);
+    orcapanel_refresh();
+  }, LV_EVENT_CLICKED, NULL);
+  lv_obj_center(add_label(close, LV_SYMBOL_CLOSE, &lv_font_montserrat_14, COLOR_DIM));
+  // 단축키 화면의 키워드 (단축키 설정과 같은 목록), 그 아래 키
+  pop_list = lv_obj_create(pop);
+  lv_obj_remove_style_all(pop_list);
+  lv_obj_set_flex_flow(pop_list, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_style_pad_row(pop_list, 4, 0);
+  lv_obj_set_style_pad_column(pop_list, 4, 0);
+  lv_obj_clear_flag(pop_list, LV_OBJ_FLAG_SCROLLABLE);
+  const char *id, *name;
+  uint32_t color;
+  for (int i = 0; pcpanel_keyword(i, &id, &name, &color); i++) {
+    if (strcmp(id, "tab_enter") != 0) add_pop_btn(id, name, color);  // 아래 키 버튼과 겹친다
+  }
+  add_pop_btn("tab", "Tab", 0x3A4350);
+  add_pop_btn("tab_enter", "Tab + Enter", 0x5B6573);
+  add_pop_btn("enter", "Enter", 0x3A4350);
+}
+
+// 세션 버튼은 그대로 두고 그 위에 겹친다
+static void place_pop() {
+  int cols = area_w > 280 ? 4 : 3;
+  int rows = (pop_count + cols - 1) / cols;
+  int pw = area_w - 8;
+  int ph = 12 + 28 + rows * POP_BTN_H + (rows - 1) * 4 + 2;
+  lv_obj_set_pos(pop, 4, area_h - ph - 4);
+  lv_obj_set_size(pop, pw, ph);
+  lv_obj_set_width(pop_title, pw - 12 - 26);
+  int list_w = pw - 12 - 2;
+  lv_obj_set_size(pop_list, list_w, ph - 12 - 2 - 28);
+  lv_obj_set_pos(pop_list, 0, 28);
+  // 덜 찬 줄(Tab 줄)의 버튼은 줄 끝까지 늘린다
+  int last = pop_count - (pop_count - 1) / cols * cols;  // 마지막 줄의 버튼 수
+  for (int i = 0; i < pop_count; i++) {
+    int n = i >= pop_count - last ? last : cols;
+    lv_obj_set_size(pop_btns[i], (list_w - (n - 1) * 4) / n, POP_BTN_H);
+  }
+  if (pop_open) {
+    lv_obj_clear_flag(pop, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(pop, LV_OBJ_FLAG_HIDDEN);
+  }
+  // 팝업이 떠 있는 동안은 쪽 아래에 팝업만큼 빈 자리를 두어, 가려진 세션 버튼을 위로 올릴 수 있게 한다
+  for (Page &p : pages) {
+    lv_obj_set_style_pad_bottom(p.page, pop_open ? ph + 8 : 8, 0);
+    if (pop_open) {
+      lv_obj_add_flag(p.page, LV_OBJ_FLAG_SCROLLABLE);
+    } else {
+      lv_obj_scroll_to_y(p.page, 0, LV_ANIM_OFF);
+      lv_obj_clear_flag(p.page, LV_OBJ_FLAG_SCROLLABLE);
+    }
+  }
+}
+
+// 띄운 세션 버튼이 팝업에 가려지면 그 쪽을 위로 올린다
+static void reveal_active() {
+  if (!pop_open) return;
+  for (Page &p : pages) {
+    for (int k = 0; k < PER_PAGE; k++) {
+      int i = p.session[k];
+      if (i >= 0 && i < count && strcmp(sessions[i].id, active_id) == 0) {
+        lv_obj_update_layout(p.page);
+        lv_obj_scroll_to_view(p.btn[k], LV_ANIM_ON);
+        return;
+      }
+    }
+  }
+}
+
+static void set_pop(bool open) {
+  if (open != pop_open) {
+    pop_open = open;
+    place_pop();
+  }
+  reveal_active();
 }
 
 void orcapanel_set(JsonObjectConst orca) {
@@ -257,7 +436,9 @@ void orcapanel_build(lv_obj_t *parent) {
   for (Page &p : pages) {
     p.page = lv_obj_create(pager);
     lv_obj_remove_style_all(p.page);
-    lv_obj_clear_flag(p.page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(p.page, LV_OBJ_FLAG_SCROLLABLE);  // 팝업이 떠 있을 때만 위아래로 (place_pop)
+    lv_obj_set_scroll_dir(p.page, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(p.page, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_pad_all(p.page, 8, 0);
     for (lv_obj_t *&head : p.head) {
       head = add_label(p.page, "", &font_ko_14, COLOR_ACCENT);
@@ -279,16 +460,19 @@ void orcapanel_build(lv_obj_t *parent) {
     }
     lv_obj_add_flag(p.page, LV_OBJ_FLAG_HIDDEN);
   }
+  build_pop();
   orcapanel_refresh();
 }
 
 void orcapanel_layout(int x, int y, int w, int h) {
+  area_w = w, area_h = h;
   lv_obj_set_size(panel, w, h);
   lv_obj_set_pos(panel, x, y);
   lv_obj_set_width(state_lbl, w - 20);
   lv_obj_align(state_lbl, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_size(pager, w, h);
   lv_obj_set_pos(pager, 0, 0);
+  place_pop();
   // 버튼마다 위에 프로젝트 이름 자리를 둔다
   int inner_w = w - 16, inner_h = h - 16 - ROWS * HEAD_H;
   btn_w = (inner_w - GAP * (COLS - 1)) / COLS;

@@ -20,11 +20,16 @@ import threading
 import time
 from pathlib import Path
 
+import typer
+
 POLL_SECONDS = 10
 MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
 RECENT_FILE = Path.home() / ".llm-deck" / "orca_recent.json"
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
+# ORCA 화면 세션 팝업의 키 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter). 나머지 이름은 typer.KEYWORDS 의 글 + Enter.
+# Tab + Enter 는 Claude Code 가 흐리게 보여준 추천 문장을 받아서 바로 보낸다.
+KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": ("Tab + Enter", "\t", True)}
 
 # 로그인 때 켜진 도우미는 PATH 가 짧아서 orca 명령이 깔리는 자리를 직접 더 찾는다
 EXTRA_PATHS = [
@@ -316,9 +321,14 @@ class Orca:
     # --- 세션 고르기와 입력 ---
 
     def on_event(self, event: dict) -> None:
-        """기기에서 세션 줄을 눌렀을 때: {"orca": "activate", "id": 짧은 id}. 받아쓰기({"ask": ...})는 assistant.py 가 맡는다."""
-        if event.get("orca") == "activate" and "ask" not in event and isinstance(event.get("id"), str):
+        """기기에서 세션 줄을 눌렀을 때: {"orca": "activate", "id": 짧은 id}. 받아쓰기({"ask": ...})는 assistant.py 가 맡는다.
+        세션 팝업을 눌렀을 때: {"orca": "send", "id": 짧은 id, "key": "tab" | "enter" | "tab_enter" | 키워드 이름}."""
+        if "ask" in event or not isinstance(event.get("id"), str):
+            return
+        if event.get("orca") == "activate":
             threading.Thread(target=self.activate, args=(event["id"],), daemon=True).start()
+        elif event.get("orca") == "send" and isinstance(event.get("key"), str):
+            threading.Thread(target=self.send_key, args=(event["id"], event["key"]), daemon=True).start()
 
     def activate(self, short: str) -> str | None:
         """세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다. 잘 되면 terminal handle."""
@@ -352,6 +362,32 @@ class Orca:
     def hotwords(self) -> str:
         """받아 적을 때 이 낱말들을 알아듣게 돕는다 (/ 명령 이름)."""
         return " ".join("/" + c for c in self.commands()[:60])
+
+    def send_key(self, short: str, name: str) -> None:
+        """세션 터미널에 키워드(글 + Enter)나 Tab / Enter 를 보낸다. 앞에 있는 창과 상관없이 그 세션에만 간다."""
+        if name in KEYS:
+            shown, text, enter = KEYS[name]
+        elif typer.KEYWORDS.get(name):
+            shown, text, enter = typer.KEYWORDS[name], typer.KEYWORDS[name], True
+        else:
+            print(f"[orca] 모르는 키: {name}")
+            self.pending_toast = "PC 도우미가 모르는 키워드입니다\n도우미를 새로 깔아 주세요"
+            return
+        handle = self.handles.get(short)
+        if not handle:
+            self.pending_toast = "ORCA 세션을 찾지 못했습니다\n목록을 새로 읽습니다"
+            self._wake.set()
+            return
+        ok = True
+        if text:
+            ok = self._run("terminal", "send", "--terminal", handle, "--text", text) is not None
+            if enter and text == "\t":
+                time.sleep(0.15)  # 추천 문장이 입력칸에 들어갈 틈
+        if ok and enter:
+            ok = self._run("terminal", "send", "--terminal", handle, "--enter") is not None
+        print(f"[orca] {short} 에 {shown} {'보냈습니다' if ok else '보내지 못했습니다'}")
+        self.pending_toast = f"보냈습니다: {shown}" if ok else f"ORCA 세션에 {shown}\n보내지 못했습니다"
+        self._wake.set()  # 상태가 곧 바뀐다
 
     def send_text(self, handle: str, text: str) -> str | None:
         """세션 터미널에 글을 넣는다 (Enter 없이). 잘 되면 None, 안 되면 이유."""

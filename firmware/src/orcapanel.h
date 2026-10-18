@@ -9,6 +9,7 @@
 // 버튼을 누르면 PC 가 그 세션을 앞으로 띄운다. 띄운 버튼을 한 번 더 누르면 받아쓰기, 또 누르면 받아 적은 글을 넣는다 (Enter 없이).
 //   PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태}]}}
 //   기기 -> PC: 버튼을 누르면 {"orca": "activate", "id": id}
+//              띄운 뒤 오른쪽 팝업(키워드 단축키, Tab, Tab + Enter, Enter)을 누르면 {"orca": "send", "id": id, "key": 이름}
 //              띄운 버튼을 또 누르면 {"ask": "start", "mode": "dictate", "orca": id} ... {"ask": "stop"} (askpanel.cpp)
 
 void orcapanel_build(lv_obj_t *parent);

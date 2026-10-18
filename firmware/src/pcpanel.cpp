@@ -24,7 +24,6 @@ struct Shortcut {
 static const Shortcut PROGRAMS[] = {
     {"excel", "엑셀", "엑셀을", "X", 0x1D7044},
     {"powerpoint", "파워포인트", "파워포인트를", "P", 0xC43E1C},
-    {"orca", "ORCA", "ORCA를", "O", 0x1E6FB8},
     {"powershell", "파워쉘", "파워쉘을", ">_", 0x2B5797},
     {"powershell_admin", "파워쉘 (관리자)", "관리자 파워쉘을", ">_", 0x7A2E3B},
 };
@@ -33,6 +32,8 @@ static const Shortcut KEYWORDS[] = {
     {"deploy", "배포해줘", "\"배포해줘\"를", nullptr, 0x3A6EA5},
     {"error", "에러 확인", "\"에러 확인\"을", nullptr, 0xB0563A},
     {"orchestration", "/orchestration", "\"/orchestration\"을", nullptr, 0x6A4FB0},
+    // 글 대신 Tab 을 누르고 Enter: Claude Code 의 추천 문장을 받아서 보낸다
+    {"tab_enter", "Tab + Enter", "Tab + Enter를", nullptr, 0x5B6573},
 };
 #define COUNT(a) (sizeof(a) / sizeof(a[0]))
 #define MAX_BUTTONS 6
@@ -111,6 +112,14 @@ static void button_clicked(lv_event_t *e) {
   // 관리자 권한은 PC 에서 허용을 눌러야 열린다
   if (strcmp(s.id, "powershell_admin") == 0) strlcat(text, "\nPC 화면에서 \"예\"를 눌러 주세요", sizeof(text));
   ui_toast(text, strcmp(s.id, "powershell_admin") == 0 ? 4000 : 2000);
+}
+
+bool pcpanel_keyword(int i, const char **id, const char **name, uint32_t *color) {
+  if (i < 0 || i >= (int)COUNT(KEYWORDS)) return false;
+  *id = KEYWORDS[i].id;
+  *name = KEYWORDS[i].name;
+  *color = KEYWORDS[i].color;
+  return true;
 }
 
 static void select_page(int index) {

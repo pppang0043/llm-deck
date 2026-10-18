@@ -17,6 +17,12 @@ KEYWORDS = {
     "error": "에러 확인",
     "orchestration": "/orchestration",
 }
+# 글 없이 키만 누르는 버튼 (이름 -> 화면 알림에 쓰는 이름, Enter 앞에 Tab 을 누를지).
+# Tab + Enter 는 Claude Code 가 흐리게 보여준 추천 문장을 받아서 바로 보낸다.
+# (ORCA 화면 아래 버튼은 앞에 있는 창이 아니라 고른 세션에 보내야 해서 orca.py 가 따로 맡는다)
+KEY_PRESSES = {
+    "tab_enter": ("Tab + Enter", True),
+}
 
 
 class Typer:
@@ -26,6 +32,12 @@ class Typer:
     def on_event(self, event: dict) -> None:
         name = event.get("type")
         if not isinstance(name, str):
+            return
+        if name in KEY_PRESSES:
+            shown, tab = KEY_PRESSES[name]
+            error = _type("", tab=tab)
+            print(f"[type] {shown} {'눌렀습니다' if not error else '누르지 못했습니다: ' + error}")
+            self.pending_toast = f"눌렀습니다: {shown}" if not error else f"누르지 못했습니다\n{error}"
             return
         text = KEYWORDS.get(name)
         if text is None:
@@ -37,19 +49,19 @@ class Typer:
         self.pending_toast = f"입력했습니다: {text}" if not error else f"입력하지 못했습니다\n{error}"
 
 
-def _type(text: str, enter: bool = True) -> str | None:
-    """글을 입력한다 (enter 면 끝에 Enter). 잘 되면 None, 안 되면 이유."""
+def _type(text: str, enter: bool = True, tab: bool = False) -> str | None:
+    """글을 입력한다 (tab 이면 글 뒤에 Tab, enter 면 끝에 Enter). 잘 되면 None, 안 되면 이유."""
     try:
         if sys.platform == "win32":
-            return _type_windows(text, enter)
+            return _type_windows(text, enter, tab)
         if sys.platform == "darwin":
-            return _type_mac(text, enter)
+            return _type_mac(text, enter, tab)
         return "이 운영체제는 아직 안 됩니다"
     except Exception as e:  # 입력 실패로 도우미가 멈추지 않게 한다
         return str(e)[:60]
 
 
-def _type_windows(text: str, enter: bool = True) -> str | None:
+def _type_windows(text: str, enter: bool = True, tab: bool = False) -> str | None:
     import ctypes
     from ctypes import wintypes
 
@@ -57,6 +69,7 @@ def _type_windows(text: str, enter: bool = True) -> str | None:
     KEYEVENTF_KEYUP = 0x0002
     KEYEVENTF_UNICODE = 0x0004
     VK_RETURN = 0x0D
+    VK_TAB = 0x09
 
     class KEYBDINPUT(ctypes.Structure):
         _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
@@ -82,15 +95,28 @@ def _type_windows(text: str, enter: bool = True) -> str | None:
             item = INPUT(type=INPUT_KEYBOARD)
             item.ki = KEYBDINPUT(wVk=0, wScan=code, dwFlags=flags, time=0, dwExtraInfo=0)
             inputs.append(item)
-    # 마지막에 Enter (보통 키로: 유니코드 입력의 줄바꿈은 프로그램마다 다르게 받는다)
-    for flags in ((0, KEYEVENTF_KEYUP) if enter else ()):
-        item = INPUT(type=INPUT_KEYBOARD)
-        item.ki = KEYBDINPUT(wVk=VK_RETURN, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0)
-        inputs.append(item)
-    array = (INPUT * len(inputs))(*inputs)
-    sent = ctypes.windll.user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT))
-    if sent != len(inputs):
-        return "Windows 가 입력을 막았습니다 (관리자 창이면 안 됩니다)"
+    def key(vk: int) -> list:
+        items = []
+        for flags in (0, KEYEVENTF_KEYUP):
+            item = INPUT(type=INPUT_KEYBOARD)
+            item.ki = KEYBDINPUT(wVk=vk, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0)
+            items.append(item)
+        return items
+
+    def send(items: list) -> bool:
+        array = (INPUT * len(items))(*items)
+        return ctypes.windll.user32.SendInput(len(items), array, ctypes.sizeof(INPUT)) == len(items)
+
+    # 그다음 Tab, 마지막에 Enter (보통 키로: 유니코드 입력의 줄바꿈은 프로그램마다 다르게 받는다).
+    # Tab 과 Enter 를 한꺼번에 보내면 붙여넣기로 받는 프로그램이 있어 사이를 조금 띄운다.
+    batches = [inputs + key(VK_TAB)] if tab else [inputs]
+    if enter:
+        batches.append(key(VK_RETURN))
+    for i, items in enumerate(b for b in batches if b):
+        if i:
+            time.sleep(0.1)
+        if not send(items):
+            return "Windows 가 입력을 막았습니다 (관리자 창이면 안 됩니다)"
     return None
 
 
@@ -124,7 +150,7 @@ def _mac_trusted(cg, cf) -> bool:
     return False
 
 
-def _type_mac(text: str, enter: bool = True) -> str | None:
+def _type_mac(text: str, enter: bool = True, tab: bool = False) -> str | None:
     """키보드 입력을 직접 만들어 보낸다 (CoreGraphics). 글자는 유니코드로 넣어 한/영 상태와 상관없고 클립보드도 쓰지 않는다.
 
     예전처럼 osascript(System Events)로 보내면 "자동화" 권한까지 따로 필요하고, 거절돼 있으면 10초 동안 멈췄다.
@@ -145,6 +171,7 @@ def _type_mac(text: str, enter: bool = True) -> str | None:
     cf.CFRelease.argtypes = (ctypes.c_void_p,)
     HID_TAP = 0  # kCGHIDEventTap: 실제 키보드에서 친 것처럼 지금 앞에 있는 창으로 간다
     RETURN = 36
+    TAB = 48
 
     def post(keycode: int, units=None) -> None:
         for down in (True, False):
@@ -161,6 +188,9 @@ def _type_mac(text: str, enter: bool = True) -> str | None:
     for i in range(0, len(codes), 16):
         post(0, codes[i:i + 16])
         time.sleep(0.01)
+    if tab:
+        post(TAB)
+        time.sleep(0.1)  # 추천 문장이 입력칸에 들어갈 틈
     if enter:
         time.sleep(0.05)
         post(RETURN)
