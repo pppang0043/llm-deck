@@ -25,6 +25,9 @@ void pcpanel_status_detach();
 void pcpanel_show_status(bool on);
 bool pcpanel_status_visible();
 
+// 사용 중인 PC 의 종류 ("mac", "win", "linux"). Mac 이면 파워쉘 버튼을 "터미널" 로 보이고 관리자 버튼은 뺀다
+// (Mac 도우미는 둘 다 터미널을 연다)
+void pcpanel_set_os(const char *os);
 // PC 가 보낸 {"pc": {...}} (link.cpp 가 부른다)
 void pcpanel_set_status(JsonObjectConst pc, const char *host);
 // loop() 에서 부른다: PC 상태 화면이 보이면 PC 에 계속 보내 달라고 한다

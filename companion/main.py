@@ -115,8 +115,11 @@ def collect_all(cfg: dict) -> dict:
             services.append(result)
     # 기기에는 시계가 없어서(Wi-Fi 가 없으면 시각을 모른다) 보낼 때마다 현재 시각을 알려준다
     clock = {"now": int(time.time()), "utc_offset": time.localtime().tm_gmtoff}
-    # 기기의 블루투스 설정 화면에 여러 PC 를 이름으로 보여주려고 이 PC 이름을 함께 보낸다
-    return {"updated": datetime.now().strftime("%H:%M"), "services": services, "host": _host_name(), **clock, **extra}
+    # 기기의 블루투스 설정 화면에 여러 PC 를 이름으로 보여주려고 이 PC 이름을 함께 보낸다.
+    # PC 종류는 단축키 버튼 이름을 맞추는 데 쓴다 (Mac 에서는 파워쉘 대신 터미널)
+    os_name = "mac" if sys.platform == "darwin" else "win" if sys.platform == "win32" else "linux"
+    return {"updated": datetime.now().strftime("%H:%M"), "services": services, "host": _host_name(), "os": os_name,
+            **clock, **extra}
 
 
 def _host_name() -> str:

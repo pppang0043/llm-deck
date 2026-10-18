@@ -799,6 +799,8 @@ static void render_usage() {
   lv_obj_t *active = lv_tileview_get_tile_act(tiles);
   int tile_h = lv_obj_get_height(tiles);
   uint8_t keep = active && tile_h > 0 ? lv_obj_get_y(active) / tile_h : 0;
+  // PC 상태를 보고 있었으면 페이지 수가 바뀌어도 PC 상태(맨 끝)에 머문다
+  bool keep_pc = keep == pc_tile;
 
   size_t count = services.size();
   if (count == 0) {
@@ -852,7 +854,7 @@ static void render_usage() {
   }
   add_pc_tile(index);
 
-  lv_obj_set_tile_id(tiles, 0, keep <= index ? keep : index, LV_ANIM_OFF);
+  lv_obj_set_tile_id(tiles, 0, keep_pc || keep > index ? index : keep, LV_ANIM_OFF);
   update_pc_watch();
 }
 

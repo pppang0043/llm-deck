@@ -57,6 +57,8 @@ static ButtonPage *const PAGES[] = {&programs, &keywords};
 static lv_obj_t *short_panel, *rail;
 static int selected = 0;
 static bool screen_wide = true;
+static bool pc_mac = false;  // 사용 중인 PC 가 Mac (모르면 Windows 로 본다)
+static int short_x, short_y, short_w, short_h;  // 마지막 배치 (PC 가 바뀌면 다시 배치한다)
 
 static lv_obj_t *stat_panel, *stat_host, *stat_age, *stat_none;
 struct Meter {
@@ -105,7 +107,7 @@ static void button_clicked(lv_event_t *e) {
   snprintf(event, sizeof(event), "{\"%s\":\"%s\"}", page->event_key, s.id);
   link_send_event(event);
   char text[96];
-  snprintf(text, sizeof(text), page->verb, s.object);
+  snprintf(text, sizeof(text), page->verb, pc_mac && strncmp(s.id, "powershell", 10) == 0 ? "터미널을" : s.object);
   // 관리자 권한은 PC 에서 허용을 눌러야 열린다
   if (strcmp(s.id, "powershell_admin") == 0) strlcat(text, "\nPC 화면에서 \"예\"를 눌러 주세요", sizeof(text));
   ui_toast(text, strcmp(s.id, "powershell_admin") == 0 ? 4000 : 2000);
@@ -188,6 +190,14 @@ static void layout_page(ButtonPage &page, int x, int w, int h) {
   int bw = (inner_w - gap * (cols - 1)) / cols;
   int bh = (inner_h - top - gap * (rows - 1)) / rows;
   if (bh > 150) bh = 150;
+  // 낮은 버튼에서 큰 글자 옆에 이름이 한 줄로 들어가지 않는 버튼이 하나라도 있으면 모든 큰 글자를 줄인다 (크기를 맞춘다)
+  const lv_font_t *big = bh >= 60 ? &lv_font_montserrat_48 : &lv_font_montserrat_28;
+  for (int i = 0; i < n && big == &lv_font_montserrat_48 && bh < 100; i++) {
+    if (!page.items[i].letter) continue;
+    lv_obj_t *b = page.btns[i];
+    int room = bw - (6 + text_width(lv_obj_get_child(b, 0), big) + 10) - 8;
+    if (text_width(lv_obj_get_child(b, 1), &font_ko_14) > room) big = &lv_font_montserrat_28;
+  }
   for (int i = 0; i < n; i++) {
     lv_obj_t *b = page.btns[i];
     lv_obj_set_size(b, bw, bh);
@@ -204,8 +214,7 @@ static void layout_page(ButtonPage &page, int x, int w, int h) {
         lv_obj_set_style_text_font(name, text_width(name, &font_ko_20) > bw - 12 ? &font_ko_14 : &font_ko_20, 0);
         lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, 0);
       } else {
-        // 낮은 버튼: 큰 글자 왼쪽, 이름 그 옆 (높이가 모자라면 큰 글자를 줄인다)
-        const lv_font_t *big = bh >= 60 ? &lv_font_montserrat_48 : &lv_font_montserrat_28;
+        // 낮은 버튼: 큰 글자 왼쪽, 이름 그 옆 (높이나 폭이 모자라면 큰 글자를 줄인다)
         int offset = 6 + text_width(first, big) + 10;  // 큰 글자 폭만큼 띄운다 (X 와 >_ 는 폭이 다르다)
         lv_obj_set_style_text_font(first, big, 0);
         lv_obj_align(first, LV_ALIGN_LEFT_MID, 6, 0);
@@ -238,6 +247,7 @@ static void build_shortcuts(lv_obj_t *parent) {
 }
 
 static void layout_shortcuts(int x, int y, int w, int h) {
+  short_x = x, short_y = y, short_w = w, short_h = h;
   lv_obj_set_size(short_panel, w, h);
   lv_obj_set_pos(short_panel, x, y);
   screen_wide = w > h;
@@ -265,6 +275,27 @@ void pcpanel_select_shortcuts(int page) {
   if (page >= 0 && page < (int)COUNT(PAGES)) select_page(page);
 }
 
+void pcpanel_set_os(const char *os) {
+  bool mac = strcmp(os, "mac") == 0;
+  if (mac == pc_mac || !short_panel) return;
+  pc_mac = mac;
+  // 관리자 파워쉘은 목록의 맨 끝이라 개수만 줄이면 배치와 누르기에서 빠진다
+  size_t all = COUNT(PROGRAMS);
+  programs.count = mac ? all - 1 : all;
+  for (size_t i = 0; i < all; i++) {
+    const char *id = PROGRAMS[i].id;
+    if (strcmp(id, "powershell") == 0) lv_label_set_text(lv_obj_get_child(programs.btns[i], 1), mac ? "터미널" : PROGRAMS[i].name);
+    if (strcmp(id, "powershell_admin") == 0) {
+      if (mac) {
+        lv_obj_add_flag(programs.btns[i], LV_OBJ_FLAG_HIDDEN);
+      } else {
+        lv_obj_clear_flag(programs.btns[i], LV_OBJ_FLAG_HIDDEN);
+      }
+    }
+  }
+  if (short_w > 0) layout_shortcuts(short_x, short_y, short_w, short_h);
+}
+
 // ---- PC 상태 ----
 
 static Meter add_meter(lv_obj_t *parent, const char *name) {
@@ -283,6 +314,22 @@ static Meter add_meter(lv_obj_t *parent, const char *name) {
   return m;
 }
 
+// 안내 글을 보이는 동안은 숫자 줄을 숨긴다 (안내가 가운데에서 줄과 겹치지 않게, 오래된 숫자를 지금 것으로 보지 않게)
+static void show_data(bool on) {
+  for (lv_obj_t *o : {cpu.row, ram.row, disk.row, net_lbl, bat_lbl, stat_age}) {
+    if (on) {
+      lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (on) {
+    lv_obj_add_flag(stat_none, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_clear_flag(stat_none, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 static void build_status(lv_obj_t *parent) {
   stat_panel = add_panel(parent, "PC 상태");
   stat_host = add_label(stat_panel, "", &font_ko_14, lv_color_white());
@@ -293,6 +340,8 @@ static void build_status(lv_obj_t *parent) {
   net_lbl = add_label(stat_panel, "", &font_ko_14, COLOR_DIM);
   bat_lbl = add_label(stat_panel, "", &font_ko_14, COLOR_DIM);
   stat_none = add_label(stat_panel, "PC 도우미에서 받는 중...", &font_ko_14, COLOR_DIM);
+  lv_obj_set_style_text_align(stat_none, LV_TEXT_ALIGN_CENTER, 0);
+  show_data(false);
 }
 
 void pcpanel_build(lv_obj_t *parent) {
@@ -377,7 +426,7 @@ void pcpanel_set_status(JsonObjectConst pc, const char *host) {
   } else {
     lv_label_set_text(bat_lbl, "");
   }
-  lv_obj_add_flag(stat_none, LV_OBJ_FLAG_HIDDEN);
+  show_data(true);
 }
 
 void pcpanel_loop() {
@@ -385,15 +434,15 @@ void pcpanel_loop() {
   if (!pcpanel_status_visible()) return;
   if (drawn_ms && millis() - drawn_ms < 1000) return;
   drawn_ms = millis();
-  // 받은 지 오래되었으면 숫자를 흐리게 두고 이유를 알린다
+  // 받은 적이 없거나 오래되었으면 숫자 대신 이유를 알린다
   bool have_pc = link_active() != LINK_NONE && link_active() != LINK_CLOUD;
   uint32_t age = stat_ms ? (millis() - stat_ms) / 1000 : 0;
   if (!have_pc) {
     lv_label_set_text(stat_none, "연결된 PC가 없습니다");
-    lv_obj_clear_flag(stat_none, LV_OBJ_FLAG_HIDDEN);
+    show_data(false);
   } else if (!stat_ms || age > 15) {
     lv_label_set_text(stat_none, "PC 도우미에서 받는 중...\n(도우미를 새로 깔았는지 확인)");
-    lv_obj_clear_flag(stat_none, LV_OBJ_FLAG_HIDDEN);
+    show_data(false);
   }
   char buf[32];
   if (stat_ms) {

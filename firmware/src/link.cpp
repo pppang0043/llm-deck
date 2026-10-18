@@ -271,6 +271,7 @@ void link_loop() {
       }
       // 사용 중인 PC 가 보낸 PC 상태와 알림 글 (단축 버튼을 눌렀을 때 결과 등)
       if (doc["pc"].is<JsonObjectConst>() && from == active && usage) pcpanel_set_status(doc["pc"], doc["host"] | "");
+      if (doc["os"].is<const char *>() && from == active && usage) pcpanel_set_os(doc["os"]);
       if (doc["toast"].is<const char *>() && from == active && usage) ui_toast(doc["toast"], 3000);
       if (doc["ask"].is<JsonObjectConst>() && from == active && usage) askpanel_set(doc["ask"]);
       if (doc["ask_mic"].is<bool>() && from == active && usage) askpanel_set_mic(doc["ask_mic"]);

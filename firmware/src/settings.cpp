@@ -916,6 +916,13 @@ static const char *spk_text(bool shortly) {
 
 static void refresh_list() {
   set_text(spk_value, spk_text(true));
+  // 스피커 모듈(ATOM Lite)이 없으면 목록에서 뺀다. 나중에 꽂으면 (몇 초마다 찾는다) 다시 보인다.
+  lv_obj_t *spk_row = lv_obj_get_parent(spk_value);
+  if (speaker_present()) {
+    lv_obj_clear_flag(spk_row, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(spk_row, LV_OBJ_FLAG_HIDDEN);
+  }
   set_text(wifi_value, wifi_text());
   // 목록에서는 짧게 (자세한 것은 블루투스 화면에)
   char ble_short[16];
