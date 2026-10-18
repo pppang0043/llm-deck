@@ -1,4 +1,4 @@
-"""OpenAI API 사용량: 조직 Costs / Usage API.
+"""OpenAI API 청구액: 조직 Costs API 와 월 지출 한도.
 
 Admin 키(sk-admin-...)가 필요하다. 날짜 경계는 UTC 기준이다.
 """
@@ -10,22 +10,26 @@ import urllib.request
 from datetime import datetime, timezone
 
 from . import budget, keys
-from .fmt import fmt_tokens, fmt_usd
 
+NAME = "OpenAI"
 BASE = "https://api.openai.com/v1/organization"
+KEY_PAGE = "platform.openai.com > Organization settings > Admin keys"
+
+
+def _get(path: str, params: dict, key: str) -> dict:
+    query = f"?{urllib.parse.urlencode(params)}" if params else ""
+    req = urllib.request.Request(
+        f"{BASE}/{path}{query}", headers={"Authorization": f"Bearer {key}", "User-Agent": "llm-deck/0.1"}
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.load(resp)
 
 
 def _get_all(path: str, params: dict, key: str) -> list:
     buckets = []
     page = None
     while True:
-        query = dict(params, **({"page": page} if page else {}))
-        req = urllib.request.Request(
-            f"{BASE}/{path}?{urllib.parse.urlencode(query)}",
-            headers={"Authorization": f"Bearer {key}", "User-Agent": "llm-deck/0.1"},
-        )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            body = json.load(resp)
+        body = _get(path, dict(params, **({"page": page} if page else {})), key)
         buckets += body.get("data", [])
         if not body.get("has_more"):
             return buckets
@@ -33,19 +37,15 @@ def _get_all(path: str, params: dict, key: str) -> list:
 
 
 def _spend_limit(key: str) -> float | None:
-    """조직 월 지출 한도 (USD). 한도가 없거나 읽을 수 없으면 None."""
-    req = urllib.request.Request(
-        f"{BASE}/spend_limit", headers={"Authorization": f"Bearer {key}", "User-Agent": "llm-deck/0.1"}
-    )
+    """조직 월 지출 한도 (USD). 한도가 없으면(404) 또는 읽을 수 없으면 None."""
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            body = json.load(resp)
-        return float(body["threshold_amount"]) / 100  # 센트 단위
+        return float(_get("spend_limit", {}, key)["threshold_amount"]) / 100  # 센트 단위
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
-def collect(cfg: dict) -> dict | None:
+def fetch(cfg: dict) -> dict | None:
+    """billing.py 가 표로 만드는 값. 키가 없으면 None, 키가 거절되면 {"error": 안내}."""
     key = cfg.get("admin_key")
     if not key:
         return None
@@ -55,11 +55,12 @@ def collect(cfg: dict) -> dict | None:
     month_start = today.replace(day=1)
 
     try:
-        costs = _get_all("costs", {"start_time": int(budget.start(cfg, month_start).timestamp()), "bucket_width": "1d", "limit": 31}, key)
+        start = int(budget.start(cfg, month_start).timestamp())
+        costs = _get_all("costs", {"start_time": start, "bucket_width": "1d", "limit": 31}, key)
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403):
             raise
-        return keys.rejected_page("OpenAI API", "openai_api", key, cfg, e.code, "platform.openai.com > Organization settings > Admin keys")
+        return {"error": keys.rejected_text("openai_api", key, cfg, e.code, KEY_PAGE)}
     keys.mark_ok("openai_api", key)
     # {"YYYY-MM-DD": USD}
     daily = {
@@ -67,29 +68,5 @@ def collect(cfg: dict) -> dict | None:
             sum(float(r["amount"]["value"]) for r in b["results"])
         for b in costs
     }
-    month = month_start.strftime("%Y-%m")
-    month_usd = sum(usd for day, usd in daily.items() if day.startswith(month))
     api_limit = None if cfg.get("monthly_limit") else _spend_limit(key)
-
-    tokens_in = tokens_out = requests = 0
-    usage = _get_all("usage/completions", {"start_time": int(today.timestamp()), "bucket_width": "1d"}, key)
-    for bucket in usage:
-        for r in bucket["results"]:
-            tokens_in += r.get("input_tokens", 0)
-            tokens_out += r.get("output_tokens", 0)
-            requests += r.get("num_model_requests", 0)
-
-    return {
-        "name": "OpenAI API",
-        "headline": fmt_usd(month_usd),
-        "sub": now.strftime("%B") + " so far (UTC)" + keys.expiry_note(cfg),
-        "rows": budget.fit(
-            [["Cost today", fmt_usd(daily.get(today.strftime("%Y-%m-%d"), 0.0))]],
-            budget.rows(cfg, daily, month, api_limit),
-            [
-                ["Input today", fmt_tokens(tokens_in)],
-                ["Output today", fmt_tokens(tokens_out)],
-                ["Requests today", str(requests)],
-            ],
-        ),
-    }
+    return budget.summary(cfg, daily, month_start, today, api_limit)

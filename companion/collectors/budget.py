@@ -1,4 +1,4 @@
-"""청구액 페이지에 붙이는 월 한도 / 크레딧 남은 금액.
+"""청구액 합계와 월 한도 / 크레딧 남은 금액.
 
 두 회사 모두 선불 크레딧 잔액을 알려주는 API 가 없고, Anthropic 은 월 지출 한도도 API 로 읽을 수 없다.
 그래서 config.toml 에 적어 둔 값에서 그 뒤에 쓴 금액(비용 리포트)을 빼서 보여준다.
@@ -11,10 +11,7 @@ OpenAI 월 한도는 API(/v1/organization/spend_limit)로 읽고, config 에 적
 
 from datetime import date, datetime, timezone
 
-from .fmt import fmt_usd
-
-# 페이지 한 장에 들어가는 줄 수
-MAX_ROWS = 4
+from . import keys
 
 
 def _number(value) -> float | None:
@@ -39,27 +36,26 @@ def start(cfg: dict, month_start: datetime) -> datetime:
     return min(month_start, datetime(since.year, since.month, since.day, tzinfo=timezone.utc))
 
 
-def rows(cfg: dict, daily: dict[str, float], month: str, api_limit: float | None = None) -> list:
-    """daily: {"YYYY-MM-DD": USD}. 한도·크레딧 줄을 만든다. 적어 둔 값이 없으면 빈 목록."""
-    result = []
+def summary(cfg: dict, daily: dict[str, float], month_start: datetime, today: datetime,
+            api_limit: float | None = None) -> dict:
+    """daily: {"YYYY-MM-DD": USD} -> {"month", "today", "limit_left", "credit_left", "note"} (USD, 없으면 None)."""
+    month = month_start.strftime("%Y-%m")
+    month_usd = sum(usd for day, usd in daily.items() if day.startswith(month))
+
     limit = _number(cfg.get("monthly_limit"))
     if limit is None:
         limit = api_limit
-    if limit:
-        spent = sum(usd for day, usd in daily.items() if day.startswith(month))
-        left = limit - spent
-        limit_text = f"${limit:,.0f}" if limit == int(limit) else fmt_usd(limit)
-        text = f"{fmt_usd(left)} / {limit_text}" if left >= 0 else f"초과 {fmt_usd(-left)}"
-        result.append(["한도 남음", text])
 
     credit = _number(cfg.get("credit"))
     since = credit_date(cfg)
+    credit_left = None
     if credit is not None and since:
-        spent = sum(usd for day, usd in daily.items() if day >= since.isoformat())
-        result.append(["크레딧 남음", fmt_usd(credit - spent)])
-    return result
+        credit_left = credit - sum(usd for day, usd in daily.items() if day >= since.isoformat())
 
-
-def fit(first: list, budget_rows: list, rest: list) -> list:
-    """첫 줄, 한도·크레딧 줄, 나머지 순으로 한 페이지에 들어가는 만큼만."""
-    return (first + budget_rows + rest)[:MAX_ROWS]
+    return {
+        "month": month_usd,
+        "today": daily.get(today.strftime("%Y-%m-%d"), 0.0),
+        "limit_left": limit - month_usd if limit else None,
+        "credit_left": credit_left,
+        "note": keys.expiry_note(cfg),
+    }

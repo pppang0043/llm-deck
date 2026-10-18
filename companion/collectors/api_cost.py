@@ -189,7 +189,7 @@ def _sum(records: dict, today: str, month: str) -> tuple[float, float, set]:
 
 
 def collect(cfg: dict) -> dict | None:
-    if not cfg.get("enabled", True):
+    if not cfg.get("api_cost", {}).get("enabled", True):
         return None
     now = datetime.now()
     today, month = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m")

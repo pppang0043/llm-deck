@@ -17,9 +17,9 @@ LV_FONT_DECLARE(font_ko_28);
 
 // 상태줄 높이. 오른쪽 끝 돌리기 버튼을 누르기 쉽게 넉넉히 둔다.
 #define STATUS_H 32
-#define MIC_H 56
-// 가로 화면에서는 마이크 버튼이 오른쪽에 세로로 놓인다
-#define MIC_W 72
+#define MIC_H 40
+// 가로 화면에서는 마이크 버튼이 오른쪽에 세로로 놓인다 (작은 글씨로 여러 줄)
+#define MIC_W 52
 #define LEVEL_H 4
 // 상태줄 건전지 모양 크기
 #define BAT_W 26
@@ -84,6 +84,30 @@ static void add_row(lv_obj_t *parent, const char *left, const lv_font_t *left_fo
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
   lv_obj_align(add_label(row, left, left_font, left_color), LV_ALIGN_LEFT_MID, 0, 0);
   lv_obj_align(add_label(row, right, right_font, right_color), LV_ALIGN_RIGHT_MID, 0, 0);
+}
+
+// 표: 첫 줄은 열 제목, 나머지는 [줄 이름, 값, 값, ...]. 여러 회사의 청구액을 한 화면에 나란히 보여준다
+static void add_table(lv_obj_t *parent, JsonArrayConst table) {
+  bool header = true;
+  for (JsonArrayConst cells : table) {
+    int n = cells.size();
+    if (n == 0) continue;
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    // 줄 이름 칸은 30%, 나머지를 값 칸이 나눠 쓴다
+    int other = n > 1 ? 70 / (n - 1) : 70;
+    for (int i = 0; i < n; i++) {
+      lv_color_t color = header ? COLOR_ACCENT : i == 0 ? COLOR_DIM : lv_color_white();
+      lv_obj_t *cell = add_label(row, cells[i] | "", header || i == 0 ? &font_ko_14 : &font_ko_20, color);
+      lv_label_set_long_mode(cell, LV_LABEL_LONG_CLIP);
+      lv_obj_set_width(cell, lv_pct(i == 0 ? 30 : other));
+      lv_obj_set_style_text_align(cell, i == 0 ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT, 0);
+    }
+    header = false;
+  }
 }
 
 // ---- 사용률 기록 그래프 (구간을 누르면 화면 전체에 최근 24시간) ----
@@ -265,13 +289,14 @@ void ui_refresh_talk() {
   lv_obj_set_style_bg_color(mic_btn, st == ASK_TALKING ? COLOR_MIC_ON : st == ASK_READY ? lv_color_hex(0x2E7D5B)
                                                                                       : COLOR_MIC_OFF, 0);
   lv_obj_set_style_text_color(mic_lbl, st == ASK_READY || st == ASK_TALKING ? lv_color_white() : COLOR_DIM, 0);
-  // 가로 화면의 버튼은 좁아서 여러 줄로 쓴다
+  // 가로 화면의 버튼은 좁아서 작은 글씨로 여러 줄로 쓴다
+  lv_obj_set_style_text_font(mic_lbl, wide ? &font_ko_14 : &font_ko_20, 0);
   const char *text;
   int step = askpanel_dictate_step();
   if (st == ASK_TALKING && step == DICTATE_PREPARING) {
     text = wide ? "마이크\n준비\n중..." : "마이크 준비 중...";
   } else if (st == ASK_TALKING) {
-    text = wide ? LV_SYMBOL_AUDIO "\n말하세요\n\n다시\n누르면\n입력" : LV_SYMBOL_AUDIO "  말하세요... 다시 누르면 입력";
+    text = wide ? LV_SYMBOL_AUDIO "\n말하\n세요\n\n다시\n누르면\n입력" : LV_SYMBOL_AUDIO "  말하세요... 다시 누르면 입력";
   } else if (step == DICTATE_WRITING) {
     text = wide ? "받아\n적는\n중..." : "받아 적는 중...";
   } else if (st == ASK_NO_PC) {
@@ -528,6 +553,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
   mic_btn = lv_btn_create(scr);
   lv_obj_set_style_radius(mic_btn, 0, 0);
+  lv_obj_set_style_pad_all(mic_btn, 0, 0);
   lv_obj_add_event_cb(mic_btn, mic_btn_event, LV_EVENT_CLICKED, NULL);
   mic_lbl = add_label(mic_btn, "", &font_ko_20, lv_color_white());
   lv_obj_set_style_text_align(mic_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -680,6 +706,10 @@ static void render_usage() {
     if (svc["headline"].is<const char *>()) {
       add_label(page, svc["headline"], &lv_font_montserrat_48, lv_color_white());
     }
+    // 표가 있으면 설명(경고 등)은 표 아래에 둔다
+    if (svc["table"].is<JsonArrayConst>()) {
+      add_table(page, svc["table"]);
+    }
     if (svc["sub"].is<const char *>()) {
       lv_obj_t *sub = add_label(page, svc["sub"], &font_ko_14, COLOR_DIM);
       lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
@@ -776,6 +806,13 @@ void ui_show(const char *name) {
   } else if (strcmp(name, "keywords") == 0) {
     view = VIEW_SHORTCUTS;
     pcpanel_select_shortcuts(1);
+  } else if (strncmp(name, "usage_", 6) == 0) {
+    // 진단용: 사용량 화면의 N 번째 페이지 (0 부터)
+    view = VIEW_USAGE;
+    apply_view();
+    lv_obj_set_tile_id(tiles, 0, atoi(name + 6), LV_ANIM_OFF);
+    update_pc_watch();
+    return;
   } else if (strcmp(name, "pc") == 0) {
     // PC 상태는 사용량 화면의 마지막 페이지
     view = VIEW_USAGE;

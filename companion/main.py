@@ -101,7 +101,7 @@ def collect_all(cfg: dict) -> dict:
         called_at, result = _last.get(section, (0.0, None))
         if time.time() - called_at >= min_interval:
             try:
-                result = module.collect(cfg.get(section, {}))
+                result = module.collect(cfg)
             except Exception as e:  # 한 서비스가 실패해도 나머지는 계속 보여준다
                 print(f"[{section}] 수집 실패: {e}")
             _last[section] = (time.time(), result)
@@ -194,7 +194,7 @@ def main() -> None:
     parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
     parser.add_argument("--links", metavar="usb=on,ble=off", help="기기의 연결 방식 켜고 끄기 (USB 로 연결했을 때만)")
     parser.add_argument("--view", metavar="화면",
-                        help="기기 화면 바꾸기: home / usage / info / settings, 설정 분류는 settings_wifi / settings_bluetooth / settings_speaker / "
+                        help="기기 화면 바꾸기: home / usage / usage_N(사용량 N 번째 페이지, 0 부터) / info / settings, 설정 분류는 settings_wifi / settings_bluetooth / settings_speaker / "
                              "settings_notify / settings_display / settings_battery / settings_camera / settings_sd / "
                              "settings_general (settings_end 는 지금 화면의 맨 아래)")
     parser.add_argument("--sd-pull", action="store_true", help="기기 SD 카드의 마지막 동영상을 받아 온다 (USB, 진단용)")
