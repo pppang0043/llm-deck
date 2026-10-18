@@ -5,12 +5,14 @@
 #
 # 블루투스 권한은 "앱" 단위로만 받을 수 있어서, 도우미를 작은 앱(~/Applications/LLM Deck.app)으로 감싸
 # open 으로 띄운다. 처음 실행할 때 블루투스 허용 창이 뜨면 "허용"을 누른다.
+# 기기 화면을 보는 미러링 앱(~/Applications/LLM Deck Mirror.app)도 같이 만든다.
 set -e
 COMPANION=$(cd "$(dirname "$0")/.." && pwd)
 APP="$HOME/Applications/LLM Deck.app"
 LABEL=com.llmdeck.companion
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG="$HOME/.llm-deck/companion.log"
+MIRROR_APP="$HOME/Applications/LLM Deck Mirror.app"
 
 stop() {
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
@@ -21,6 +23,8 @@ if [ "$1" = "uninstall" ]; then
   stop
   rm -f "$PLIST"
   rm -rf "$APP"
+  pkill -f "LLM Deck Mirror.app/Contents/MacOS/" 2>/dev/null || true
+  rm -rf "$MIRROR_APP"
   echo "제거했습니다."
   exit 0
 fi
@@ -67,5 +71,35 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
+
+# 미러링 앱. 만들지 못해도 도우미는 이미 설치됐으니 안내만 하고 넘어간다
+pkill -f "LLM Deck Mirror.app/Contents/MacOS/" 2>/dev/null || true
+rm -rf "$MIRROR_APP"
+mkdir -p "$MIRROR_APP/Contents/MacOS"
+cat > "$MIRROR_APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.llmdeck.mirror</string>
+  <key>CFBundleName</key><string>LLM Deck Mirror</string>
+  <key>CFBundleExecutable</key><string>llm-deck-mirror</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+</dict>
+</plist>
+EOF
+MIRROR_OK=
+if swiftc -O -swift-version 6 -o "$MIRROR_APP/Contents/MacOS/llm-deck-mirror" "$COMPANION/macos/mirror.swift" &&
+  codesign --force -s - "$MIRROR_APP"; then
+  MIRROR_OK=1
+else
+  rm -rf "$MIRROR_APP"
+  echo "미러링 앱을 만들지 못했습니다 (xcode-select --install 로 Command Line Tools 를 깔고 다시 실행하세요)."
+  echo "브라우저로는 http://127.0.0.1:4013/ 에서 볼 수 있습니다."
+fi
+
 echo "설치했습니다. 기록: $LOG"
+[ -n "$MIRROR_OK" ] && echo "미러링: open -a 'LLM Deck Mirror'"
 echo "잠시 멈추기: launchctl bootout gui/\$(id -u)/$LABEL && pkill -f 'LLM Deck.app'"

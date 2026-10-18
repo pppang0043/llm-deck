@@ -1,13 +1,16 @@
 ﻿# LLM Deck PC 도우미 설치 (Windows)
 #   install.cmd    설치하고 로그인할 때 자동으로 켜지게 한다 (다시 실행해도 된다)
 #   uninstall.cmd  자동 실행과 Claude Code 상태줄 설정을 되돌린다
-#   mirror.cmd     켜져 있는 도우미의 미러링 창(기기 화면)을 브라우저로 연다
+#   mirror.cmd     켜져 있는 도우미의 미러링 창(기기 화면)을 연다. 미러링 앱이 없으면 브라우저로
 param([switch]$Uninstall, [switch]$Mirror)
 $ErrorActionPreference = 'Stop'
 $Dir = Split-Path -Parent $PSScriptRoot
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $Name = 'LLMDeck'
 $LogFile = Join-Path $env:USERPROFILE '.llm-deck\companion.log'
+# 브라우저 대신 쓰는 미러링 앱 (설치할 때 mirror.cs 를 컴파일해 만든다)
+$MirrorExe = Join-Path $PSScriptRoot 'LLM Deck Mirror.exe'
+$MirrorLink = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\LLM Deck 미러링.lnk'
 
 function Find-Uv {
     $cmd = Get-Command uv -ErrorAction SilentlyContinue
@@ -46,6 +49,41 @@ function Set-Firewall([string]$mode) {
     }
 }
 
+function Stop-Mirror {
+    $apps = @(Get-Process -Name 'LLM Deck Mirror' -ErrorAction SilentlyContinue)
+    if (-not $apps) { return }
+    $apps | Stop-Process -Force -ErrorAction SilentlyContinue
+    # 다 꺼져야 exe 를 지우거나 새로 쓸 수 있다
+    $apps | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
+}
+
+# 미러링 앱을 만든다. Windows 에 처음부터 들어 있는 .NET Framework 4 의 C# 컴파일러(csc.exe)를 쓴다
+function Build-Mirror {
+    $csc = $null
+    foreach ($fw in 'Framework64', 'Framework') {
+        $path = Join-Path $env:WINDIR "Microsoft.NET\$fw\v4.0.30319\csc.exe"
+        if (Test-Path $path) { $csc = $path; break }
+    }
+    if (-not $csc) { throw '.NET Framework 4 의 csc.exe 를 찾지 못했습니다' }
+    Stop-Mirror
+    Remove-Item $MirrorExe -Force -ErrorAction SilentlyContinue
+    # csc 가 경고를 내도 멈추지 않게 이 안에서만 풀어 둔다
+    $ErrorActionPreference = 'Continue'
+    $cscArgs = @('/nologo', '/target:winexe', '/optimize+', '/codepage:65001', "/out:$MirrorExe",
+        '/r:System.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', (Join-Path $PSScriptRoot 'mirror.cs'))
+    $out = & $csc $cscArgs 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $MirrorExe)) {
+        $out | ForEach-Object { Write-Host "      $_" }
+        throw '컴파일에 실패했습니다'
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    $link = $shell.CreateShortcut($MirrorLink)
+    $link.TargetPath = $MirrorExe
+    $link.WorkingDirectory = $PSScriptRoot
+    $link.Description = 'LLM Deck 기기 화면을 보고 눌러서 조작'
+    $link.Save()
+}
+
 function Stop-Companion {
     # 이 폴더의 도우미만 끈다
     Get-CimInstance Win32_Process |
@@ -54,6 +92,7 @@ function Stop-Companion {
 }
 
 if ($Mirror) {
+    # 미러링 앱이 있으면 그것을, 없으면 브라우저로 연다 (mirror.py)
     $uv = Find-Uv
     if (-not $uv) { Write-Host '먼저 install.cmd 로 설치하세요.'; exit 1 }
     & $uv run --directory $Dir main.py --mirror
@@ -62,6 +101,9 @@ if ($Mirror) {
 
 if ($Uninstall) {
     Stop-Companion
+    Stop-Mirror
+    Remove-Item $MirrorExe, $MirrorLink -Force -ErrorAction SilentlyContinue
+    Remove-Item 'HKCU:\Software\LLMDeck' -Recurse -ErrorAction SilentlyContinue  # 미러링 앱 설정 (항상 위, 배율, 창 위치)
     Remove-ItemProperty -Path $RunKey -Name $Name -ErrorAction SilentlyContinue
     Set-Firewall 'remove' | Out-Null
     $uv = Find-Uv
@@ -72,7 +114,7 @@ if ($Uninstall) {
     return
 }
 
-Write-Host '[1/6] Python 도구(uv) 확인'
+Write-Host '[1/7] Python 도구(uv) 확인'
 $uv = Find-Uv
 if (-not $uv) {
     Write-Host '      uv 를 설치합니다 (https://astral.sh/uv)'
@@ -82,7 +124,7 @@ if (-not $uv) {
 }
 $uvw = Join-Path (Split-Path $uv) 'uvw.exe'
 
-Write-Host '[2/6] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
+Write-Host '[2/7] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
 & $uv sync --directory $Dir --quiet
 if ($LASTEXITCODE -ne 0) { throw '도우미 준비에 실패했습니다.' }
 # 음성 질문용 부품(faster-whisper)이 이 PC 에서 켜지는지 본다. 안 돼도 나머지 기능은 쓸 수 있다.
@@ -101,7 +143,7 @@ if (Test-Path $model) {
     Write-Host '      음성 인식 모델: 처음 질문할 때 인터넷으로 받습니다 (약 480MB). 회사망에서 막히면 README.txt 참고'
 }
 
-Write-Host '[3/6] 설정 파일'
+Write-Host '[3/7] 설정 파일'
 $config = Join-Path $Dir 'config.toml'
 if (-not (Test-Path $config)) {
     Copy-Item (Join-Path $Dir 'config.example.toml') $config
@@ -110,14 +152,14 @@ if (-not (Test-Path $config)) {
     Write-Host '      기존 config.toml 을 그대로 씁니다.'
 }
 
-Write-Host '[4/6] Claude Code 한도 사용률 읽기'
+Write-Host '[4/7] Claude Code 한도 사용률 읽기'
 if (Test-Path (Join-Path $env:USERPROFILE '.claude')) {
     & $uv run --directory $Dir main.py --install-statusline
 } else {
     Write-Host '      이 PC 에는 Claude Code 가 없어 건너뜁니다. (다른 PC 값은 gist 로 받아 옵니다)'
 }
 
-Write-Host '[5/6] Windows 방화벽 (Wi-Fi 연결용, 관리자 확인 창이 뜨면 [예])'
+Write-Host '[5/7] Windows 방화벽 (Wi-Fi 연결용, 관리자 확인 창이 뜨면 [예])'
 if (Set-Firewall 'add') {
     $rules = @(Get-NetFirewallRule -DisplayName 'LLM Deck *' -ErrorAction SilentlyContinue)
     Write-Host "      허용 규칙 $($rules.Count)개를 두었습니다."
@@ -132,7 +174,16 @@ if ($blocked) {
     Write-Host '            Windows 보안 > 방화벽 및 네트워크 보호 > 고급 설정 > 인바운드 규칙에서 지우세요.'
 }
 
-Write-Host '[6/6] 로그인할 때 자동 실행'
+Write-Host '[6/7] 미러링 앱 (기기 화면 창)'
+try {
+    Build-Mirror
+    Write-Host '      시작 메뉴의 "LLM Deck 미러링" 이나 mirror.cmd 로 엽니다.'
+} catch {
+    Write-Host "      건너뜁니다: $($_.Exception.Message)"
+    Write-Host '      mirror.cmd 를 누르면 브라우저로 엽니다 (http://127.0.0.1:4013/).'
+}
+
+Write-Host '[7/7] 로그인할 때 자동 실행'
 Stop-Companion
 # 예전 방식(공유만 하는 도우미)이 등록되어 있으면 지운다. 이제 이 도우미가 공유도 함께 한다.
 Remove-ItemProperty -Path $RunKey -Name 'LLMDeckSync' -ErrorAction SilentlyContinue

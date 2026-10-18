@@ -10,7 +10,7 @@
     uv run main.py --camera-mount 1 사진이 돌아가 보이면 카메라 센서 방향을 맞춘다 (0~3, 좌우 반전이면 1m 처럼)
     uv run main.py --test-video 5   기기 카메라로 5초 녹화해 MOV 로 저장한다
     uv run main.py --screenshot     기기 화면을 찍어 저장한다 (--view home 과 함께 쓰면 그 화면으로 바꾼 뒤)
-    uv run main.py --mirror         켜져 있는 도우미의 미러링 창을 브라우저로 연다 (기기 화면을 보고 눌러서 조작, USB·Wi-Fi)
+    uv run main.py --mirror         켜져 있는 도우미의 미러링 창을 연다 (미러링 앱, 없으면 브라우저. 기기 화면을 보고 눌러서 조작, USB·Wi-Fi)
     uv run main.py --test-photo     카메라 없이 무늬 사진을 찍은 것처럼 해서 SD 카드·PC 저장을 시험한다
     uv run main.py --test-sound     기기 알림에 쓰는 소리(마이크 켬·끔, 한도 알림)를 모두 들어 본다
     uv run main.py --bt-check       기기가 블루투스 스피커에 붙을 수 있는지 시험한다 (칩 지원 범위 + 주변 기기 찾기, USB)
@@ -256,7 +256,7 @@ def main() -> None:
     parser.add_argument("--rotate", action="store_true", help="기기 화면을 90도 돌린다 (돌리기 버튼과 같다)")
     parser.add_argument("--saver", action="store_true", help="기기의 화면 보호기를 지금 띄운다 (화면을 만지면 사라짐)")
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
-    parser.add_argument("--mirror", action="store_true", help="켜져 있는 도우미의 미러링 창을 브라우저로 연다")
+    parser.add_argument("--mirror", action="store_true", help="켜져 있는 도우미의 미러링 창을 연다 (미러링 앱, 없으면 브라우저)")
     parser.add_argument("--test-photo", action="store_true", help="카메라 없이 무늬 사진으로 사진 저장·전송을 시험한다")
     parser.add_argument("--test-sound", action="store_true", help="기기 알림에 쓰는 소리를 모두 들어 본다")
     parser.add_argument("--bt-check", nargs="?", const=True, metavar="주소|all",

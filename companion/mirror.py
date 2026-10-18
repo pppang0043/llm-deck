@@ -19,6 +19,9 @@ from pathlib import Path
 PORT = 4013  # 4012 는 도우미가 하나만 돌게 잡는 포트 (main.py)
 URL = f"http://127.0.0.1:{PORT}/"
 OLD_URL_FILE = Path.home() / ".llm-deck" / "mirror_url.txt"  # 예전에 주소가 바뀌던 때 쓰던 파일
+# 브라우저 대신 쓰는 미러링 앱 (항상 위에 뜨는 창)
+MAC_APP = Path.home() / "Applications" / "LLM Deck Mirror.app"
+WIN_APP = Path(__file__).resolve().parent / "windows" / "LLM Deck Mirror.exe"
 HEAD = struct.Struct("<IIIHH")  # 장 번호, 위치, 장 크기, 폭, 높이
 # 페이지가 이만큼 화면을 받아 가지 않으면 창이 닫힌 것으로 본다
 VIEWER_SECONDS = 3
@@ -301,7 +304,9 @@ def _point(p: dict) -> dict:
 
 
 def open_window() -> bool:
-    """켜져 있는 도우미의 미러링 창을 브라우저로 연다"""
+    """켜져 있는 도우미의 미러링 창을 연다. 미러링 앱(Mac 은 install.sh, Windows 는 install.cmd 가 만든다)이 있으면 그것을, 없으면 브라우저로"""
+    import subprocess
+    import sys
     import webbrowser
 
     import urllib.request
@@ -311,5 +316,14 @@ def open_window() -> bool:
     except OSError:
         print("[mirror] 도우미가 켜져 있지 않거나 미러링이 꺼져 있습니다.")
         return False
+    try:
+        if sys.platform == "darwin" and MAC_APP.exists():
+            subprocess.run(["open", str(MAC_APP)], check=True, timeout=10)
+            return True
+        if sys.platform == "win32" and WIN_APP.exists():
+            subprocess.Popen([str(WIN_APP)])
+            return True
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"[mirror] 미러링 앱을 열지 못해 브라우저로 엽니다: {e}")
     webbrowser.open(URL)
     return True
