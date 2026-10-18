@@ -54,6 +54,7 @@ static bool waiting = true;
 static bool mic_on = false;
 // 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
 static JsonDocument last_usage(PSRAM_JSON);
+static uint32_t usage_version = 0;  // last_usage 가 바뀔 때마다 하나씩 는다
 static char wifi_info[48] = "시작 중...";
 
 // 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.
@@ -120,6 +121,7 @@ struct GaugeKey {
 #define MAX_GAUGES 8
 static GaugeKey gauge_keys[MAX_GAUGES];
 static int gauge_count = 0;
+static bool no_history = false;  // 미러링 중 기기 화면에 그릴 때는 눌러도 그래프를 열지 않는다
 static lv_obj_t *hist_panel, *hist_title, *hist_chart, *hist_note, *hist_left, *hist_right;
 static lv_chart_series_t *hist_series;
 static lv_coord_t hist_points[HISTORY_SLOTS];
@@ -264,7 +266,7 @@ static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst b
   lv_obj_t *note = add_label(cell, when[0] ? when : "-", &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
   lv_obj_set_style_max_width(note, lv_pct(100), 0);
-  if (gauge_count < MAX_GAUGES) {
+  if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
     strlcpy(k.service, service, sizeof(k.service));
     strlcpy(k.label, bar["label"] | "", sizeof(k.label));
@@ -813,6 +815,7 @@ void ui_set_usage(JsonArrayConst services) {
   if (!waiting && last_usage.as<JsonVariantConst>() == services) return;
   waiting = false;
   last_usage.set(services);
+  usage_version++;
   if (!touch_busy()) {
     render_usage();
     return;
@@ -908,6 +911,33 @@ static void update_pc_watch() {
   int tile_h = lv_obj_get_height(tiles);
   bool on_pc = active && tile_h > 0 && lv_obj_get_y(active) / tile_h == pc_tile;
   pcpanel_show_status(view == VIEW_USAGE && on_pc);
+}
+
+uint32_t ui_usage_version() {
+  return usage_version;
+}
+
+void ui_usage_compact(lv_obj_t *parent) {
+  JsonArrayConst services = last_usage.as<JsonArrayConst>();
+  JsonObjectConst first;
+  for (JsonObjectConst svc : services) {
+    if (is_limits_page(svc)) {
+      first = svc;
+      break;
+    }
+  }
+  if (first.isNull()) {
+    char text[160];
+    ui_usage_summary(text, sizeof(text));
+    lv_obj_t *lbl = add_label(parent, text[0] ? text : "PC 도우미가 보낸 사용량이 없습니다.", &font_ko_20, COLOR_DIM);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl, lv_pct(100));
+    return;
+  }
+  add_row(parent, "구독제", &font_ko_28, COLOR_ACCENT, first["note"] | "", &font_ko_14, COLOR_DIM);
+  no_history = true;
+  add_limits_table(parent, services);
+  no_history = false;
 }
 
 void ui_usage_summary(char *out, size_t size) {

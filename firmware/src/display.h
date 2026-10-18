@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <lvgl.h>
 
 // 화면(ST7789) + 터치(CST816) + LVGL 을 초기화한다.
 void display_init();
@@ -30,6 +31,13 @@ void display_mirror(bool on);
 bool display_mirror_take(uint16_t *out, int *w, int *h);
 // PC 에서 누른 것. 좌표는 지금 화면 방향 기준. 누르기, 끌기, 떼기를 차례로 넣는다.
 void display_remote_touch(int x, int y, bool down);
+// 미러링 중 기기 화면 (mirror.cpp). 켜면 기기 LCD 에는 원래 화면 대신 display_device_screen() 을 그린다.
+// PC 창에는 계속 원래 화면이 간다. 켜져 있는 동안 기기를 만지면 그 터치는 버튼을 누르지 않는다.
+void display_split(bool on);
+bool display_split_on();
+lv_obj_t *display_device_screen();
+// 기기 화면을 손가락으로 마지막으로 만진 시각 (millis, PC 에서 누른 것은 빼고). 만진 적 없으면 0.
+uint32_t display_last_finger_ms();
 
 // 화면 밝기 (10~100%)
 void display_set_brightness(uint8_t pct);

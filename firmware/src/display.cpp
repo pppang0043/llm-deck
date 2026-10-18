@@ -23,6 +23,13 @@ static Arduino_GFX *gfx = new Arduino_ST7789(bus, LCD_RST, 0 /* rotation */, tru
 
 static lv_disp_draw_buf_t draw_buf;
 static lv_disp_drv_t disp_drv;
+static lv_disp_t *main_disp;
+// 미러링 중 기기 화면: PC 창은 원래 화면(기본 디스플레이)을 계속 받고, 기기 LCD 에는 이 디스플레이를 그린다
+static lv_disp_draw_buf_t device_draw_buf;
+static lv_disp_drv_t device_drv;
+static lv_disp_t *device_disp;
+static bool split = false;
+static volatile uint32_t finger_ms = 0;  // 기기 화면을 손가락으로 마지막으로 만진 시각 (PC 에서 누른 것은 빼고)
 static lv_indev_drv_t indev_drv;
 static uint8_t rotation = 0;
 static volatile uint32_t touched_ms = 0;
@@ -60,7 +67,7 @@ static bool touch_write_reg(uint8_t reg, uint8_t value) {
   return Wire.endTransmission(true) == 0;
 }
 
-static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
+static void draw_lcd(const lv_area_t *area, lv_color_t *color_p) {
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
   // SD 카드와 같은 SPI 선을 쓴다. 동영상을 카드에 쓰는 태스크와 겹치지 않게, SD 라이브러리가 쓰는 것과
@@ -69,6 +76,12 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
   bus.beginTransaction(SPISettings(80000000, MSBFIRST, SPI_MODE0));
   gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)color_p, w, h);
   bus.endTransaction();
+}
+
+static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
+  uint32_t w = area->x2 - area->x1 + 1;
+  uint32_t h = area->y2 - area->y1 + 1;
+  if (!split) draw_lcd(area, color_p);
   if (shadow) {
     int dw = display_width();
     for (uint32_t row = 0; row < h; row++) {
@@ -76,6 +89,11 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
     }
     shadow_dirty = true;
   }
+  lv_disp_flush_ready(drv);
+}
+
+static void device_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
+  if (split) draw_lcd(area, color_p);
   lv_disp_flush_ready(drv);
 }
 
@@ -142,6 +160,11 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   bool read_ok = touch_read_reg(CST816_REG_TOUCH, raw, sizeof(raw));
   watch_bus(read_ok);
   bool down = read_ok && raw[0] > 0;
+  if (down) {
+    finger_ms = millis();
+    // 기기가 미러링 중 화면을 보여 주는 동안의 터치는 원래 화면으로 돌아오기만 한다 (안 보이는 버튼을 누르지 않게)
+    if (split) swallow = true;
+  }
   // 손가락이 없으면 PC 에서 누른 것을 쓴다 (좌표는 이미 지금 화면 방향 기준)
   bool remote = false;
   if (!down) {
@@ -234,11 +257,21 @@ void display_init() {
   disp_drv.ver_res = LCD_H;
   disp_drv.flush_cb = flush_cb;
   disp_drv.draw_buf = &draw_buf;
-  lv_disp_drv_register(&disp_drv);
+  main_disp = lv_disp_drv_register(&disp_drv);
+
+  // 그리기는 한 디스플레이씩 차례로 하고 flush_cb 안에서 끝나므로 그리기 버퍼를 같이 쓴다
+  lv_disp_draw_buf_init(&device_draw_buf, buf, NULL, buf_px);
+  lv_disp_drv_init(&device_drv);
+  device_drv.hor_res = LCD_W;
+  device_drv.ver_res = LCD_H;
+  device_drv.flush_cb = device_flush_cb;
+  device_drv.draw_buf = &device_draw_buf;
+  device_disp = lv_disp_drv_register(&device_drv);  // 기본 디스플레이는 먼저 만든 main_disp 그대로
 
   lv_indev_drv_init(&indev_drv);
   indev_drv.type = LV_INDEV_TYPE_POINTER;
   indev_drv.read_cb = touch_cb;
+  indev_drv.disp = main_disp;
   lv_indev_drv_register(&indev_drv);
 }
 
@@ -247,7 +280,10 @@ void display_set_rotation(uint8_t value) {
   gfx->setRotation(rotation);
   disp_drv.hor_res = display_width();
   disp_drv.ver_res = display_height();
-  lv_disp_drv_update(lv_disp_get_default(), &disp_drv);
+  lv_disp_drv_update(main_disp, &disp_drv);
+  device_drv.hor_res = display_width();
+  device_drv.ver_res = display_height();
+  lv_disp_drv_update(device_disp, &device_drv);
 }
 
 uint8_t display_rotation() {
@@ -324,4 +360,23 @@ void display_remote_touch(int x, int y, bool down) {
   y = constrain(y, 0, display_height() - 1);
   remote_queue[remote_head] = {(int16_t)x, (int16_t)y, down};
   remote_head = next;
+}
+
+void display_split(bool on) {
+  if (on == split) return;
+  split = on;
+  // 기기 LCD 에 새로 보일 쪽을 처음부터 다시 그린다
+  lv_obj_invalidate(lv_disp_get_scr_act(on ? device_disp : main_disp));
+}
+
+bool display_split_on() {
+  return split;
+}
+
+lv_obj_t *display_device_screen() {
+  return lv_disp_get_scr_act(device_disp);
+}
+
+uint32_t display_last_finger_ms() {
+  return finger_ms;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ArduinoJson.h>
+#include <lvgl.h>
 
 // 화면 구성: 위쪽 상태줄(오른쪽 끝에 화면 돌리기 버튼) / 가운데 서비스별 페이지(위아래로 넘김, 맨 끝은 PC 상태) / 질문 버튼
 void ui_init(void (*on_mic_toggle)(), void (*on_rotate)());
@@ -46,6 +47,10 @@ bool ui_screenshot(uint16_t **pixels, int *w, int *h);
 void ui_set_info(const char *text);
 // 화면 보호기에 띄울 짧은 사용률 요약 (서비스마다 한 줄). 받은 사용량이 없으면 빈 글자.
 void ui_usage_summary(char *out, size_t size);
+// 미러링 중 기기 화면에 그릴 구독 한도 표 (parent 는 세로로 쌓는 flex). 눌러도 아무 일 없다.
+void ui_usage_compact(lv_obj_t *parent);
+// 받은 사용량이 바뀔 때마다 느는 번호
+uint32_t ui_usage_version();
 void ui_set_level(uint8_t pct);
 
 // 사용량 구간을 눌러 연 기록 그래프 (화면 전체). 다른 화면으로 갈 때 닫는다.

@@ -1,10 +1,13 @@
 #include "mirror.h"
 
 #include <WiFi.h>
+#include <lvgl.h>
+#include <time.h>
 
 #include "display.h"
 #include "link.h"
 #include "mic.h"
+#include "ui.h"
 #include "usb_link.h"
 #include "video.h"
 
@@ -14,6 +17,11 @@
 #define MIN_GAP_MS 40
 #define CHUNK 2000
 #define MAX_PIXELS (320 * 240)
+// 미러링 중 기기 LCD 에는 사용량을 보여 준다. 기기를 만지면 원래 화면으로 돌아오고, 이만큼 안 만지면 다시 사용량.
+#define DEVICE_IDLE_MS 30000
+#define DEVICE_STATUS_H 32
+
+LV_FONT_DECLARE(font_ko_14);
 
 struct __attribute__((packed)) Head {
   uint32_t no, offset, total;
@@ -117,6 +125,58 @@ static void send_task(void *) {
   }
 }
 
+// ---- 미러링 중 기기 화면 (display_device_screen) ----
+
+static lv_obj_t *dev_clock, *dev_body;
+static uint32_t dev_version = 0;
+static int dev_w = 0, dev_h = 0;
+
+static void device_build() {
+  lv_obj_t *scr = display_device_screen();
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t *title = lv_label_create(scr);
+  lv_label_set_text(title, "PC 미러링 중");
+  lv_obj_set_style_text_font(title, &font_ko_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x8A939E), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 8, 8);
+  dev_clock = lv_label_create(scr);
+  lv_label_set_text(dev_clock, "");
+  lv_obj_set_style_text_font(dev_clock, &font_ko_14, 0);
+  lv_obj_set_style_text_color(dev_clock, lv_color_hex(0x8A939E), 0);
+  lv_obj_align(dev_clock, LV_ALIGN_TOP_RIGHT, -8, 8);
+  dev_body = lv_obj_create(scr);
+  lv_obj_remove_style_all(dev_body);
+  lv_obj_set_pos(dev_body, 0, DEVICE_STATUS_H);
+  lv_obj_set_flex_flow(dev_body, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(dev_body, 10, 0);
+  lv_obj_set_style_pad_row(dev_body, 6, 0);
+  lv_obj_clear_flag(dev_body, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+// 1초마다: 시각, 그리고 사용량이나 화면 방향이 바뀌었으면 표를 새로 만든다
+static void device_refresh() {
+  static uint32_t refreshed_ms = 0;
+  if (dev_body && millis() - refreshed_ms < 1000) return;
+  refreshed_ms = millis();
+  if (!dev_body) device_build();
+  time_t now = time(nullptr);
+  if (now > 1700000000) {
+    struct tm t;
+    localtime_r(&now, &t);
+    lv_label_set_text_fmt(dev_clock, "%02d:%02d", t.tm_hour, t.tm_min);
+  }
+  int w = display_width(), h = display_height();
+  if (dev_version == ui_usage_version() && dev_w == w && dev_h == h && lv_obj_get_child_cnt(dev_body)) return;
+  dev_version = ui_usage_version();
+  dev_w = w;
+  dev_h = h;
+  lv_obj_set_size(dev_body, w, h - DEVICE_STATUS_H);
+  lv_obj_clean(dev_body);
+  ui_usage_compact(dev_body);
+}
+
 void mirror_init() {
   grab = (uint16_t *)ps_malloc(MAX_PIXELS * 2);
   // 가장 나쁜 경우 (모든 점이 달라 그대로 쓸 때) 128 점마다 머리 1 바이트가 붙는다
@@ -130,6 +190,7 @@ void mirror_keep(bool on) {
   if (!on && until_ms) Serial.println("[mirror] off");
   until_ms = on ? millis() + KEEP_MS : 0;
   display_mirror(on);
+  if (!on) display_split(false);
 }
 
 void mirror_loop() {
@@ -139,6 +200,10 @@ void mirror_loop() {
     mirror_keep(false);
     return;
   }
+  uint32_t finger = display_last_finger_ms();
+  bool device = !finger || millis() - finger > DEVICE_IDLE_MS;
+  if (device) device_refresh();
+  display_split(device);
   if (busy || millis() - last_ms < MIN_GAP_MS) return;
   if (!display_mirror_take(grab, &grab_w, &grab_h)) return;
   last_ms = millis();
