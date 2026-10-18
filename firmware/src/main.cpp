@@ -132,20 +132,25 @@ static void follow_tilt() {
 }
 
 // 배터리 절약: 배터리로만 쓰는 동안 만지지 않으면 1분 뒤 어둡게, 3분 뒤 화면을 끈다.
-// 화면 보호기: 전원과 상관없이 정해 둔 시간(기본 5분) 동안 만지지 않으면 어두운 시계 화면으로 바꾼다.
+// 화면 보호기: 배터리로만 쓸 때 정해 둔 시간(기본 5분) 동안 만지지 않으면 어두운 시계 화면으로 바꾼다.
+// 전원이 연결돼 있으면 보호기를 띄우지 않고, 그 시간이 지나면 지금 화면 그대로 밝기만 낮춘다.
 // 터치·BOOT 버튼·알림이 있으면 다시 켠다. 카메라를 쓰는 중에는 둘 다 하지 않는다.
 #define DIM_AFTER_MS 60000
 #define OFF_AFTER_MS 180000
 // 보호기 화면의 밝기. 검은 바탕이라 백라이트를 낮춰도 시계는 잘 보인다.
 #define SAVER_BRIGHTNESS 20
+// 전원이 연결돼 있을 때 안 만지면 낮추는 밝기. 화면이 그대로라 보호기보다 밝게 둔다.
+#define IDLE_BRIGHTNESS 30
 
 static void power_save() {
   static uint8_t shown = 255;
   static bool shown_saver = false;
   uint32_t idle = millis() - display_last_touch_ms();
   bool busy = camera_ui_open() || video_recording();
-  bool battery_only = settings_auto_dim() && battery_pct() >= 0 && !battery_external_power() && !busy;
-  bool saver = !busy && ((settings_saver_ms() && idle > settings_saver_ms()) || saver_demo_active());
+  bool powered = battery_pct() < 0 || battery_external_power();  // 배터리가 없으면 USB 전원으로 켜진 것
+  bool battery_only = settings_auto_dim() && !powered && !busy;
+  bool idle_long = !busy && settings_saver_ms() && idle > settings_saver_ms();
+  bool saver = (idle_long && !powered) || saver_demo_active();
 
   uint8_t level = settings_brightness();
   if (battery_only && idle > OFF_AFTER_MS) {
@@ -154,6 +159,7 @@ static void power_save() {
     level = 10;
   }
   if (saver && level > 0) level = min(level, (uint8_t)SAVER_BRIGHTNESS);
+  if (idle_long && powered && level > 0) level = min(level, (uint8_t)IDLE_BRIGHTNESS);
   if (level == shown && saver == shown_saver) return;
   bool first = shown == 255;
   shown = level;

@@ -783,7 +783,7 @@ static void build_display(lv_obj_t *parent) {
   lv_obj_add_event_cb(bright_slider, bright_changed, LV_EVENT_RELEASED, NULL);
   lv_obj_set_height(row, 64);
 
-  add_button(add_row(p, "화면 보호기", "안 쓰면 어두운 시계로"), "5분", saver_clicked, &saver_lbl);
+  add_button(add_row(p, "화면 보호기", "배터리일 때 어두운 시계로"), "5분", saver_clicked, &saver_lbl);
   rotate_sw = add_switch(add_row(p, "자동 회전", "기울이면 따라 돌기"), auto_rotate, rotate_changed);
   restore_sw = add_switch(add_row(p, "회전 되돌리기", "손으로 돌려도 5분 뒤 원래대로"), rotate_restore,
                           restore_changed);
