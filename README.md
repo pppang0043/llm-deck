@@ -118,6 +118,10 @@ Claude Code / Codex 가 없는 PC 에 연결해도 최신 값을 보려면, 값�
 받기만 하는 PC 는 `gist_id` 만 있으면 된다. 기기에 연결된 PC 에 값이 있으면 그 값을 먼저 쓰고, 없을 때만 공유된 값을 쓴다.
 기기는 공유 주소를 기억해, PC 가 없어도 Wi-Fi 로 직접 읽는다 (상태줄 "클라우드").
 
+상태줄 파일과 Codex 세션 기록은 그 PC 에서 마지막으로 응답을 받은 순간의 값이라, 다른 기기(웹, 폰, 다른 PC)에서 쓴 양이 늦게 반영된다.
+그래서 도우미는 2분마다 서버에도 직접 묻는다 (Claude Code 의 `/usage`, Codex 의 `/status` 가 쓰는 곳, `companion/collectors/server.py`). 계정 전체 기준이라 어느 기기에서 썼든 바로 맞고, 이 값도 gist 로 올라간다.
+그 PC 의 Claude Code / Codex 로그인을 그대로 쓰며, 로그인이 만료됐거나 서버가 답하지 않으면 묻지 않고 기존 값을 쓴다 (로그인은 Claude Code / Codex 를 쓸 때 스스로 새로 받는다). 끄려면 `config.toml` 의 `[claude_code]`, `[codex]` 에 `server = false`.
+
 ## 펌웨어 올리기
 
 ```sh
