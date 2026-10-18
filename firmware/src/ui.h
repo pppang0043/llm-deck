@@ -25,10 +25,8 @@ void ui_set_usage(JsonArrayConst services);
 void ui_layout();
 
 void ui_set_mic(bool on);
-// 사용량 화면 아래 질문 버튼(누르고 말하기)의 모양을 다시 그린다 (askpanel.cpp 가 부른다)
+// 사용량 화면 아래 받아쓰기 버튼의 모양을 다시 그린다 (askpanel.cpp 가 부른다)
 void ui_refresh_talk();
-// 사용량 화면의 질문 버튼을 누르고 있는 중인지
-bool ui_usage_talking();
 
 // 홈 화면 (아이콘 5개: 사용량, 카메라, 질문, 단축키, 설정). 어디서든 오른쪽으로 밀면 홈으로 온다.
 // 밝기와 정보는 설정 안(디스플레이, 정보)에 있다.

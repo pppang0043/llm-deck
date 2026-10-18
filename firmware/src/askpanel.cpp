@@ -16,7 +16,7 @@ LV_FONT_DECLARE(font_ko_20);
 #define TALK_H 56
 
 static lv_obj_t *panel, *state_lbl, *new_btn, *mute_btn, *mute_lbl, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
-static bool talking = false;  // 버튼을 누르고 있는 중
+static bool talking = false;  // 녹음 중 (한 번 눌러 시작, 다시 눌러 끝)
 static bool dictating = false;  // 지금 누른 것이 받아쓰기(사용량 화면 버튼)인지
 static int dictate_step = DICTATE_IDLE;  // 받아쓰기 진행 (PC 가 알려 준다)
 // 답을 PC 스피커로 읽어 줄지. 켤 때마다 음소거(읽지 않음)로 시작한다. PC 음량은 건드리지 않는다.
@@ -49,10 +49,10 @@ void askpanel_refresh() {
   int st = askpanel_talk_state();
   lv_obj_set_style_bg_color(talk_btn, st == ASK_TALKING ? COLOR_TALKING : st == ASK_READY ? COLOR_TALK : COLOR_ROW, 0);
   lv_obj_set_style_text_color(talk_lbl, st == ASK_READY || st == ASK_TALKING ? lv_color_white() : COLOR_DIM, 0);
-  lv_label_set_text(talk_lbl, st == ASK_TALKING ? LV_SYMBOL_AUDIO "  말하는 중... 떼면 질문"
+  lv_label_set_text(talk_lbl, st == ASK_TALKING ? LV_SYMBOL_AUDIO "  다 말하면 다시 누르기"
                               : st == ASK_NO_PC ? "PC 연결 없음"
                               : st == ASK_NO_MIC ? "PC 마이크 없음"
-                                                 : LV_SYMBOL_AUDIO "  누르고 말하기");
+                                                 : LV_SYMBOL_AUDIO "  눌러서 말하기");
   ui_refresh_talk();
 }
 
@@ -61,7 +61,10 @@ bool askpanel_press(bool dictate) {
   if (st == ASK_NO_PC) ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
   if (st == ASK_NO_MIC) ui_toast("PC에 쓸 수 있는 마이크가 없습니다", 2500);
   if (st != ASK_READY) return false;
-  link_send_event(dictate ? "{\"ask\":\"start\",\"mode\":\"dictate\"}" : "{\"ask\":\"start\"}");
+  // 음소거를 풀어 두었으면 시작할 때도 알린다 (PC 가 60초에 스스로 녹음을 끝내도 읽어 주도록)
+  link_send_event(dictate          ? "{\"ask\":\"start\",\"mode\":\"dictate\"}"
+                  : voice ? "{\"ask\":\"start\",\"voice\":true}"
+                          : "{\"ask\":\"start\"}");
   talking = true;
   dictating = dictate;
   // PC 가 마이크를 열 때까지 (처음엔 몇 초 걸린다). 열리면 PC 가 "듣는 중" 으로 바꾼다
@@ -90,12 +93,15 @@ void askpanel_set_mic(bool available) {
   askpanel_refresh();
 }
 
+bool askpanel_dictating() {
+  return talking && dictating;
+}
+
+// 한 번 누르면 듣기 시작, 다시 누르면 끝내고 묻는다
 static void talk_event(lv_event_t *e) {
-  lv_event_code_t code = lv_event_get_code(e);
-  if (code == LV_EVENT_PRESSED) {
+  if (!talking) {
     askpanel_press(false);
-  } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-    // 손가락이 버튼 밖으로 미끄러져도 말한 것은 묻는다
+  } else if (!dictating) {
     askpanel_release();
   }
 }
@@ -162,7 +168,7 @@ void askpanel_build(lv_obj_t *parent) {
   q_lbl = add_label(text_box, "", &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(q_lbl, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(q_lbl, lv_pct(100));
-  a_lbl = add_label(text_box, "아래 버튼을 누르고 PC 마이크에 말하세요.\n떼면 Claude 가 글로 답합니다.", &font_ko_20,
+  a_lbl = add_label(text_box, "아래 버튼을 누르고 PC 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다.", &font_ko_20,
                     lv_color_white());
   lv_label_set_long_mode(a_lbl, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(a_lbl, lv_pct(100));
@@ -170,7 +176,7 @@ void askpanel_build(lv_obj_t *parent) {
   talk_btn = lv_btn_create(panel);
   lv_obj_set_style_radius(talk_btn, 14, 0);
   lv_obj_set_style_shadow_width(talk_btn, 0, 0);
-  lv_obj_add_event_cb(talk_btn, talk_event, LV_EVENT_ALL, NULL);
+  lv_obj_add_event_cb(talk_btn, talk_event, LV_EVENT_CLICKED, NULL);
   talk_lbl = add_label(talk_btn, "", &font_ko_20, lv_color_white());
   lv_obj_center(talk_lbl);
   askpanel_refresh();
@@ -196,8 +202,8 @@ void askpanel_show(bool on) {
   if (on) {
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
   } else {
-    // 누른 채 다른 화면으로 가면 녹음을 버린다
-    if (talking && !ui_usage_talking()) {
+    // 듣는 중에 다른 화면으로 가면 녹음을 버린다
+    if (talking && !dictating) {
       link_send_event("{\"ask\":\"cancel\"}");
       talking = false;
       askpanel_refresh();
@@ -213,6 +219,12 @@ int askpanel_dictate_step() {
 void askpanel_set(JsonObjectConst ask) {
   const char *state = ask["state"] | "";
   // 받아쓰기는 질문 화면을 건드리지 않고 사용량 화면 버튼에만 보여 준다 (결과는 PC 가 알림으로 보낸다)
+  // PC 가 녹음을 스스로 끝냈으면 (60초 넘음, 마이크 오류) 버튼도 듣는 중을 푼다
+  bool recording = strcmp(state, "preparing") == 0 || strcmp(state, "listening") == 0;
+  if (talking && !recording) {
+    talking = false;
+    askpanel_refresh();
+  }
   if (strcmp(ask["mode"] | "ask", "dictate") == 0) {
     busy_ms = (ask["done"] | false) ? 0 : millis();
     dictate_step = strcmp(state, "preparing") == 0   ? DICTATE_PREPARING
@@ -254,8 +266,8 @@ void askpanel_set(JsonObjectConst ask) {
 
 void askpanel_loop() {
   if (!busy_ms || millis() - busy_ms < BUSY_TIMEOUT_MS) return;
-  // 누르고 있는 중이 아닌데 PC 가 70초 동안 아무것도 안 보냈다
-  if (talking) return;
+  // PC 가 70초 동안 아무것도 안 보냈다. 듣는 중이었으면 (PC 는 60초에 스스로 끝낸다) 끝을 보내 본다
+  if (talking) askpanel_release();
   busy_ms = 0;
   if (dictate_step != DICTATE_IDLE) {
     dictate_step = DICTATE_IDLE;

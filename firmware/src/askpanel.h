@@ -3,9 +3,9 @@
 #include <ArduinoJson.h>
 #include <lvgl.h>
 
-// 질문 화면: 아래 버튼을 누르고 있는 동안 PC 마이크로 말하고, 떼면 PC 도우미가 받아 적어 Claude 에 묻는다.
+// 질문 화면: 아래 버튼을 한 번 누르고 PC 마이크로 말한 뒤 다시 누르면, PC 도우미가 받아 적어 Claude 에 묻는다.
 // 답은 글자로 나오는 대로 이 화면에 뜬다 (companion/assistant.py).
-//   기기 -> PC: {"ask": "start"} 누름 / "stop" 뗌 / "cancel" 버림 / "new" 새 대화
+//   기기 -> PC: {"ask": "start"} 시작 / "stop" 끝 / "cancel" 버림 / "new" 새 대화
 //              음소거를 풀었으면 {"ask": "stop", "voice": true} (답을 PC 스피커로 읽어 줌), 다시 음소거하면 {"ask": "mute"}
 //   PC -> 기기: {"ask": {"state": "listening" | "thinking" | "done" | "error" | "idle", "q": 질문, "a": 답, "done": bool}}
 
@@ -22,10 +22,12 @@ enum { ASK_READY, ASK_TALKING, ASK_NO_PC, ASK_NO_MIC };
 enum { DICTATE_IDLE, DICTATE_PREPARING, DICTATE_LISTENING, DICTATE_WRITING };
 int askpanel_dictate_step();
 int askpanel_talk_state();
-// 누름: 녹음을 시작하면 true (PC 가 없거나 마이크가 없으면 알림만 띄우고 false). 뗌: 질문을 보냈으면 true.
+// 시작: 녹음을 시작하면 true (PC 가 없거나 마이크가 없으면 알림만 띄우고 false). 끝: 질문을 보냈으면 true.
 // dictate: 사용량 화면의 받아쓰기 버튼 (Claude 에 묻지 않고, 받아 적은 글을 PC 커서 자리에 입력)
 bool askpanel_press(bool dictate);
 bool askpanel_release();
+// 지금 녹음이 사용량 화면의 받아쓰기인지
+bool askpanel_dictating();
 // PC 가 알려 준 마이크 사용 가능 여부 {"ask_mic": bool}
 void askpanel_set_mic(bool available);
 // 연결이 바뀌었을 때 등 버튼 모양을 다시 그린다

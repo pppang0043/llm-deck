@@ -204,6 +204,7 @@ class Assistant:
             self.speaker.stop()
         if action == "start":
             self.dictate = event.get("mode") == "dictate"
+            self.voice = bool(event.get("voice"))  # 60초가 넘어 스스로 끝낼 때 쓴다 (끝낼 때 다시 받는다)
             self._start()
         elif action == "stop":
             self.voice = bool(event.get("voice"))
@@ -340,6 +341,10 @@ class Assistant:
                         if not heard and time.monotonic() - start > 1.5:
                             fail("마이크 소리가 들어오지 않습니다\n음소거나 마이크 권한을\n확인해 주세요", False)
                             return
+                    if self.recording.is_set():
+                        # 끝 버튼을 잊었다: 60초에서 스스로 끝내고 받아 적는다
+                        print(f"[assistant] {MAX_RECORD_SECONDS}초가 지나 녹음을 끝냅니다")
+                        threading.Thread(target=self._stop, daemon=True).start()
                 finally:
                     stream.stop()
                     # 멈춘 동안 쌓인 소리는 버린다 (다음 녹음에 앞 소리가 섞이지 않게)
@@ -417,7 +422,7 @@ class Assistant:
                 # 녹음이 실패했으면 _record 가 이미 오류를 보냈다. 아니면 너무 짧게 눌렀다
                 if self.state is None or self.state.get("state") != "error":
                     print("[assistant] 녹음된 소리가 없습니다 (너무 짧게 눌렀거나 마이크가 열리지 않음)")
-                    self._set("error", a="소리가 녹음되지 않았습니다\n버튼을 누른 채 말해 주세요")
+                    self._set("error", a="소리가 녹음되지 않았습니다\n버튼을 누르고 말한 뒤\n다시 눌러 주세요")
                 return
             pcm = np.concatenate(self.chunks)[:, 0].astype(np.float32) / 32768
             self._set("thinking", a="받아 적는 중")

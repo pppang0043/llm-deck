@@ -246,22 +246,14 @@ static void show_waiting() {
   show_placeholder("LLM Deck", body);
 }
 
-// 사용량 화면 아래 버튼: 받아쓰기. 누르고 있는 동안 PC 마이크로 말하면, 떼었을 때 받아 적은 글이
+// 사용량 화면 아래 버튼: 받아쓰기. 한 번 누르고 PC 마이크로 말한 뒤 다시 누르면, 받아 적은 글이
 // PC 의 커서 자리에 입력된다 (Claude 에 묻지 않는다). 질문은 홈의 질문 화면에서 한다.
-static bool usage_talking = false;
-
 static void mic_btn_event(lv_event_t *e) {
-  lv_event_code_t code = lv_event_get_code(e);
-  if (code == LV_EVENT_PRESSED) {
-    usage_talking = askpanel_press(true);
-  } else if ((code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) && usage_talking) {
+  if (askpanel_talk_state() != ASK_TALKING) {
+    askpanel_press(true);
+  } else if (askpanel_dictating()) {
     askpanel_release();
-    usage_talking = false;
   }
-}
-
-bool ui_usage_talking() {
-  return usage_talking;
 }
 
 void ui_refresh_talk() {
@@ -277,7 +269,7 @@ void ui_refresh_talk() {
   if (st == ASK_TALKING && step == DICTATE_PREPARING) {
     text = wide ? "마이크\n준비\n중..." : "마이크 준비 중...";
   } else if (st == ASK_TALKING) {
-    text = wide ? LV_SYMBOL_AUDIO "\n말하세요\n\n떼면\nPC에\n입력" : LV_SYMBOL_AUDIO "  말하세요... 떼면 PC에 입력";
+    text = wide ? LV_SYMBOL_AUDIO "\n말하세요\n\n다시\n누르면\n입력" : LV_SYMBOL_AUDIO "  말하세요... 다시 누르면 입력";
   } else if (step == DICTATE_WRITING) {
     text = wide ? "받아\n적는\n중..." : "받아 적는 중...";
   } else if (st == ASK_NO_PC) {
@@ -285,7 +277,7 @@ void ui_refresh_talk() {
   } else if (st == ASK_NO_MIC) {
     text = wide ? "PC\n마이크\n없음" : "PC 마이크 없음";
   } else {
-    text = wide ? LV_SYMBOL_AUDIO "\n받아\n쓰기\n\n누르고\n말하기" : LV_SYMBOL_AUDIO "  누르고 말하면 받아쓰기";
+    text = wide ? LV_SYMBOL_AUDIO "\n받아\n쓰기\n\n눌러서\n말하기" : LV_SYMBOL_AUDIO "  눌러서 받아쓰기";
   }
   lv_label_set_text(mic_lbl, text);
   lv_obj_center(mic_lbl);
@@ -524,7 +516,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
   mic_btn = lv_btn_create(scr);
   lv_obj_set_style_radius(mic_btn, 0, 0);
-  lv_obj_add_event_cb(mic_btn, mic_btn_event, LV_EVENT_ALL, NULL);
+  lv_obj_add_event_cb(mic_btn, mic_btn_event, LV_EVENT_CLICKED, NULL);
   mic_lbl = add_label(mic_btn, "", &font_ko_20, lv_color_white());
   lv_obj_set_style_text_align(mic_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
