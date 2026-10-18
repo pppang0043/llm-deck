@@ -101,14 +101,8 @@ static void make_name(char *out, size_t size) {
   }
 }
 
-const char *photo_save(uint8_t *jpg, size_t len, bool to_sd) {
-  char name[40];
-  make_name(name, sizeof(name));
-
-  char path[56];
-  snprintf(path, sizeof(path), "/photos/%s", name);
-  bool on_sd = to_sd && settings_sd_photos() && storage_write(path, jpg, len);
-
+// 연결된 PC 로 보낸다. jpg 는 여기서 맡는다 (보낸 뒤 또는 못 보내면 해제). 보내는 길을 *link 에.
+static bool send_to_pc(const char *name, uint8_t *jpg, size_t len, Link *link_out) {
   // Wi-Fi 로 받아 갈 수 있게 마지막 사진으로 둔다 (원본은 아래에서 PC 전송에 쓴다)
   uint8_t *copy = (uint8_t *)ps_malloc(len);
   if (copy) {
@@ -122,6 +116,7 @@ const char *photo_save(uint8_t *jpg, size_t len, bool to_sd) {
   }
 
   Link link = link_active();
+  *link_out = link;
   bool to_pc = link == LINK_USB || link == LINK_BLE || link == LINK_WIFI;
   if (to_pc) {
     Job job = {jpg, len, "", link};
@@ -133,6 +128,18 @@ const char *photo_save(uint8_t *jpg, size_t len, bool to_sd) {
   } else {
     free(jpg);
   }
+  return to_pc;
+}
+
+const char *photo_save(uint8_t *jpg, size_t len, bool to_sd) {
+  char name[40];
+  make_name(name, sizeof(name));
+
+  char path[56];
+  snprintf(path, sizeof(path), "/photos/%s", name);
+  bool on_sd = to_sd && settings_sd_photos() && storage_write(path, jpg, len);
+  Link link;
+  bool to_pc = send_to_pc(name, jpg, len, &link);
   Serial.printf("[photo] %s %u bytes, sd %d, pc %d\n", name, (unsigned)len, on_sd, to_pc);
 
   if (on_sd && to_pc) return "저장했습니다: SD 카드 + PC";
@@ -140,6 +147,14 @@ const char *photo_save(uint8_t *jpg, size_t len, bool to_sd) {
   // 블루투스는 수 초 걸린다. 다 보내면 화면에 따로 알린다 (camera_ui).
   if (to_pc) return link == LINK_BLE ? "블루투스로 PC에 보내는 중" : "PC로 보냈습니다";
   return "저장할 곳이 없습니다\nSD 카드를 넣거나 PC를 연결하세요";
+}
+
+const char *photo_resend(const char *name, uint8_t *jpg, size_t len) {
+  Link link;
+  bool to_pc = send_to_pc(name, jpg, len, &link);
+  Serial.printf("[photo] resend %s %u bytes, pc %d\n", name, (unsigned)len, to_pc);
+  if (!to_pc) return "연결된 PC가 없습니다";
+  return link == LINK_BLE ? "블루투스로 PC에 보내는 중" : "PC로 보냈습니다";
 }
 
 bool photo_send_file(const char *name, uint8_t *data, size_t len) {

@@ -15,6 +15,9 @@ void photo_init();
 // to_sd: SD 카드에도 저장할지 (진단용 화면 캡처는 저장하지 않는다)
 const char *photo_save(uint8_t *jpg, size_t len, bool to_sd = true);
 
+// SD 카드에 있는 사진(갤러리)을 이름 그대로 PC 로 다시 보낸다. jpg 는 이 함수가 맡아서 해제한다.
+const char *photo_resend(const char *name, uint8_t *jpg, size_t len);
+
 // Wi-Fi 로 받아 갈 수 있게 마지막 사진을 가지고 있는다
 bool photo_last(const uint8_t **data, size_t *len, const char **name);
 
