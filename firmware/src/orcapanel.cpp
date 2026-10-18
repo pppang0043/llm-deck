@@ -15,7 +15,7 @@ LV_FONT_DECLARE(font_ko_20);
 #define COLS 2
 #define ROWS 3
 #define PER_PAGE (COLS * ROWS)
-#define MAX_PAGES 12  // 프로젝트마다 쪽을 나누므로 세션 수보다 쪽이 많아질 수 있다
+#define MAX_PAGES ((MAX_ROWS + PER_PAGE - 1) / PER_PAGE)
 #define HEAD_H 24
 #define GAP 6
 #define KEEP_ORDER_MS 15000  // 누른 뒤 이만큼은 순서를 바꾸지 않는다 (누르려던 자리에 다른 세션이 오지 않게)
@@ -34,8 +34,8 @@ static bool received = false;    // PC 가 한 번이라도 보냈는지
 static uint32_t touched_at = 0;
 
 struct Page {
-  lv_obj_t *page, *project, *index;
-  lv_obj_t *btn[PER_PAGE], *lbl[PER_PAGE];
+  lv_obj_t *page, *head, *index;
+  lv_obj_t *btn[PER_PAGE], *lbl[PER_PAGE], *proj[PER_PAGE];
   int session[PER_PAGE];  // 버튼마다 보여 주는 세션 번호 (-1 이면 빈 칸)
 };
 static Page pages[MAX_PAGES];
@@ -115,36 +115,27 @@ static void btn_event(lv_event_t *e) {
   if (askpanel_press_orca(s.id)) orcapanel_refresh();
 }
 
-// 버튼 글자: 세 줄까지, 넘치면 ... 으로. 짧으면 버튼 가운데에.
+// 버튼 글자: 두 줄까지, 넘치면 ... 으로. 짧으면 프로젝트 이름 위 남은 자리의 가운데에.
 static void set_btn_text(lv_obj_t *lbl, const char *text) {
   lv_point_t size;
   lv_txt_get_size(&size, text, &font_ko_14, 0, 0, label_w, LV_TEXT_FLAG_NONE);
-  int max_h = 3 * lv_font_get_line_height(&font_ko_14);
+  int max_h = 2 * lv_font_get_line_height(&font_ko_14);
   bool cut = size.y > max_h;
   lv_label_set_long_mode(lbl, cut ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_WRAP);
   lv_obj_set_size(lbl, label_w, cut ? max_h : LV_SIZE_CONTENT);
   lv_label_set_text(lbl, text);
-  lv_obj_center(lbl);
+  lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -lv_font_get_line_height(&font_ko_14) / 2);
 }
 
-// 세션들을 쪽에 나눠 담는다: 프로젝트가 바뀌거나 6칸이 차면 다음 쪽 (PC 가 프로젝트별로 모아 보낸다)
+// 세션들을 6칸씩 쪽에 담는다 (PC 가 보낸 순서: 프로젝트별로 모아 최근에 연 것이 앞)
 static void lay_out_pages() {
-  page_count = 0;
-  int slot = PER_PAGE;
-  for (int i = 0; i < count; i++) {
-    bool new_project = i == 0 || strcmp(sessions[i].project, sessions[i - 1].project) != 0;
-    if (new_project || slot == PER_PAGE) {
-      if (page_count == MAX_PAGES) break;
-      Page &p = pages[page_count++];
-      for (int k = 0; k < PER_PAGE; k++) p.session[k] = -1;
-      slot = 0;
+  page_count = (count + PER_PAGE - 1) / PER_PAGE;
+  for (int n = 0; n < page_count; n++) {
+    for (int k = 0; k < PER_PAGE; k++) {
+      int i = n * PER_PAGE + k;
+      pages[n].session[k] = i < count ? i : -1;
     }
-    pages[page_count - 1].session[slot++] = i;
   }
-}
-
-static const char *page_project(int n) {
-  return sessions[pages[n].session[0]].project;
 }
 
 void orcapanel_refresh() {
@@ -167,16 +158,11 @@ void orcapanel_refresh() {
       continue;
     }
     lv_obj_clear_flag(p.page, LV_OBJ_FLAG_HIDDEN);
-    // 같은 프로젝트가 여러 쪽이면 그 안에서 몇째 쪽인지
-    int first = n, last = n;
-    while (first > 0 && strcmp(page_project(first - 1), page_project(n)) == 0) first--;
-    while (last + 1 < page_count && strcmp(page_project(last + 1), page_project(n)) == 0) last++;
-    if (last > first) {
-      lv_label_set_text_fmt(p.project, "%s (%d/%d)", page_project(n), n - first + 1, last - first + 1);
+    if (page_count > 1) {
+      lv_label_set_text_fmt(p.index, "%d/%d", n + 1, page_count);
     } else {
-      lv_label_set_text(p.project, page_project(n));
+      lv_label_set_text(p.index, "");
     }
-    lv_label_set_text_fmt(p.index, "%d/%d", n + 1, page_count);
     for (int k = 0; k < PER_PAGE; k++) {
       int i = p.session[k];
       lv_obj_set_user_data(p.btn[k], (void *)(intptr_t)i);
@@ -191,7 +177,10 @@ void orcapanel_refresh() {
       bool active = strcmp(active_id, s.id) == 0;
       lv_obj_set_style_bg_color(p.btn[k], mine ? COLOR_TALKING : lv_color_hex(l.color), 0);
       lv_obj_set_style_border_width(p.btn[k], active ? 3 : 0, 0);
-      lv_obj_set_style_text_color(p.lbl[k], l.dark_text && !mine ? lv_color_hex(0x1A1A1A) : lv_color_white(), 0);
+      lv_color_t text = l.dark_text && !mine ? lv_color_hex(0x1A1A1A) : lv_color_white();
+      lv_obj_set_style_text_color(p.lbl[k], text, 0);
+      lv_obj_set_style_text_color(p.proj[k], text, 0);
+      lv_label_set_text(p.proj[k], s.project);
       if (mine) {
         int step = askpanel_dictate_step();
         set_btn_text(p.lbl[k], !askpanel_dictating()          ? "넣는 중..."
@@ -261,9 +250,8 @@ void orcapanel_build(lv_obj_t *parent) {
     lv_obj_remove_style_all(p.page);
     lv_obj_clear_flag(p.page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(p.page, 8, 0);
-    p.project = add_label(p.page, "", &font_ko_14, COLOR_ACCENT);
-    lv_label_set_long_mode(p.project, LV_LABEL_LONG_DOT);
-    lv_obj_align(p.project, LV_ALIGN_TOP_LEFT, 0, 0);
+    p.head = add_label(p.page, "ORCA", &font_ko_14, COLOR_ACCENT);
+    lv_obj_align(p.head, LV_ALIGN_TOP_LEFT, 0, 0);
     p.index = add_label(p.page, "", &font_ko_14, COLOR_DIM);
     lv_obj_align(p.index, LV_ALIGN_TOP_RIGHT, 0, 0);
     for (int k = 0; k < PER_PAGE; k++) {
@@ -276,7 +264,12 @@ void orcapanel_build(lv_obj_t *parent) {
       p.lbl[k] = add_label(p.btn[k], "", &font_ko_14, lv_color_white());
       lv_obj_set_style_text_align(p.lbl[k], LV_TEXT_ALIGN_CENTER, 0);
       lv_label_set_long_mode(p.lbl[k], LV_LABEL_LONG_DOT);
-      lv_obj_center(p.lbl[k]);
+      // 어느 프로젝트의 세션인지 (버튼 아래쪽에 흐리게)
+      p.proj[k] = add_label(p.btn[k], "", &font_ko_14, lv_color_white());
+      lv_obj_set_style_text_opa(p.proj[k], LV_OPA_70, 0);
+      lv_obj_set_style_text_align(p.proj[k], LV_TEXT_ALIGN_CENTER, 0);
+      lv_label_set_long_mode(p.proj[k], LV_LABEL_LONG_DOT);
+      lv_obj_align(p.proj[k], LV_ALIGN_BOTTOM_MID, 0, 0);
       lv_obj_add_flag(p.btn[k], LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_add_flag(p.page, LV_OBJ_FLAG_HIDDEN);
@@ -295,11 +288,11 @@ void orcapanel_layout(int x, int y, int w, int h) {
   int bw = (inner_w - GAP * (COLS - 1)) / COLS, bh = (inner_h - GAP * (ROWS - 1)) / ROWS;
   for (Page &p : pages) {
     lv_obj_set_size(p.page, w, h);
-    lv_obj_set_width(p.project, inner_w - 44);
     for (int k = 0; k < PER_PAGE; k++) {
       lv_obj_set_size(p.btn[k], bw, bh);
       lv_obj_set_pos(p.btn[k], (k % COLS) * (bw + GAP), HEAD_H + (k / COLS) * (bh + GAP));
       lv_obj_set_width(p.lbl[k], bw - 12);
+      lv_obj_set_width(p.proj[k], bw - 12);
       label_w = bw - 12;
     }
   }
