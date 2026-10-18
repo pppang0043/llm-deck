@@ -10,6 +10,8 @@
 #define CST816_ADDR 0x15
 #define CST816_REG_ID 0xA7
 #define CST816_REG_TOUCH 0x02
+// 0 이 아니면 자동 절전을 끈다. 켜 두면 2초쯤 안 만졌을 때 잠들어서 다음 첫 터치를 놓치거나 늦게 알린다.
+#define CST816_REG_DIS_AUTO_SLEEP 0xFE
 
 // 한 번에 그리는 줄 수. 클수록 빠르지만 메모리를 더 쓴다.
 #define DRAW_BUF_LINES 40
@@ -35,6 +37,13 @@ static bool touch_read_reg(uint8_t reg, uint8_t *data, uint8_t len) {
   if (Wire.requestFrom((uint8_t)CST816_ADDR, len) != len) return false;
   for (uint8_t i = 0; i < len; i++) data[i] = Wire.read();
   return true;
+}
+
+static bool touch_write_reg(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(CST816_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission(true) == 0;
 }
 
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
@@ -79,6 +88,9 @@ static void recover_bus() {
   digitalWrite(TP_SDA, HIGH);
   delayMicroseconds(5);
   Wire.begin(TP_SDA, TP_SCL);
+  Wire.setClock(400000);
+  // 터치 칩이 다시 켜졌을 수도 있으니 자동 절전을 다시 끈다
+  touch_write_reg(CST816_REG_DIS_AUTO_SLEEP, 1);
 }
 
 static void watch_bus(bool ok) {
@@ -154,9 +166,12 @@ void display_init() {
   ledcWrite(LCD_BL, 1023 * 80 / 100);
 
   Wire.begin(TP_SDA, TP_SCL);
+  // 터치를 10ms 마다 읽으므로 선을 빠르게 (같은 선의 기울기 센서, 스피커 모듈도 400kHz 를 지원한다)
+  Wire.setClock(400000);
   uint8_t id = 0;
   if (touch_read_reg(CST816_REG_ID, &id, 1)) {
     Serial.printf("[display] touch chip id 0x%02X\n", id);
+    if (!touch_write_reg(CST816_REG_DIS_AUTO_SLEEP, 1)) Serial.println("[display] touch auto sleep not disabled");
   } else {
     Serial.println("[display] touch chip not found");
   }

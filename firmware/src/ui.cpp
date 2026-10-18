@@ -671,14 +671,37 @@ void ui_set_wifi_info(const char *text) {
   if (waiting) show_waiting();
 }
 
-void ui_set_usage(JsonArrayConst services) {
-  waiting = false;
-  history_record(services);
-  last_usage.set(services);
+// 누르고 있거나 페이지가 넘어가는 중인지. 그동안 페이지를 새로 만들면 누르던 버튼과 넘기던 동작이 사라진다.
+static bool touch_busy() {
+  lv_indev_t *indev = lv_indev_get_next(NULL);
+  return (indev && indev->proc.state == LV_INDEV_STATE_PRESSED) || lv_anim_get(tiles, NULL);
+}
+
+// 새로 온 사용량은 손을 뗀 뒤에 그린다
+static lv_timer_t *usage_timer;
+
+static void usage_retry(lv_timer_t *t) {
+  if (touch_busy()) return;
+  lv_timer_pause(t);
   render_usage();
 }
 
+void ui_set_usage(JsonArrayConst services) {
+  history_record(services);
+  // PC 도우미는 30초마다 같은 내용을 다시 보낸다. 바뀐 것이 없으면 그대로 둔다 (새로 만드는 데 0.1초쯤 멈춘다).
+  if (!waiting && last_usage.as<JsonVariantConst>() == services) return;
+  waiting = false;
+  last_usage.set(services);
+  if (!touch_busy()) {
+    render_usage();
+    return;
+  }
+  if (!usage_timer) usage_timer = lv_timer_create(usage_retry, 100, NULL);
+  lv_timer_resume(usage_timer);
+}
+
 static void render_usage() {
+  if (usage_timer) lv_timer_pause(usage_timer);
   JsonArrayConst services = last_usage.as<JsonArrayConst>();
 
   // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다

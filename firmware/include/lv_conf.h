@@ -15,6 +15,12 @@
 
 #define LV_TICK_CUSTOM 1
 
+// 터치를 10ms 마다 읽는다 (기본 30ms 는 끌 때 손가락을 늦게 따라온다). 화면은 20ms(50장/초)마다 다시 그린다.
+#define LV_INDEV_DEF_READ_PERIOD 10
+#define LV_DISP_DEF_REFR_PERIOD 20
+// 누른 채 이만큼(px) 움직여야 스크롤로 본다. 기본 10 은 손가락이 조금만 밀려도 버튼 누름이 취소됐다.
+#define LV_INDEV_DEF_SCROLL_LIMIT 15
+
 // 화면 캡처 (진단용, PC: --screenshot)
 #define LV_USE_SNAPSHOT 1
 #define LV_TICK_CUSTOM_INCLUDE "Arduino.h"
