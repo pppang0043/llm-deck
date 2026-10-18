@@ -82,6 +82,7 @@ static void build_pages(JsonObjectConst shared, JsonArray services) {
       text[0] = 0;
       if (!reset && resets_at != 0) format_when(resets_at, text, sizeof(text));
       bar["note"] = text;
+      if (!reset && resets_at != 0) bar["resets"] = (uint32_t)resets_at;
     }
   }
 }

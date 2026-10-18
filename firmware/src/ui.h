@@ -19,7 +19,8 @@ void ui_set_battery(int pct, bool charging);
 void ui_set_wifi_info(const char *text);
 
 // PC 도우미가 보낸 사용량 데이터로 페이지를 다시 그린다.
-// 서비스 하나: {"name", "note", "headline", "sub", "bars": [{"label", "note", "text", "pct"}], "rows": [[이름, 값]]}
+// 서비스 하나: {"name", "note", "headline", "sub", "bars": [{"label", "note", "text", "pct", "resets"}], "rows": [[이름, 값]]}
+// resets(초기화 시각, 초)가 있으면 지금 속도로 그 전에 한도가 찰 때 "16:40 소진" 을 함께 보인다.
 void ui_set_usage(JsonArrayConst services);
 
 // 화면 방향이 바뀐 뒤(display_set_rotation) 부르면 가로/세로에 맞게 다시 배치한다.

@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <lvgl.h>
+#include <time.h>
 
 #include "psram_json.h"
 #include "askpanel.h"
@@ -210,6 +211,47 @@ void ui_history_close() {
   if (hist_panel) lv_obj_add_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ---- 소진 예상: 최근 사용률 기록으로 지금 속도면 언제 100% 가 되는지 ----
+
+// 5시간 구간은 최근 1시간, 그 밖(주간)은 최근 6시간 동안 오른 만큼으로 본다
+#define FORECAST_SLOTS_SHORT 6
+#define FORECAST_SLOTS_LONG 36
+// 이보다 짧게 쌓인 기록으로는 예상하지 않는다 (10분 칸 2개)
+#define FORECAST_MIN_SLOTS 2
+
+// 초기화 전에 한도가 찰 것 같으면 "16:40 소진" (오늘이 아니면 "23일 16시 소진") 을 out 에 넣고 true
+static bool forecast(const char *service, JsonObjectConst bar, char *out, size_t size) {
+  int pct = bar["pct"] | 0;
+  uint32_t resets = bar["resets"] | 0u;
+  time_t now = time(nullptr);
+  if (pct <= 0 || pct >= 100 || now < 1700000000) return false;
+  static uint8_t v[HISTORY_SLOTS];
+  const char *label = bar["label"] | "";
+  if (!history_get(service, label, v)) return false;
+  int lookback = strcmp(label, "5시간") == 0 ? FORECAST_SLOTS_SHORT : FORECAST_SLOTS_LONG;
+  // 맨 끝 칸이 지금. 뒤로 가며 값이 오히려 크면 초기화 전이므로 거기서 멈춘다.
+  int last = HISTORY_SLOTS - 1, from = -1, prev = pct;
+  for (int i = last - 1; i >= 0 && last - i <= lookback; i--) {
+    if (v[i] == HISTORY_NONE) continue;
+    if (v[i] > prev) break;
+    from = i;
+    prev = v[i];
+  }
+  if (from < 0 || last - from < FORECAST_MIN_SLOTS || pct <= v[from]) return false;
+  uint32_t span_s = (last - from) * HISTORY_SLOT_S;
+  time_t full = now + (time_t)((100 - pct) * (uint64_t)span_s / (pct - v[from]));
+  if ((resets && full >= (time_t)resets) || full - now > 7 * 86400) return false;
+  struct tm t, today;
+  localtime_r(&full, &t);
+  localtime_r(&now, &today);
+  if (t.tm_yday == today.tm_yday && t.tm_year == today.tm_year) {
+    snprintf(out, size, "%02d:%02d 소진", t.tm_hour, t.tm_min);
+  } else {
+    snprintf(out, size, "%d일 %d시 소진", t.tm_mday, t.tm_hour);
+  }
+  return true;
+}
+
 // 한도 한 구간: 왼쪽에 이름과 초기화 시각, 오른쪽에 큰 숫자, 아래에 막대. 누르면 기록 그래프.
 static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar) {
   int pct = constrain(bar["pct"] | 0, 0, 100);
@@ -235,6 +277,8 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
   lv_bar_set_range(b, 0, 100);
   lv_bar_set_value(b, pct, LV_ANIM_OFF);
   if (pct >= 70) lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
+  char soon[32];
+  if (forecast(service, bar, soon, sizeof(soon))) add_label(parent, soon, &font_ko_14, COLOR_WARN);
 }
 
 // 한도 막대만 있는 페이지(Claude Code, Codex 같은 구독)인지
@@ -266,6 +310,12 @@ static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst b
   lv_obj_t *note = add_label(cell, when[0] ? when : "-", &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
   lv_obj_set_style_max_width(note, lv_pct(100), 0);
+  char soon[32];
+  if (forecast(service, bar, soon, sizeof(soon))) {
+    lv_obj_t *lbl = add_label(cell, soon, &font_ko_14, COLOR_WARN);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_max_width(lbl, lv_pct(100), 0);
+  }
   if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
     strlcpy(k.service, service, sizeof(k.service));
@@ -1070,10 +1120,6 @@ bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
 static lv_obj_t *toast;
 static lv_timer_t *toast_timer;
 
-static void toast_hide(lv_timer_t *t) {
-  lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN);
-  lv_timer_pause(t);
-}
 
 void ui_toast(const char *text, uint32_t ms) {
   if (!toast) {
