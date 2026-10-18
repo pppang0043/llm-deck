@@ -28,19 +28,20 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; background: #0b0e11; color: #8a939e; font: 14px -apple-system, "Malgun Gothic", sans-serif;
+  body { -webkit-user-select: none; user-select: none; margin: 0; background: #0b0e11; color: #8a939e; font: 14px -apple-system, "Malgun Gothic", sans-serif;
          display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; }
+  /* 그림(img)은 끌면 브라우저가 그림을 옮기려 하므로 캔버스에 그린다 */
   #screen { image-rendering: pixelated; border-radius: 10px; box-shadow: 0 0 0 1px #2a323b; cursor: pointer;
             touch-action: none; user-select: none; -webkit-user-drag: none; max-width: calc(100vw - 32px); }
   #state { min-height: 1.4em; }
   button { background: #1c232b; color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
 </style></head>
 <body>
-  <img id="screen" alt="기기 화면" draggable="false">
+  <canvas id="screen" width="320" height="240"></canvas>
   <div id="state">기기 화면을 기다리는 중...</div>
   <div><button data-zoom="1">1배</button> <button data-zoom="2">2배</button> <button data-zoom="3">3배</button></div>
 <script>
-const img = document.getElementById("screen"), state = document.getElementById("state");
+const img = document.getElementById("screen"), ctx = img.getContext("2d"), state = document.getElementById("state");
 let zoom = 2, seq = 0, w = 0, h = 0, down = false, lastMove = 0;
 try { zoom = +localStorage.getItem("zoom") || 2; } catch (e) {}
 function size() { if (w) img.style.width = (w * zoom) + "px"; }
@@ -53,8 +54,9 @@ async function poll() {
       const r = await fetch("frame?after=" + seq, {cache: "no-store"});
       if (r.status === 200) {
         seq = +r.headers.get("X-Seq"); w = +r.headers.get("X-Width"); h = +r.headers.get("X-Height");
-        const url = URL.createObjectURL(await r.blob());
-        const old = img.src; img.src = url; if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+        const pic = await createImageBitmap(await r.blob());
+        if (img.width !== w || img.height !== h) { img.width = w; img.height = h; }
+        ctx.drawImage(pic, 0, 0); pic.close();
         size(); state.textContent = "누르거나 끌어서 기기를 조작합니다";
       } else if (r.status === 503) {
         state.textContent = await r.text();
@@ -75,7 +77,9 @@ function send(e, isDown) {
   fetch("touch", {method: "POST", headers: {"Content-Type": "application/json"},
                   body: JSON.stringify({x: p.x, y: p.y, down: isDown})});
 }
-img.addEventListener("pointerdown", e => { down = true; img.setPointerCapture(e.pointerId); send(e, true); });
+// 브라우저 기본 동작(끌기, 글자 선택, 오른쪽 메뉴)은 막는다
+for (const kind of ["dragstart", "selectstart", "contextmenu"]) img.addEventListener(kind, e => e.preventDefault());
+img.addEventListener("pointerdown", e => { e.preventDefault(); down = true; img.setPointerCapture(e.pointerId); send(e, true); });
 img.addEventListener("pointermove", e => {
   if (!down || e.timeStamp - lastMove < 30) return;
   lastMove = e.timeStamp; send(e, true);
