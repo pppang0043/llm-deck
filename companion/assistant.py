@@ -7,6 +7,8 @@
       읽는 것은 답의 앞 1~2문장(요약)이다. 질문에 "길게", "자세히" 같은 말이 있으면 답 전체를 읽는다.
 받아쓰기: {"ask": "start", "mode": "dictate"} ... {"ask": "stop"} -> 받아 적은 글을 이 PC 의 커서 자리에 입력한다
       (Claude 에 묻지 않는다, Enter 는 누르지 않는다). 기기 사용량 화면의 버튼이 쓴다.
+      "orca": 세션 id 가 있으면 그 ORCA 세션을 앞으로 띄우고 그 세션 터미널에 넣는다 (orca.py, 기기의 ORCA 화면).
+      "슬래시 커밋" 처럼 말하면 "/commit" 으로 바꿔 넣는다.
 
 CLI 는 소리를 받지 못하므로 음성은 먼저 글자로 바꾼다. 소리는 인터넷으로 나가지 않는다.
 CLI 는 질문마다 새로 켜면 2~3초가 더 걸려서, 한 번 띄워 두고(stream-json) 계속 묻는다. 같은 프로세스라 대화도 이어진다.
@@ -23,6 +25,7 @@ import threading
 import time
 from pathlib import Path
 
+import orca
 import speech
 import typer
 
@@ -190,6 +193,10 @@ class Assistant:
         self.speaker = speech.Speaker(cfg)
         # 이번 녹음이 받아쓰기인지 (사용량 화면 버튼). 받아쓰기는 Claude 에 묻지 않고 PC 에 입력만 한다.
         self.dictate = False
+        # ORCA 세션에 받아쓰기할 때: orca.Orca (main.py 가 넣어 준다)와 이번에 넣을 세션의 터미널 handle
+        self.orca: orca.Orca | None = None
+        self.orca_target: str | None = None
+        self.orca_pick = False  # 이번 받아쓰기가 ORCA 세션으로 가는지
         self.pending_toast: str | None = None  # main.py 가 기기 알림으로 보낸다
         self.state: dict | None = None  # 기기로 보낼 최신 상태
         self.sent: dict | None = None
@@ -205,6 +212,15 @@ class Assistant:
         if action == "start":
             self.dictate = event.get("mode") == "dictate"
             self.voice = bool(event.get("voice"))  # 60초가 넘어 스스로 끝낼 때 쓴다 (끝낼 때 다시 받는다)
+            target = event.get("orca") if self.dictate else None
+            if not (self.busy or self.recording.is_set()):
+                self.orca_target = None
+                self.orca_pick = isinstance(target, str) and self.orca is not None
+                if self.orca_pick:
+                    # 말하는 동안 그 세션 탭으로 바꿔 둔다 (끝나면 그 세션에 넣는다)
+                    def activate() -> None:
+                        self.orca_target = self.orca.activate(target)
+                    threading.Thread(target=activate, daemon=True).start()
             self._start()
         elif action == "stop":
             self.voice = bool(event.get("voice"))
@@ -429,8 +445,10 @@ class Assistant:
             with self.lock:
                 self._load_model()
                 start = time.monotonic()
+                # ORCA 세션에 받아쓰기할 때는 / 명령 이름을 영어로 알아듣게 돕는다
+                hints = self.orca.hotwords() if self.dictate and self.orca_pick and self.orca else None
                 segments, _ = self.model.transcribe(pcm, language=self.cfg.get("language", "ko"), beam_size=1,
-                                                    vad_filter=True)
+                                                    vad_filter=True, hotwords=hints)
                 question = "".join(s.text for s in segments).strip()
                 kind = "받아쓰기" if self.dictate else "질문"
                 print(f"[assistant] {kind} ({len(pcm) / SAMPLE_RATE:.1f}초 녹음, {time.monotonic() - start:.1f}초): {question}")
@@ -468,9 +486,23 @@ class Assistant:
             self._set("idle", mode="dictate")
             self.pending_toast = "알아듣지 못했습니다\n다시 말해 주세요"
             return
-        error = typer._type(text, enter=False)
+        if self.orca:
+            fixed = orca.fix_slash(text, self.orca.commands(), self.orca.aliases)
+            if fixed != text:
+                print(f"[assistant] / 명령으로 바꿈: {fixed}")
+            text = fixed
+        target, self.orca_target = self.orca_target, None
+        if target:
+            error = self.orca.send_text(target, text)
+            where = "ORCA에 "
+        elif self.orca_pick:
+            # 고른 세션이 그사이 닫혔으면 엉뚱한 창에 치지 않는다
+            error, where = "ORCA 세션을 찾지 못했습니다", ""
+        else:
+            error = typer._type(text, enter=False)
+            where = ""
         self._set("idle", mode="dictate")
-        self.pending_toast = f"입력했습니다: {text[:40]}" if not error else f"입력하지 못했습니다\n{error}"
+        self.pending_toast = f"{where}입력했습니다: {text[:40]}" if not error else f"입력하지 못했습니다\n{error}"
 
     # --- PC -> 기기 ---
 

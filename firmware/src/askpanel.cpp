@@ -19,6 +19,7 @@ static lv_obj_t *panel, *state_lbl, *new_btn, *mute_btn, *mute_lbl, *text_box, *
 static bool talking = false;  // 녹음 중 (한 번 눌러 시작, 다시 눌러 끝)
 static bool dictating = false;  // 지금 누른 것이 받아쓰기(사용량 화면 버튼)인지
 static int dictate_step = DICTATE_IDLE;  // 받아쓰기 진행 (PC 가 알려 준다)
+static char dictate_target[16] = "";  // 받아쓰기를 넣을 ORCA 세션 id (ORCA 화면에서 눌렀을 때. 아니면 빈 글자)
 // 답을 PC 스피커로 읽어 줄지. 켤 때마다 음소거(읽지 않음)로 시작한다. PC 음량은 건드리지 않는다.
 static bool voice = false;
 static bool mic_ok = true;    // PC 마이크를 쓸 수 있는지 (PC 가 알려 준다. 모르면 된다고 본다)
@@ -56,15 +57,22 @@ void askpanel_refresh() {
   ui_refresh_talk();
 }
 
-bool askpanel_press(bool dictate) {
+static bool press(bool dictate, const char *orca_id) {
   int st = askpanel_talk_state();
   if (st == ASK_NO_PC) ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
   if (st == ASK_NO_MIC) ui_toast("PC에 쓸 수 있는 마이크가 없습니다", 2500);
   if (st != ASK_READY) return false;
-  // 음소거를 풀어 두었으면 시작할 때도 알린다 (PC 가 60초에 스스로 녹음을 끝내도 읽어 주도록)
-  link_send_event(dictate          ? "{\"ask\":\"start\",\"mode\":\"dictate\"}"
-                  : voice ? "{\"ask\":\"start\",\"voice\":true}"
-                          : "{\"ask\":\"start\"}");
+  if (orca_id) {
+    char json[96];
+    snprintf(json, sizeof(json), "{\"ask\":\"start\",\"mode\":\"dictate\",\"orca\":\"%s\"}", orca_id);
+    link_send_event(json);
+  } else {
+    // 음소거를 풀어 두었으면 시작할 때도 알린다 (PC 가 60초에 스스로 녹음을 끝내도 읽어 주도록)
+    link_send_event(dictate          ? "{\"ask\":\"start\",\"mode\":\"dictate\"}"
+                    : voice ? "{\"ask\":\"start\",\"voice\":true}"
+                            : "{\"ask\":\"start\"}");
+  }
+  snprintf(dictate_target, sizeof(dictate_target), "%s", orca_id ? orca_id : "");
   talking = true;
   dictating = dictate;
   // PC 가 마이크를 열 때까지 (처음엔 몇 초 걸린다). 열리면 PC 가 "듣는 중" 으로 바꾼다
@@ -76,6 +84,18 @@ bool askpanel_press(bool dictate) {
   busy_ms = millis();
   askpanel_refresh();
   return true;
+}
+
+bool askpanel_press(bool dictate) {
+  return press(dictate, nullptr);
+}
+
+bool askpanel_press_orca(const char *id) {
+  return press(true, id);
+}
+
+const char *askpanel_dictate_target() {
+  return dictate_target;
 }
 
 bool askpanel_release() {

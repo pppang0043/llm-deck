@@ -40,6 +40,7 @@ import photos
 import videos
 import sounds
 import launcher
+import orca
 import pcstats
 import statusline
 import typer
@@ -261,6 +262,9 @@ def main() -> None:
     keys = typer.Typer()
     ask = assistant.Assistant(cfg.get("assistant", {}))
     ask.other_audio = lambda: getattr(sink, "stream", None) is not None
+    # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
+    sessions = orca.Orca(cfg.get("orca", {}))
+    ask.orca = sessions
 
     def on_event(event: dict) -> None:
         speaker.on_event(event)
@@ -278,6 +282,8 @@ def main() -> None:
         try:
             if transport is None:
                 transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
+                if transport:
+                    sessions.resend()  # 새로 연결한 기기에도 세션 목록을 보낸다
             if transport:
                 message = collect_all(cfg)
                 # PC 마이크를 쓸 수 있는지 (없으면 기기의 말하기 버튼이 꺼진다)
@@ -392,10 +398,13 @@ def main() -> None:
                     extra = {}
                     if pc.due():
                         extra["pc"] = pc.collect()
-                    for source in (apps, keys, ask):
+                    for source in (apps, keys, ask, sessions):
                         if source.pending_toast:
                             extra["toast"], source.pending_toast = source.pending_toast, None
                     # 말로 묻기: 상태(듣는 중·생각 중)와 나오는 중인 답
+                    orca_state = sessions.pending()
+                    if orca_state:
+                        extra["orca"] = orca_state
                     answer = ask.pending()
                     if answer:
                         extra["ask"] = answer

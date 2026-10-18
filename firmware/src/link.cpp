@@ -10,6 +10,7 @@
 #include "psram_json.h"
 #include "alerts.h"
 #include "askpanel.h"
+#include "orcapanel.h"
 #include "settings.h"
 #include "battery.h"
 #include "ble_link.h"
@@ -282,6 +283,7 @@ void link_loop() {
       if (doc["toast"].is<const char *>() && from == active && usage) ui_toast(doc["toast"], 3000);
       if (doc["ask"].is<JsonObjectConst>() && from == active && usage) askpanel_set(doc["ask"]);
       if (doc["ask_mic"].is<bool>() && from == active && usage) askpanel_set_mic(doc["ask_mic"]);
+      if (doc["orca"].is<JsonObjectConst>() && from == active && usage) orcapanel_set(doc["orca"]);
       if (doc["services"].is<JsonArrayConst>() && from == active && usage) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);

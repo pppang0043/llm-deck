@@ -26,6 +26,10 @@ int askpanel_talk_state();
 // dictate: 사용량 화면의 받아쓰기 버튼 (Claude 에 묻지 않고, 받아 적은 글을 PC 커서 자리에 입력)
 bool askpanel_press(bool dictate);
 bool askpanel_release();
+// ORCA 화면에서 세션을 눌렀을 때: 그 세션을 PC 화면 앞으로 띄우고, 받아 적은 글을 그 세션에 넣는 받아쓰기 (orcapanel.cpp)
+bool askpanel_press_orca(const char *id);
+// 마지막으로 시작한 받아쓰기가 넣을 ORCA 세션 id (사용량 화면 버튼이면 빈 글자)
+const char *askpanel_dictate_target();
 // 지금 녹음이 사용량 화면의 받아쓰기인지
 bool askpanel_dictating();
 // PC 가 알려 준 마이크 사용 가능 여부 {"ask_mic": bool}

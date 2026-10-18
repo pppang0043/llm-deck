@@ -63,3 +63,9 @@ dir = ""
 # whisper_model = "small"   # 음성 인식 모델 (tiny / base / small / medium). 클수록 정확하고 느리다. 폴더 경로도 된다
 # input = ""                # 마이크 이름 일부 (비워 두면 PC 기본 마이크)
 # voice = "Yuna"            # 답 읽어 주기 목소리 (Mac 만. say -v '?' 로 목록). Windows 는 한국어 목소리를 저절로 고른다
+
+[orca]
+# ORCA 에 열린 세션들의 작업 상태를 10초마다 기기 ORCA 화면에 보여 준다. 세션을 누르고 말하면 그 세션에 받아 적어 넣는다.
+# enabled = true
+# 받아쓰기에서 "슬래시 ○○" 를 / 명령으로 바꿀 때, 저절로 못 알아듣는 말을 더한다 (들린 말 = 명령 이름)
+# slash_words = { "깃 푸시" = "git-push" }

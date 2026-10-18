@@ -25,10 +25,10 @@ void ui_set_usage(JsonArrayConst services);
 void ui_layout();
 
 void ui_set_mic(bool on);
-// 사용량 화면 아래 받아쓰기 버튼의 모양을 다시 그린다 (askpanel.cpp 가 부른다)
+// 사용량 화면 아래 받아쓰기 버튼과 ORCA 화면의 모양을 다시 그린다 (askpanel.cpp 가 부른다)
 void ui_refresh_talk();
 
-// 홈 화면 (아이콘 5개: 사용량, 카메라, 질문, 단축키, 설정). 어디서든 오른쪽으로 밀면 홈으로 온다.
+// 홈 화면 (아이콘 6개: 사용량, 카메라, 질문, 단축키, ORCA, 설정). 어디서든 오른쪽으로 밀면 홈으로 온다.
 // 밝기와 정보는 설정 안(디스플레이, 정보)에 있다.
 void ui_show_home();
 // 홈의 카메라 아이콘을 눌렀을 때 할 일
@@ -39,7 +39,7 @@ bool ui_settings_visible();
 // 모든 화면 위에 잠깐 뜨는 알림 (ms 뒤에 사라진다)
 void ui_toast(const char *text, uint32_t ms = 4000);
 
-// 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "shortcuts"(= "programs") / "keywords" / "pc" / "ask" (PC 에서 시험할 때)
+// 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "shortcuts"(= "programs") / "keywords" / "pc" / "ask" / "orca" (PC 에서 시험할 때)
 void ui_show(const char *name);
 // 지금 화면을 RGB565 로 찍는다 (진단용). *pixels 는 free 로 해제.
 bool ui_screenshot(uint16_t **pixels, int *w, int *h);

@@ -6,6 +6,7 @@
 #include "askpanel.h"
 #include "display.h"
 #include "history.h"
+#include "orcapanel.h"
 #include "pcpanel.h"
 #include "settings.h"
 
@@ -55,10 +56,10 @@ static JsonDocument last_usage(PSRAM_JSON);
 static char wifi_info[48] = "시작 중...";
 
 // 화면 구성: 홈(아이콘) / 사용량 / 정보. 상태줄은 늘 위에 있다. 카메라는 camera_ui 가 위에 덮는다.
-enum View { VIEW_HOME, VIEW_USAGE, VIEW_SETTINGS, VIEW_SHORTCUTS, VIEW_ASK };
+enum View { VIEW_HOME, VIEW_USAGE, VIEW_SETTINGS, VIEW_SHORTCUTS, VIEW_ASK, VIEW_ORCA };
 static View view = VIEW_HOME;  // 켤 때 첫 화면은 홈
 static lv_obj_t *home;
-#define HOME_ICONS 5
+#define HOME_ICONS 6
 static lv_obj_t *home_icons[HOME_ICONS];
 static lv_obj_t *ask_icon_sym;  // 홈의 질문 아이콘 (말할 수 없으면 흐리게)
 static int pc_tile = 0;  // 사용량 화면에서 PC 상태 페이지의 번호 (맨 마지막)
@@ -257,6 +258,7 @@ static void mic_btn_event(lv_event_t *e) {
 }
 
 void ui_refresh_talk() {
+  orcapanel_refresh();
   if (!mic_btn) return;
   int st = askpanel_talk_state();
   bool wide = display_width() > display_height();
@@ -318,6 +320,10 @@ static void home_icon_event(lv_event_t *e) {
       apply_view();
       break;
     case 4:
+      view = VIEW_ORCA;
+      apply_view();
+      break;
+    case 5:
       view = VIEW_SETTINGS;
       apply_view();
       break;
@@ -364,7 +370,8 @@ static void build_home() {
   add_home_icon(1, LV_SYMBOL_IMAGE, "카메라", lv_color_hex(0x3A7BD5), true);
   add_home_icon(2, LV_SYMBOL_AUDIO, "질문", lv_color_hex(0x2E7D5B), true);
   add_home_icon(3, LV_SYMBOL_KEYBOARD, "단축키", lv_color_hex(0x7E57C2), true);
-  add_home_icon(4, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
+  add_home_icon(4, LV_SYMBOL_EYE_OPEN, "ORCA", lv_color_hex(0x1E6FB8), true);
+  add_home_icon(5, LV_SYMBOL_SETTINGS, "설정", lv_color_hex(0x6B6F7A), true);
 
   // 설정 화면 (settings.cpp)
   settings_panel = lv_obj_create(lv_scr_act());
@@ -378,6 +385,8 @@ static void build_home() {
   pcpanel_build(lv_scr_act());
   // 말로 묻고 글로 답받기 (askpanel.cpp)
   askpanel_build(lv_scr_act());
+  // ORCA 세션 상태와 그 세션에 받아쓰기 (orcapanel.cpp)
+  orcapanel_build(lv_scr_act());
 }
 
 // 홈 아이콘 배치: 가로 화면 3x2, 세로 화면 2x3
@@ -389,6 +398,7 @@ static void layout_home() {
   lv_obj_set_pos(settings_panel, 0, STATUS_H);
   pcpanel_layout(0, STATUS_H, w, h);
   askpanel_layout(0, STATUS_H, w, h);
+  orcapanel_layout(0, STATUS_H, w, h);
   int cols = w > display_height() ? 3 : 2;
   int rows = (HOME_ICONS + cols - 1) / cols;
   int cw = w / cols, ch = h / rows;
@@ -417,6 +427,7 @@ static void apply_view() {
   pcpanel_show_shortcuts(view == VIEW_SHORTCUTS);
   update_pc_watch();
   askpanel_show(view == VIEW_ASK);
+  orcapanel_show(view == VIEW_ORCA);
   if (view == VIEW_SETTINGS) {
     settings_refresh();
     lv_obj_clear_flag(settings_panel, LV_OBJ_FLAG_HIDDEN);
@@ -773,6 +784,8 @@ void ui_show(const char *name) {
     return;
   } else if (strcmp(name, "ask") == 0) {
     view = VIEW_ASK;
+  } else if (strcmp(name, "orca") == 0) {
+    view = VIEW_ORCA;
   } else if (strncmp(name, "settings", 8) == 0) {
     view = VIEW_SETTINGS;
   }
