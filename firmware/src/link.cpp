@@ -254,6 +254,11 @@ void link_loop() {
       // 진단용: SD 카드의 사진을 모두 지운다 (케이블로 연결한 PC 에서만)
       // 진단용(USB 만): 일부러 프로그램을 멈춰 재시작 원인 기록이 되는지 본다
       if (doc["health_clear"] == true && from == LINK_USB) health_clear();
+      if (doc["hang_test"] == true && from == LINK_USB) {
+        // 진단용(USB 만): 일부러 멈춰서 감시 장치가 다시 켜는지 본다
+        Serial.println("[health] hang test");
+        for (;;) delay(1000);
+      }
       if (doc["crash_test"] == true && from == LINK_USB) {
         Serial.println("[health] crash test");
         Serial.flush();

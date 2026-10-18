@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "display.h"
+#include "health.h"
 #include "pins.h"
 
 static bool mounted = false;
@@ -77,6 +78,7 @@ int storage_clear(const char *dir) {
   int n = 0;
   for (const String &path : names) {
     if (SD.remove(path)) n++;
+    health_watch_feed();  // 파일이 많으면 오래 걸린다
   }
   Serial.printf("[sd] removed %d files in %s\n", n, dir);
   return n;
@@ -95,7 +97,10 @@ bool storage_recheck() {
 bool storage_format() {
   // 읽을 수 없는 카드(exFAT 등, 64GB 이상 카드의 기본 형식)만 FAT32 로 포맷한다. 이미 읽히는 카드는 건드리지 않는다.
   if (mounted) return true;
+  // 큰 카드는 포맷이 감시 장치의 한계시간보다 오래 걸릴 수 있다
+  health_watch_pause(true);
   bool ok = SD.begin(SD_CS, display_spi(), 20000000, "/sd", 5, true);
+  health_watch_pause(false);
   if (ok) {
     mounted = true;
     Serial.printf("[sd] formatted, %llu MB\n", SD.totalBytes() / (1024 * 1024));

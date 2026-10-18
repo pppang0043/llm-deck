@@ -67,7 +67,8 @@ class UsbTransport:
         port, self.serial_number = found
         try:
             # DTR/RTS 신호는 기본값(켜짐)으로 둔다. 끄고 열면 보드가 재시작된다.
-            ser = serial.Serial(port, 115200, timeout=0.5)
+            # 기기가 멈춰 받아 가지 않으면 쓰기가 끝없이 기다리므로 5초에서 끊고 다시 연결한다
+            ser = serial.Serial(port, 115200, timeout=0.5, write_timeout=5)
         except serial.SerialException:
             return False
         self.ser = ser

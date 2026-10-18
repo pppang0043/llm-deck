@@ -46,6 +46,8 @@ SAMPLE_RATE = 16000
 MAX_RECORD_SECONDS = 60
 # 기기 화면에 보낼 답의 최대 글자 수 (넘으면 뒤를 자른다)
 MAX_ANSWER_CHARS = 1500
+# 답을 기다리는 한계시간. 넘으면 CLI 를 끄고 기기에 실패로 알린다 (다음 질문은 새로 띄운 CLI 로)
+ANSWER_SECONDS = 180
 # 답이 나오는 동안 기기로 보내는 간격 (BLE 로도 따라갈 수 있게)
 PARTIAL_SECONDS = 0.5
 
@@ -176,6 +178,10 @@ class _Held:
         self.lock.release()
 
 
+class AnswerTimeout(Exception):
+    """답이 한계시간 안에 오지 않았다. (OSError 가 아니라서 _answer 가 다시 묻지 않는다)"""
+
+
 class Session:
     """백그라운드에 띄워 둔 CLI 하나. 질문을 넣으면 답이 나오는 대로 on_text 를 부른다."""
 
@@ -199,6 +205,30 @@ class Session:
             self.proc.stdin.flush()
         except (OSError, ValueError) as e:
             raise OSError(f"CLI 에 질문을 넣지 못했습니다: {e}") from e
+        # 답이 멈추면 CLI 를 꺼서 아래 읽기를 끝낸다
+        expired = threading.Event()
+
+        def stop() -> None:
+            expired.set()
+            self.proc.kill()
+
+        timer = threading.Timer(ANSWER_SECONDS, stop)
+        timer.daemon = True
+        timer.start()
+        try:
+            return self._read_answer(on_text)
+        except OSError:
+            if expired.is_set():
+                try:
+                    self.proc.wait(5)  # 다음 질문이 이 CLI 를 살아 있다고 보지 않게 끝날 때까지
+                except subprocess.TimeoutExpired:
+                    pass
+                raise AnswerTimeout(f"답이 {ANSWER_SECONDS // 60}분 안에 오지 않았습니다") from None
+            raise
+        finally:
+            timer.cancel()
+
+    def _read_answer(self, on_text) -> str:
         text = ""
         for line in self.proc.stdout:
             try:

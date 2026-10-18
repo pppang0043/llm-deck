@@ -26,9 +26,12 @@ import argparse
 import faulthandler
 import getpass
 import json
+import os
 import platform
 import socket
+import subprocess
 import sys
+import threading
 import time
 import tomllib
 import traceback
@@ -53,6 +56,9 @@ from transports import TRANSPORTS
 INTERVAL = 30
 INSTANCE_PORT = 4012  # 도우미가 하나만 돌게 하려고 잡는 PC 안쪽 포트
 RECORD_SECONDS = 10
+# 기기와 주고받는 바퀴가 이만큼 돌아오지 않으면 멈춘 것으로 보고 도우미를 다시 띄운다.
+# 한 바퀴는 보통 1초 안쪽이고, 인터넷이 느려 모든 요청이 한계시간(10~20초)을 채워도 몇 분이면 끝난다.
+HANG_SECONDS = 600
 
 
 def load_config() -> dict:
@@ -120,6 +126,43 @@ def _host_name() -> str:
     return name[:31] or "PC"
 
 
+class Watchdog:
+    """도우미가 어딘가에서 끝없이 기다리면(네트워크, 기기, 다른 프로그램) 스스로 다시 띄운다."""
+
+    def __init__(self):
+        self.beat_at = time.monotonic()
+        threading.Thread(target=self._watch, daemon=True).start()
+
+    def beat(self) -> None:
+        self.beat_at = time.monotonic()
+
+    def _watch(self) -> None:
+        while True:
+            time.sleep(30)
+            stalled = time.monotonic() - self.beat_at
+            if stalled < HANG_SECONDS:
+                continue
+            print(f"[watchdog] {stalled / 60:.0f}분 동안 멈춰 있어 도우미를 다시 띄웁니다. 멈춘 곳:")
+            try:
+                faulthandler.dump_traceback(sys.stdout, all_threads=True)
+                sys.stdout.flush()
+            except (OSError, ValueError, AttributeError):
+                pass
+            restart()
+
+
+def restart() -> None:
+    """같은 인자로 도우미를 새로 띄우고 이 도우미는 끝낸다."""
+    if sys.platform == "win32":
+        # Windows 의 자동 실행은 끝난 도우미를 다시 띄우지 않으므로 직접 띄운다. 새 도우미는 이 도우미가 끝나길 기다린다.
+        env = dict(os.environ, LLMDECK_RESTARTED="1")
+        subprocess.Popen([sys.executable, *sys.argv], env=env, cwd=Path(__file__).parent,
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+        os._exit(1)
+    # Mac, Linux: 같은 프로세스 자리에서 새로 시작한다 (Mac 앱 실행기는 그대로 기다린다)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 _instance_lock = None
 
 
@@ -130,13 +173,19 @@ def claim_device() -> bool:
     기기를 "찾지 못했다"고만 나온다. 그 대신 무엇이 문제인지 알려 주려고 PC 안에서만 쓰는 포트를 잡는다.
     """
     global _instance_lock
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(("127.0.0.1", INSTANCE_PORT))
-        sock.listen(1)
-    except OSError:
-        sock.close()
-        return False
+    # 멈춰서 다시 띄운 도우미는 앞 도우미가 끝나 포트를 놓을 때까지 잠깐 기다린다
+    tries = 20 if os.environ.pop("LLMDECK_RESTARTED", "") else 1
+    for attempt in range(tries):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", INSTANCE_PORT))
+            sock.listen(1)
+            break
+        except OSError:
+            sock.close()
+            if attempt == tries - 1:
+                return False
+            time.sleep(0.5)
     _instance_lock = sock
     return True
 
@@ -284,7 +333,9 @@ def main() -> None:
     transport = None
     first = True
     sent_mic = True
+    watchdog = Watchdog()
     while True:
+        watchdog.beat()
         try:
             if transport is None:
                 transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
@@ -395,6 +446,7 @@ def main() -> None:
             if transport:
                 # 다음 전송까지 기다리되, 연결이 끊기면(기기를 껐다 켬, 블루투스 끊김) 바로 다시 연결한다
                 for _ in range(INTERVAL * 2):
+                    watchdog.beat()
                     if not transport.connected():
                         print(f"[device] {transport.name} 연결이 끊겼습니다. 다시 연결합니다.")
                         transport.close()

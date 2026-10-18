@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
 #include <time.h>
 
 // 재시작(패닉, 감시 장치, 소프트웨어 재시작)해도 지워지지 않는 곳. 전원을 새로 넣으면 지워진다.
@@ -11,7 +12,11 @@ RTC_NOINIT_ATTR static uint32_t rtc_magic;
 RTC_NOINIT_ATTR static uint32_t rtc_uptime_s;
 RTC_NOINIT_ATTR static uint32_t rtc_min_internal;
 
+// loop() 한 바퀴의 한계시간. 평소에는 10ms, 화면을 새로 그릴 때도 0.2초 안쪽이다.
+#define LOOP_LIMIT_MS 20000
+
 static Preferences prefs;
+static bool watching = false;
 static esp_reset_reason_t reason;
 static bool error_reset = false;
 static bool when_saved = false;
@@ -142,4 +147,29 @@ void health_clear() {
   error_reset = false;
   prefs.clear();
   Serial.println("[health] error record cleared");
+}
+
+void health_watch_start() {
+  // 기본 감시 장치는 CPU0 의 쉬는 작업만 본다(5초). loop() 가 도는 작업도 더해 한계시간을 같이 맞춘다.
+  esp_task_wdt_config_t config = {
+      .timeout_ms = LOOP_LIMIT_MS,
+      .idle_core_mask = 1 << 0,
+      .trigger_panic = true,
+  };
+  esp_task_wdt_reconfigure(&config);
+  watching = esp_task_wdt_add(NULL) == ESP_OK;
+  Serial.printf("[health] loop watchdog %s (%us)\n", watching ? "on" : "failed", LOOP_LIMIT_MS / 1000);
+}
+
+void health_watch_feed() {
+  if (watching) esp_task_wdt_reset();
+}
+
+void health_watch_pause(bool paused) {
+  if (!watching) return;
+  if (paused) {
+    esp_task_wdt_delete(NULL);
+  } else {
+    esp_task_wdt_add(NULL);
+  }
 }

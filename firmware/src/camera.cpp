@@ -253,7 +253,10 @@ void camera_set_video(bool on, void (*frame_cb)(const uint8_t *jpg, size_t len))
     xTaskNotifyGive(capture_task_handle);
   } else {
     capture_run = false;
-    while (capture_active) delay(5);
+    // 찍던 장을 마칠 때까지 기다리되, 카메라가 대답하지 않으면 2초 뒤 그냥 넘어간다
+    uint32_t waited = millis();
+    while (capture_active && millis() - waited < 2000) delay(5);
+    if (capture_active) Serial.println("[camera] capture did not stop in 2s");
     on_frame = nullptr;
     video_mode = false;
     s->set_framesize(s, preview_size);

@@ -9,6 +9,7 @@
 #include <WiFiMulti.h>
 
 #include "psram_json.h"
+#include "health.h"
 #include "link.h"
 #include "mic.h"
 #include "photo.h"
@@ -87,6 +88,8 @@ static void start_ota() {
     ui_toast("무선으로 펌웨어를\n업데이트하는 중...", 120000);
   });
   ArduinoOTA.onEnd([] { Serial.println("[ota] done, restarting"); });
+  // 받는 동안은 loop() 로 돌아오지 않으므로 받은 만큼 감시 장치에 알린다 (끊기면 한계시간 뒤 다시 켜진다)
+  ArduinoOTA.onProgress([](unsigned int, unsigned int) { health_watch_feed(); });
   ArduinoOTA.onError([](ota_error_t e) {
     Serial.printf("[ota] failed: %d\n", (int)e);
     ui_toast("무선 업데이트 실패", 3000);

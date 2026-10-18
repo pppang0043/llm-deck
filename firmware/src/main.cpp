@@ -285,10 +285,12 @@ void setup() {
   video_init();
   mem_log("video");
   speaker_init();
+  health_watch_start();
   Serial.println("[main] setup done");
 }
 
 void loop() {
+  health_watch_feed();
   // 연결이 다 붙은 뒤(30초)와 그 뒤 5분마다 남은 내부 RAM 을 적는다
   static uint32_t mem_ms = 0;
   if ((!mem_ms && millis() > 30000) || (mem_ms && millis() - mem_ms > 300000)) {
