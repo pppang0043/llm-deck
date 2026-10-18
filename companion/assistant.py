@@ -57,6 +57,10 @@ EXTRA_DIRS = [
 ]
 
 
+# 받아 적을 때 앞 문맥으로 주는 낱말들. 이런 말을 더 잘 알아듣는다 (config 의 prompt 로 바꿀 수 있다)
+DEFAULT_PROMPT = "받아쓰기, 펌웨어, 빌드, 커밋, 깃, 세션, 오르카, 클로드, 기기, 배터리, 코드, 스킬."
+
+
 def _which(name: str) -> str | None:
     path = shutil.which(name)
     if path:
@@ -462,8 +466,10 @@ class Assistant:
                 start = time.monotonic()
                 # ORCA 세션에 받아쓰기할 때는 / 명령 이름을 영어로 알아듣게 돕는다
                 hints = self.orca.hotwords() if self.dictate and self.orca_pick and self.orca else None
-                segments, _ = self.model.transcribe(pcm, language=self.cfg.get("language", "ko"), beam_size=1,
-                                                    vad_filter=True, hotwords=hints)
+                segments, _ = self.model.transcribe(pcm, language=self.cfg.get("language", "ko"),
+                                                    beam_size=self.cfg.get("beam_size", 5), vad_filter=True,
+                                                    initial_prompt=self.cfg.get("prompt", DEFAULT_PROMPT) or None,
+                                                    hotwords=hints)
                 question = "".join(s.text for s in segments).strip()
                 kind = "받아쓰기" if self.dictate else "질문"
                 print(f"[assistant] {kind} ({len(pcm) / SAMPLE_RATE:.1f}초 녹음, {time.monotonic() - start:.1f}초): {question}")

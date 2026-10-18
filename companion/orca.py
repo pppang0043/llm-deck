@@ -253,6 +253,11 @@ class Orca:
 
     # --- 세션 고르기와 입력 ---
 
+    def on_event(self, event: dict) -> None:
+        """기기에서 세션 줄을 눌렀을 때: {"orca": "activate", "id": 짧은 id}. 받아쓰기({"ask": ...})는 assistant.py 가 맡는다."""
+        if event.get("orca") == "activate" and "ask" not in event and isinstance(event.get("id"), str):
+            threading.Thread(target=self.activate, args=(event["id"],), daemon=True).start()
+
     def activate(self, short: str) -> str | None:
         """세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다. 잘 되면 terminal handle."""
         handle = self.handles.get(short)

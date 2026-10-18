@@ -24,6 +24,7 @@ struct Session {
 };
 static Session sessions[MAX_ROWS];
 static int count = 0;
+static char active_id[12] = "";  // 이 기기에서 마지막으로 띄운 세션 (한 번 더 누르면 받아쓰기)
 static bool orca_ok = false;   // PC 에서 ORCA 를 읽었는지
 static bool received = false;  // PC 가 한 번이라도 보냈는지
 
@@ -69,16 +70,30 @@ static bool dictating_to(const Session &s) {
   return askpanel_dictating() || askpanel_dictate_step() != DICTATE_IDLE;
 }
 
+// 처음 누르면 그 세션을 ORCA 에서 앞으로 띄우기만 한다. 띄운 세션을 다시 누르면 받아쓰기.
 static void row_event(lv_event_t *e) {
   int i = (intptr_t)lv_event_get_user_data(e);
   if (i >= count) return;
   const Session &s = sessions[i];
+  bool busy = askpanel_dictating() || askpanel_dictate_step() == DICTATE_WRITING;
+  if (!busy && strcmp(active_id, s.id) != 0) {
+    if (!pc_connected()) {
+      ui_toast("연결된 PC가 없습니다", 2000);
+      return;
+    }
+    char json[64];
+    snprintf(json, sizeof(json), "{\"orca\":\"activate\",\"id\":\"%s\"}", s.id);
+    link_send_event(json);
+    snprintf(active_id, sizeof(active_id), "%s", s.id);
+    orcapanel_refresh();
+    return;
+  }
   if (askpanel_dictating()) {
     // 같은 세션을 다시 누르면 끝내고 그 세션에 넣는다
     if (strcmp(askpanel_dictate_target(), s.id) == 0) {
       askpanel_release();
     } else {
-      ui_toast("받아쓰기 중입니다\n듣는 중인 버튼을 다시 눌러 끝내 주세요", 2500);
+      ui_toast("받아쓰기 중입니다\n빨간 줄을 눌러 끝내 주세요", 2500);
     }
     return;
   }
@@ -98,7 +113,7 @@ void orcapanel_refresh() {
   } else if (!orca_ok) {
     lv_label_set_text(state_lbl, "PC에서 ORCA를 찾지 못함");
   } else {
-    lv_label_set_text(state_lbl, "눌러 말하고 다시 누르면 입력");
+    lv_label_set_text(state_lbl, "누르면 열기, 한 번 더 누르면 받아쓰기");
   }
   for (int i = 0; i < MAX_ROWS; i++) {
     Row &r = rows[i];
@@ -113,13 +128,17 @@ void orcapanel_refresh() {
     lv_obj_set_style_bg_color(r.badge, lv_color_hex(l.color), 0);
     lv_label_set_text(r.title, s.title);
     bool mine = dictating_to(s);
+    bool active = strcmp(active_id, s.id) == 0;
     lv_obj_set_style_bg_color(r.btn, mine ? COLOR_TALKING : COLOR_ROW, 0);
+    lv_obj_set_style_border_width(r.btn, active && !mine ? 2 : 0, 0);
     lv_obj_set_style_text_color(r.sub, mine ? lv_color_white() : COLOR_DIM, 0);
     if (mine) {
       int step = askpanel_dictate_step();
       lv_label_set_text(r.sub, !askpanel_dictating()          ? "받아 적어 넣는 중..."
                                : step == DICTATE_PREPARING ? "마이크 준비 중..."
                                                            : LV_SYMBOL_AUDIO " 말하세요... 다시 누르면 입력");
+    } else if (active) {
+      lv_label_set_text(r.sub, LV_SYMBOL_AUDIO " 한 번 더 누르면 받아쓰기");
     } else {
       lv_label_set_text(r.sub, s.project);
     }
@@ -172,6 +191,7 @@ void orcapanel_build(lv_obj_t *parent) {
     lv_obj_set_size(r.btn, lv_pct(100), ROW_H);
     lv_obj_set_style_radius(r.btn, 10, 0);
     lv_obj_set_style_shadow_width(r.btn, 0, 0);
+    lv_obj_set_style_border_color(r.btn, COLOR_ACCENT, 0);
     lv_obj_set_style_pad_hor(r.btn, 6, 0);
     lv_obj_set_style_pad_ver(r.btn, 5, 0);
     lv_obj_add_event_cb(r.btn, row_event, LV_EVENT_CLICKED, (void *)(intptr_t)i);

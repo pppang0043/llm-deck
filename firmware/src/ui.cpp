@@ -389,7 +389,7 @@ static void build_home() {
   orcapanel_build(lv_scr_act());
 }
 
-// 홈 아이콘 배치: 가로 화면 3x2, 세로 화면 2x3
+// 홈 아이콘 배치: 가로 화면 3x2, 세로 화면 2x3. 가로 화면에서는 카메라와 ORCA 자리를 바꾼다.
 static void layout_home() {
   int w = display_width(), h = display_height() - STATUS_H;
   lv_obj_set_size(home, w, h);
@@ -403,8 +403,9 @@ static void layout_home() {
   int rows = (HOME_ICONS + cols - 1) / cols;
   int cw = w / cols, ch = h / rows;
   for (int i = 0; i < HOME_ICONS; i++) {
+    int slot = cols == 3 && (i == 1 || i == 4) ? 5 - i : i;
     lv_obj_set_size(home_icons[i], cw, 82);
-    lv_obj_set_pos(home_icons[i], (i % cols) * cw, (i / cols) * ch + (ch - 82) / 2);
+    lv_obj_set_pos(home_icons[i], (slot % cols) * cw, (slot / cols) * ch + (ch - 82) / 2);
   }
 }
 
@@ -839,7 +840,6 @@ void ui_toast(const char *text, uint32_t ms) {
   if (!toast) {
     // 모든 화면(카메라 포함) 위에 뜨는 알림
     toast = lv_label_create(lv_layer_sys());
-    lv_obj_set_style_text_font(toast, &font_ko_20, 0);
     lv_obj_set_style_text_color(toast, lv_color_white(), 0);
     lv_obj_set_style_text_align(toast, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_bg_color(toast, lv_color_hex(0x2A3038), 0);
@@ -850,6 +850,18 @@ void ui_toast(const char *text, uint32_t ms) {
     lv_obj_set_style_pad_all(toast, 12, 0);
     toast_timer = lv_timer_create(toast_hide, ms, NULL);
   }
+  // 화면 폭에 맞춘다: 큰 글자로 한 줄이 넘치면 작은 글자로, 그래도 넘치면 줄을 바꾼다
+  int max_w = lv_disp_get_hor_res(NULL) - 16 - 2 * (12 + 2);
+  const lv_font_t *font = &font_ko_20;
+  lv_point_t size;
+  lv_txt_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  if (size.x > max_w) {
+    font = &font_ko_14;
+    lv_txt_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  }
+  lv_obj_set_style_text_font(toast, font, 0);
+  lv_label_set_long_mode(toast, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(toast, size.x > max_w ? max_w + 2 * (12 + 2) : LV_SIZE_CONTENT);
   lv_label_set_text(toast, text);
   lv_obj_clear_flag(toast, LV_OBJ_FLAG_HIDDEN);
   lv_obj_align(toast, LV_ALIGN_CENTER, 0, 0);

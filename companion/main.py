@@ -279,6 +279,7 @@ def main() -> None:
         keys.on_event(event)
         pc.on_event(event)
         ask.on_event(event)
+        sessions.on_event(event)
 
     transport = None
     first = True
