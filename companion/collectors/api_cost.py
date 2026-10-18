@@ -198,16 +198,21 @@ def collect(cfg: dict) -> dict | None:
     if not services:
         return None
 
-    rows = []
+    # 회사별로 나란히 한 표에 (API Billing 화면과 같은 모양). 스크롤 없이 한 화면에 들어가게 한다.
+    header, day_row, month_row = [""], ["오늘"], [f"{now.month}월"]
     total = 0.0
     unknown = set()
     for name, records in services:
         day_usd, month_usd, missing = _sum(records, today, month)
         total += month_usd
         unknown |= missing
-        rows += [[f"{name} 오늘", fmt_usd(day_usd)], [f"{name} {now.month}월", fmt_usd(month_usd)]]
+        header.append(name)
+        day_row.append(fmt_usd(day_usd))
+        month_row.append(fmt_usd(month_usd))
 
-    sub = f"{now.month}월에 쓴 양을 API 단가로 환산 (이 PC 기록만)"
+    # 설명 줄을 빼야 가로 화면에 다 들어간다. 이 PC 기록만 센다는 것은 시각 옆에 적는다.
+    page = {"name": "API Cost", "note": now.strftime("이 PC · %H:%M"), "headline": fmt_usd(total),
+            "table": [header, month_row, day_row]}
     if unknown:
-        sub += ". 단가 모름: " + ", ".join(sorted(unknown))
-    return {"name": "API Cost", "note": now.strftime("%H:%M"), "headline": fmt_usd(total), "sub": sub, "rows": rows}
+        page["sub"] = "단가 모름: " + ", ".join(sorted(unknown))
+    return page
