@@ -11,6 +11,9 @@ FRAME_AUDIO = 1
 FRAME_EVENT = 2
 FRAME_PHOTO = 3
 FRAME_VIDEO = 4
+FRAME_MIRROR = 5  # 미러링 화면 조각 (mirror.py)
+# 미러링 화면 조각을 받을 곳 (main.py 가 mirror.Mirror.on_frame 을 넣는다)
+mirror_sink = None
 MAX_FRAME = 2048
 VIDEO_HEAD = struct.Struct("<IIII")  # 장 번호, 위치, 장 크기, 시각(ms)
 
@@ -26,6 +29,9 @@ def dispatch(transport, kind: int, body: bytes) -> None:
     elif kind == FRAME_VIDEO:
         no, offset, total, ms = VIDEO_HEAD.unpack_from(body)
         transport.on_video(no, offset, total, ms, body[VIDEO_HEAD.size :])
+    elif kind == FRAME_MIRROR:
+        if mirror_sink:
+            mirror_sink(body)
     elif kind == FRAME_EVENT:
         try:
             transport.on_event(json.loads(body))

@@ -55,6 +55,8 @@ class UsbTransport:
         self.serial_number = ""
         self.opened_at = 0.0
         self.confirmed = False
+        # 메인 루프와 미러링 창(누르기)이 따로 보내므로 한 줄씩 차례로 쓴다
+        self._send_lock = threading.Lock()
 
     def _find_port(self) -> str | None:
         found = find_port(self.port_name)
@@ -103,7 +105,8 @@ class UsbTransport:
             print(f"[USB] {self.ser.port if self.ser else ''} 는 LLM Deck 이 아닌 것 같아 놓아줍니다.")
             raise OSError("not an LLM Deck")
         try:
-            self.ser.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
+            with self._send_lock:
+                self.ser.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
         except (serial.SerialException, AttributeError) as e:
             raise OSError(str(e)) from e
 

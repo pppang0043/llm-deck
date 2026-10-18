@@ -21,6 +21,7 @@
 #include "camera.h"
 #include "display.h"
 #include "health.h"
+#include "mirror.h"
 #include "pcpanel.h"
 #include "camera_ui.h"
 #include "mic.h"
@@ -284,6 +285,11 @@ void link_loop() {
         serializeJson(services, shown);
         Serial.printf("[link] usage via %s: %u services (%s)\n", link_tag(from), (unsigned)services.size(),
                       doc["host"] | "?");
+      }
+      // 미러링 창 (USB 만)
+      if (doc["mirror"].is<bool>() && from == LINK_USB) mirror_keep(doc["mirror"]);
+      if (doc["touch"].is<JsonObjectConst>() && from == LINK_USB) {
+        display_remote_touch(doc["touch"]["x"] | 0, doc["touch"]["y"] | 0, doc["touch"]["down"] | false);
       }
       if (doc["screenshot"] == true) {
         // 진단용: 지금 화면을 사진처럼 PC 로 보낸다 (같이 온 목록, 알림까지 그린 뒤)

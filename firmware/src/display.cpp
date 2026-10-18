@@ -30,6 +30,20 @@ static volatile uint32_t touched_ms = 0;
 static volatile bool sleeping = false;
 static bool swallow = false;
 
+// 미러링: 화면에 보낸 그림을 PSRAM 에 똑같이 모아 둔다 (켜 둔 동안만. 다시 그리지 않으므로 화면이 느려지지 않는다)
+static uint16_t *shadow = nullptr;
+static bool shadow_dirty = false;
+// PC 에서 누른 것 (미러링 창). 손가락처럼 터치 읽기 때마다 하나씩 꺼내 LVGL 에 알린다.
+struct RemoteTouch {
+  int16_t x, y;
+  bool down;
+};
+#define REMOTE_QUEUE 16
+static RemoteTouch remote_queue[REMOTE_QUEUE];
+static uint8_t remote_head = 0, remote_tail = 0;
+static RemoteTouch remote_now;
+static bool remote_active = false;  // 누르는 중이거나, 뗀 것을 아직 LVGL 에 알리지 않았다
+
 static bool touch_read_reg(uint8_t reg, uint8_t *data, uint8_t len) {
   Wire.beginTransmission(CST816_ADDR);
   Wire.write(reg);
@@ -55,6 +69,13 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
   bus.beginTransaction(SPISettings(80000000, MSBFIRST, SPI_MODE0));
   gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)color_p, w, h);
   bus.endTransaction();
+  if (shadow) {
+    int dw = display_width();
+    for (uint32_t row = 0; row < h; row++) {
+      memcpy(shadow + (area->y1 + row) * dw + area->x1, (uint16_t *)color_p + row * w, w * 2);
+    }
+    shadow_dirty = true;
+  }
   lv_disp_flush_ready(drv);
 }
 
@@ -121,6 +142,28 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   bool read_ok = touch_read_reg(CST816_REG_TOUCH, raw, sizeof(raw));
   watch_bus(read_ok);
   bool down = read_ok && raw[0] > 0;
+  // 손가락이 없으면 PC 에서 누른 것을 쓴다 (좌표는 이미 지금 화면 방향 기준)
+  bool remote = false;
+  if (!down) {
+    if (!remote_active && remote_head != remote_tail) {
+      remote_now = remote_queue[remote_tail];
+      remote_tail = (remote_tail + 1) % REMOTE_QUEUE;
+      remote_active = true;
+    } else if (remote_active && !remote_now.down) {
+      remote_active = false;  // 뗀 것을 지난번에 알렸다
+      if (remote_head != remote_tail) {
+        remote_now = remote_queue[remote_tail];
+        remote_tail = (remote_tail + 1) % REMOTE_QUEUE;
+        remote_active = true;
+      }
+    } else if (remote_active && remote_head != remote_tail) {
+      // 누르는 중에 다음 것(끌기, 떼기)이 왔다
+      remote_now = remote_queue[remote_tail];
+      remote_tail = (remote_tail + 1) % REMOTE_QUEUE;
+    }
+    remote = remote_active;
+    down = remote && remote_now.down;
+  }
   if (down) touched_ms = millis();
   if (down && sleeping) swallow = true;
   if (swallow) {
@@ -129,7 +172,11 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     data->state = LV_INDEV_STATE_RELEASED;
     return;
   }
-  if (down) {
+  if (remote) {
+    data->point.x = remote_now.x;
+    data->point.y = remote_now.y;
+    data->state = down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+  } else if (down) {
     // 터치 칩은 항상 세로(돌리지 않은) 기준 좌표를 주므로, 화면을 돌린 만큼 바꿔 준다
     int px = ((raw[1] & 0x0F) << 8) | raw[2];
     int py = ((raw[3] & 0x0F) << 8) | raw[4];
@@ -245,4 +292,36 @@ void display_set_sleeping(bool on) {
 
 void display_poke() {
   touched_ms = millis();
+}
+
+void display_mirror(bool on) {
+  if (on == (shadow != nullptr)) return;
+  if (!on) {
+    free(shadow);
+    shadow = nullptr;
+    return;
+  }
+  shadow = (uint16_t *)ps_malloc(LCD_W * LCD_H * 2);
+  if (!shadow) return;
+  memset(shadow, 0, LCD_W * LCD_H * 2);
+  // 처음 한 장을 채우려고 화면 전체를 다시 그린다
+  lv_obj_invalidate(lv_scr_act());
+}
+
+bool display_mirror_take(uint16_t *out, int *w, int *h) {
+  if (!shadow || !shadow_dirty) return false;
+  *w = display_width();
+  *h = display_height();
+  memcpy(out, shadow, *w * *h * 2);
+  shadow_dirty = false;
+  return true;
+}
+
+void display_remote_touch(int x, int y, bool down) {
+  uint8_t next = (remote_head + 1) % REMOTE_QUEUE;
+  if (next == remote_tail) return;  // 넘치면 버린다
+  x = constrain(x, 0, display_width() - 1);
+  y = constrain(y, 0, display_height() - 1);
+  remote_queue[remote_head] = {(int16_t)x, (int16_t)y, down};
+  remote_head = next;
 }

@@ -23,6 +23,7 @@
 #include "pcpanel.h"
 #include "speaker.h"
 #include "video.h"
+#include "mirror.h"
 #include "pins.h"
 #include "ui.h"
 #include "usb_link.h"
@@ -283,6 +284,7 @@ void setup() {
   photo_init();
   mem_log("photo");
   video_init();
+  mirror_init();
   mem_log("video");
   speaker_init();
   health_watch_start();
@@ -312,6 +314,7 @@ void loop() {
   show_clock();
   camera_ui_loop();
   sd_video_loop();
+  mirror_loop();
   health_loop();
   history_loop();
   pcpanel_loop();

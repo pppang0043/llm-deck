@@ -104,6 +104,7 @@ uv run main.py --saver             # 화면 보호기를 지금 띄워 보기 (�
 uv run main.py --rotate            # 화면 90도 돌리기 (돌리기 버튼과 같다)
 uv run main.py --sd-clear          # 기기 SD 카드의 사진 모두 지우기 (USB)
 uv run main.py --screenshot        # 기기 화면을 찍어 사진 폴더에 저장 (--view home|usage|info|settings 와 함께)
+uv run main.py --mirror            # 미러링 창: 브라우저에서 기기 화면을 보고 클릭·끌기로 조작 (도우미가 켜져 있고 USB 연결일 때)
 uv run main.py --links ble=off     # 연결 방식 켜고 끄기 (USB 로만, USB 를 꺼 둬도 받는다)
 uv run main.py --camera-mount 0m   # 카메라 방향 (0~3, 좌우 반전이면 m)
 uv run main.py --battery 4.12      # 멀티미터로 잰 배터리 전압으로 보정 (0 이면 보정 지움)

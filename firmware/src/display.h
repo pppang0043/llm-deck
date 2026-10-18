@@ -24,6 +24,13 @@ void display_poke();
 // 절전으로 화면이 어둡거나 꺼져 있는 동안 true. 이때의 첫 터치는 깨우기만 하고 버튼을 누르지 않는다.
 void display_set_sleeping(bool on);
 
+// 미러링 (PC 의 미러링 창이 열려 있는 동안 켠다, mirror.h). 켜면 화면에 그리는 그림을 PSRAM 에 모아 둔다.
+void display_mirror(bool on);
+// 지난번 뒤로 화면이 바뀌었으면 지금 화면을 out (320x240x2 바이트 이상) 에 복사한다. 픽셀은 LVGL 색 형식(RGB565).
+bool display_mirror_take(uint16_t *out, int *w, int *h);
+// PC 에서 누른 것. 좌표는 지금 화면 방향 기준. 누르기, 끌기, 떼기를 차례로 넣는다.
+void display_remote_touch(int x, int y, bool down);
+
 // 화면 밝기 (10~100%)
 void display_set_brightness(uint8_t pct);
 
