@@ -412,7 +412,11 @@ class Assistant:
             name = str(local)
         print(f"[assistant] 음성 인식 모델 불러오는 중 ({name})")
         try:
-            self.model = WhisperModel(name, device="cpu", compute_type="int8")
+            try:
+                # 받아 둔 모델이 있으면 인터넷에 묻지 않는다 (Hugging Face 확인이 응답 없이 멈춘 적이 있다)
+                self.model = WhisperModel(name, device="cpu", compute_type="int8", local_files_only=True)
+            except Exception:
+                self.model = WhisperModel(name, device="cpu", compute_type="int8")
         except Exception as e:
             print(f"[assistant] 음성 인식 모델을 불러오지 못했습니다 ({name}): {e}")
             print(f"[assistant] 인터넷으로 받을 수 없으면, 다른 PC 에서 받은 모델 폴더를 {local} 에 복사하세요 (README.txt 참고)")

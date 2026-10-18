@@ -5,7 +5,7 @@
 
 // ORCA 화면: PC 의 ORCA 에 열린 세션들과 작업 상태 (PC 도우미가 10초마다 읽어 바뀌면 보낸다, companion/orca.py).
 // 세션을 누르면 PC 가 그 세션을 앞으로 띄우고 받아쓰기를 시작한다. 다시 누르면 받아 적은 글을 그 세션에 넣는다 (Enter 없이).
-//   PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태, "w": 마지막 요청}]}}
+//   PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태}]}}
 //   기기 -> PC: {"ask": "start", "mode": "dictate", "orca": id} ... {"ask": "stop"} (askpanel.cpp)
 
 void orcapanel_build(lv_obj_t *parent);

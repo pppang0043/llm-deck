@@ -13,15 +13,14 @@ LV_FONT_DECLARE(font_ko_20);
 #define COLOR_ROW lv_color_hex(0x1C232B)
 #define COLOR_TALKING lv_color_hex(0xC8372D)
 #define MAX_ROWS 8  // companion/orca.py 의 MAX_SESSIONS
-#define ROW_H 54
-#define BADGE_W 64
+#define ROW_H 50
+#define BADGE_W 66
 
 struct Session {
   char id[12];
   char title[96];
   char project[64];
   char state[16];
-  char what[160];
 };
 static Session sessions[MAX_ROWS];
 static int count = 0;
@@ -99,7 +98,7 @@ void orcapanel_refresh() {
   } else if (!orca_ok) {
     lv_label_set_text(state_lbl, "PC에서 ORCA를 찾지 못함");
   } else {
-    lv_label_set_text(state_lbl, "누르고 말하면 그 세션에 입력");
+    lv_label_set_text(state_lbl, "눌러 말하고 다시 누르면 입력");
   }
   for (int i = 0; i < MAX_ROWS; i++) {
     Row &r = rows[i];
@@ -121,8 +120,6 @@ void orcapanel_refresh() {
       lv_label_set_text(r.sub, !askpanel_dictating()          ? "받아 적어 넣는 중..."
                                : step == DICTATE_PREPARING ? "마이크 준비 중..."
                                                            : LV_SYMBOL_AUDIO " 말하세요... 다시 누르면 입력");
-    } else if (s.what[0]) {
-      lv_label_set_text_fmt(r.sub, "%s · %s", s.project, s.what);
     } else {
       lv_label_set_text(r.sub, s.project);
     }
@@ -146,7 +143,6 @@ void orcapanel_set(JsonObjectConst orca) {
     snprintf(s.title, sizeof(s.title), "%s", item["t"] | "");
     snprintf(s.project, sizeof(s.project), "%s", item["p"] | "");
     snprintf(s.state, sizeof(s.state), "%s", item["s"] | "idle");
-    snprintf(s.what, sizeof(s.what), "%s", item["w"] | "");
   }
   orcapanel_refresh();
 }
@@ -176,7 +172,8 @@ void orcapanel_build(lv_obj_t *parent) {
     lv_obj_set_size(r.btn, lv_pct(100), ROW_H);
     lv_obj_set_style_radius(r.btn, 10, 0);
     lv_obj_set_style_shadow_width(r.btn, 0, 0);
-    lv_obj_set_style_pad_all(r.btn, 6, 0);
+    lv_obj_set_style_pad_hor(r.btn, 6, 0);
+    lv_obj_set_style_pad_ver(r.btn, 5, 0);
     lv_obj_add_event_cb(r.btn, row_event, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     // 작업 상태 (색으로도 구분)
     r.badge = lv_obj_create(r.btn);
@@ -185,16 +182,16 @@ void orcapanel_build(lv_obj_t *parent) {
     lv_obj_set_style_radius(r.badge, 6, 0);
     lv_obj_set_style_bg_opa(r.badge, LV_OPA_COVER, 0);
     lv_obj_clear_flag(r.badge, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(r.badge, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(r.badge, LV_ALIGN_LEFT_MID, 0, 0);
     r.badge_lbl = add_label(r.badge, "", &font_ko_14, lv_color_white());
     lv_obj_center(r.badge_lbl);
     r.title = add_label(r.btn, "", &font_ko_14, lv_color_white());
     lv_label_set_long_mode(r.title, LV_LABEL_LONG_DOT);
-    lv_obj_align(r.title, LV_ALIGN_TOP_LEFT, BADGE_W + 6, 1);
-    // 프로젝트 · 마지막으로 시킨 일 (받아쓰기 중이면 진행 상황)
+    lv_obj_align(r.title, LV_ALIGN_TOP_LEFT, BADGE_W + 8, 0);
+    // 프로젝트 (받아쓰기 중이면 진행 상황)
     r.sub = add_label(r.btn, "", &font_ko_14, COLOR_DIM);
     lv_label_set_long_mode(r.sub, LV_LABEL_LONG_DOT);
-    lv_obj_align(r.sub, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_align(r.sub, LV_ALIGN_BOTTOM_LEFT, BADGE_W + 8, 0);
     lv_obj_add_flag(r.btn, LV_OBJ_FLAG_HIDDEN);
   }
   empty_lbl = add_label(list, "ORCA에 열린 세션이 없습니다", &font_ko_14, COLOR_DIM);
@@ -213,8 +210,8 @@ void orcapanel_layout(int x, int y, int w, int h) {
   // 버튼 안 글자 폭 (버튼 안쪽 여백 6씩)
   int row_w = inner_w - 12;
   for (Row &r : rows) {
-    lv_obj_set_width(r.title, row_w - BADGE_W - 6);
-    lv_obj_set_width(r.sub, row_w);
+    lv_obj_set_width(r.title, row_w - BADGE_W - 8);
+    lv_obj_set_width(r.sub, row_w - BADGE_W - 8);
   }
 }
 

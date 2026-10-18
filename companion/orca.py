@@ -1,7 +1,7 @@
 """ORCA 에 열린 세션들의 작업 상태를 기기로 보내고, 기기에서 고른 세션에 받아쓰기한 글을 입력한다.
 
   - 10초마다 orca CLI 로 세션 목록과 상태를 읽는다 (orca worktree ps, orca terminal list). 바뀌었을 때만 기기로 보낸다.
-      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태, "w": 마지막 요청}]}}
+      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태}]}}
       s: working(작업 중) / waiting(입력 기다림) / permission(권한 요청) / blocked / done / idle / shell(AI 없는 터미널)
   - 기기에서 세션을 누르면 {"ask": "start", "mode": "dictate", "orca": id}: 그 세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다.
     받아 적은 글은 커서 자리가 아니라 그 세션 터미널에 직접 넣는다 (orca terminal send). Enter 는 누르지 않는다.
@@ -227,13 +227,11 @@ class Orca:
             if agent:
                 # state 는 안에서 돌린 하위 작업까지 섞인 값이라, 세션 자체의 상태(mainAgent)를 먼저 본다
                 state = (agent.get("mainAgent") or {}).get("state") or agent.get("state") or "idle"
-                what = (agent.get("prompt") or "").strip()
             else:
                 state = "working" if term.get("agentIdentity") else "shell"
-                what = ""
             path = term.get("worktreePath") or ""
             rows.append({"id": short, "t": _short_title(term.get("title"))[:30], "p": Path(path).name[:20],
-                         "s": state, "w": re.sub(r"\s+", " ", what)[:48]})
+                         "s": state})
             handles[short] = handle
         # AI 세션이 먼저, 그다음 AI 없는 터미널
         rows.sort(key=lambda r: r["s"] == "shell")
