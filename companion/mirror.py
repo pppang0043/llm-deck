@@ -1,11 +1,12 @@
-"""기기 화면 미러링. 이 PC 의 브라우저에서 기기 화면을 보고, 눌러서 기기를 조작한다 (USB 로 연결했을 때만).
+"""기기 화면 미러링. 이 PC 의 브라우저에서 기기 화면을 보고, 눌러서 기기를 조작한다 (USB 나 Wi-Fi 로 연결했을 때).
 
 도우미가 이 PC 안에서만 열리는 작은 웹 서버(127.0.0.1)를 띄운다. 주소에는 도우미를 켤 때마다 바뀌는 비밀 글자가
 들어 있어서, 다른 웹 페이지가 몰래 기기를 누르지 못한다. 주소는 ~/.llm-deck/mirror_url.txt 에 적어 두고,
 `uv run main.py --mirror` 가 그 주소를 브라우저로 연다.
 
 창이 열려 있는 동안(페이지가 화면을 받아 가는 동안)만 기기에 {"mirror": true} 를 2초마다 보낸다.
-기기는 화면이 바뀔 때만 JPEG 한 장을 보낸다 (펌웨어 mirror.h). 창에서 누르기·끌기·떼기는 {"touch": {...}} 로 보낸다.
+기기는 화면이 바뀔 때만 한 장을 보낸다 (펌웨어 mirror.h). 같은 색이 이어지는 것만 줄인 RGB565 라서 브라우저가 풀어 그린다. 창에서 누르기·끌기·떼기는 {"touch": {...}} 로,
+휠·키보드로 밀기는 누르기부터 떼기까지의 점들을 {"touch": [...]} 한 번에 보낸다. Esc 는 {"view": "home"}.
 """
 
 import json
@@ -40,6 +41,7 @@ PAGE = """<!doctype html>
   <canvas id="screen" width="320" height="240"></canvas>
   <div id="state">기기 화면을 기다리는 중...</div>
   <div><button data-zoom="1">1배</button> <button data-zoom="2">2배</button> <button data-zoom="3">3배</button></div>
+  <div>휠·↑↓ 위아래로 밀기 · ←→ 좌우로 밀기 · Esc 홈</div>
 <script>
 const img = document.getElementById("screen"), ctx = img.getContext("2d"), state = document.getElementById("state");
 let zoom = 2, seq = 0, w = 0, h = 0, down = false, lastMove = 0;
@@ -48,15 +50,34 @@ function size() { if (w) img.style.width = (w * zoom) + "px"; }
 document.querySelectorAll("[data-zoom]").forEach(b => b.onclick = () => {
   zoom = +b.dataset.zoom; size(); try { localStorage.setItem("zoom", zoom); } catch (e) {}
 });
+// 기기가 줄인 화면을 푼다 (펌웨어 mirror.cpp 의 pack): 머리 h < 128 이면 h+1 점 그대로, 아니면 한 점을 h-126 번
+const R = new Uint8Array(32), G = new Uint8Array(64);
+for (let i = 0; i < 32; i++) R[i] = Math.round(i * 255 / 31);
+for (let i = 0; i < 64; i++) G[i] = Math.round(i * 255 / 63);
+function draw(src) {
+  const pic = ctx.createImageData(w, h), d = new Uint32Array(pic.data.buffer), n = w * h;
+  const color = v => 0xff000000 | (R[v & 31] << 16) | (G[(v >> 5) & 63] << 8) | R[v >> 11];  // 작은 끝: ABGR
+  let o = 0, p = 0;
+  while (o < src.length && p < n) {
+    const head = src[o++];
+    if (head < 128) {
+      for (let i = 0; i <= head && p < n; i++, o += 2) d[p++] = color(src[o] | (src[o + 1] << 8));
+    } else {
+      const c = color(src[o] | (src[o + 1] << 8));
+      o += 2;
+      for (let i = 0; i < head - 126 && p < n; i++) d[p++] = c;
+    }
+  }
+  ctx.putImageData(pic, 0, 0);
+}
 async function poll() {
   for (;;) {
     try {
       const r = await fetch("frame?after=" + seq, {cache: "no-store"});
       if (r.status === 200) {
         seq = +r.headers.get("X-Seq"); w = +r.headers.get("X-Width"); h = +r.headers.get("X-Height");
-        const pic = await createImageBitmap(await r.blob());
         if (img.width !== w || img.height !== h) { img.width = w; img.height = h; }
-        ctx.drawImage(pic, 0, 0); pic.close();
+        draw(new Uint8Array(await r.arrayBuffer()));
         size(); state.textContent = "누르거나 끌어서 기기를 조작합니다";
       } else if (r.status === 503) {
         state.textContent = await r.text();
@@ -71,11 +92,36 @@ function point(e) {
   const r = img.getBoundingClientRect();
   return {x: Math.floor((e.clientX - r.left) * w / r.width), y: Math.floor((e.clientY - r.top) * h / r.height)};
 }
+function post(path, body) {
+  return fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+}
+// 밀기: 화면 가운데를 지나 한쪽에서 다른 쪽으로 끄는 점들 (기기가 10ms 마다 하나씩 쓴다)
+function swipe(dx, dy) {
+  if (!w) return;
+  const x0 = w / 2 - dx * w * 0.35, y0 = h / 2 - dy * h * 0.3, points = [];
+  for (let i = 0; i <= 8; i++) {
+    points.push({x: Math.round(x0 + dx * w * 0.7 * i / 8), y: Math.round(y0 + dy * h * 0.6 * i / 8), down: true});
+  }
+  points.push({...points[points.length - 1], down: false});
+  post("touch", {points});
+}
+let lastSwipe = 0, wheel = 0;
+img.addEventListener("wheel", e => {
+  e.preventDefault();
+  wheel += e.deltaY;
+  if (Math.abs(wheel) < 40 || e.timeStamp - lastSwipe < 350) return;
+  swipe(0, wheel > 0 ? -1 : 1);  // 아래로 굴리면 다음 쪽 (손가락을 위로 미는 것)
+  wheel = 0; lastSwipe = e.timeStamp;
+}, {passive: false});
+document.addEventListener("keydown", e => {
+  const moves = {ArrowDown: [0, -1], ArrowUp: [0, 1], ArrowRight: [-1, 0], ArrowLeft: [1, 0]};
+  if (moves[e.key]) { e.preventDefault(); if (!e.repeat) swipe(...moves[e.key]); }
+  else if (e.key === "Escape") post("home", {});
+});
 function send(e, isDown) {
   if (!w) return;
   const p = point(e);
-  fetch("touch", {method: "POST", headers: {"Content-Type": "application/json"},
-                  body: JSON.stringify({x: p.x, y: p.y, down: isDown})});
+  post("touch", {x: p.x, y: p.y, down: isDown});
 }
 // 브라우저 기본 동작(끌기, 글자 선택, 오른쪽 메뉴)은 막는다
 for (const kind of ["dragstart", "selectstart", "contextmenu"]) img.addEventListener(kind, e => e.preventDefault());
@@ -96,6 +142,8 @@ class Mirror:
         self.get_transport = get_transport
         self.token = secrets.token_urlsafe(16)
         self.cond = threading.Condition()
+        # 누르기를 보낸 차례대로 기기에 닿게 한다 (Wi-Fi 는 보낼 때마다 따로 요청한다)
+        self.send_lock = threading.Lock()
         self.frame = b""
         self.size = (0, 0)
         self.seq = 0
@@ -149,9 +197,10 @@ class Mirror:
             return {"mirror": False}
         return None
 
-    def _usb(self):
+    def _link(self):
+        """미러링에 쓸 연결 (블루투스는 너무 느려서 쓰지 않는다)"""
         transport = self.get_transport()
-        return transport if transport and transport.name == "USB" else None
+        return transport if transport and transport.name in ("USB", "Wi-Fi") else None
 
     def _handler(self):
         mirror = self
@@ -200,9 +249,9 @@ class Mirror:
                 except ValueError:
                     after = 0
                 mirror.last_poll = time.time()
-                if not mirror._usb():
+                if not mirror._link():
                     time.sleep(1)
-                    self._reply(503, "기기가 USB 로 연결되어 있지 않습니다 (미러링은 USB 로만 됩니다)".encode(),
+                    self._reply(503, "기기가 USB 나 Wi-Fi 로 연결되어 있지 않습니다 (블루투스로는 미러링할 수 없습니다)".encode(),
                                 "text/plain; charset=utf-8")
                     return
                 # 새 장이 올 때까지 기다린다 (화면이 그대로면 기기가 보내지 않는다)
@@ -212,29 +261,40 @@ class Mirror:
                 if seq == after or not frame:
                     self._reply(204, b"", "text/plain")
                     return
-                self._reply(200, frame, "image/jpeg", {"X-Seq": str(seq), "X-Width": str(w), "X-Height": str(h)})
+                self._reply(200, frame, "application/octet-stream", {"X-Seq": str(seq), "X-Width": str(w), "X-Height": str(h)})
 
             def do_POST(self) -> None:
                 path = self._allowed()
                 # JSON 으로만 받는다 (다른 사이트의 폼 전송은 이 형식을 쓸 수 없다)
-                if path != "touch" or self.headers.get("Content-Type") != "application/json":
+                if path not in ("touch", "home") or self.headers.get("Content-Type") != "application/json":
                     self._reply(404, b"", "text/plain")
                     return
                 try:
-                    body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 200)))
-                    touch = {"x": int(body["x"]), "y": int(body["y"]), "down": bool(body["down"])}
-                except (ValueError, KeyError, TypeError):
+                    body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 2000)))
+                    if path == "home":
+                        message = {"view": "home"}
+                    elif "points" in body:
+                        # 기기는 한 번에 16개까지 쌓아 둔다
+                        message = {"touch": [_point(p) for p in body["points"][:14]]}
+                    else:
+                        message = {"touch": _point(body)}
+                except (ValueError, KeyError, TypeError, AttributeError):
                     self._reply(400, b"", "text/plain")
                     return
-                transport = mirror._usb()
+                transport = mirror._link()
                 if transport:
                     try:
-                        transport.send({"touch": touch})
+                        with mirror.send_lock:
+                            transport.send(message)
                     except OSError:
                         pass
                 self._reply(204, b"", "text/plain")
 
         return Handler
+
+
+def _point(p: dict) -> dict:
+    return {"x": int(p["x"]), "y": int(p["y"]), "down": bool(p["down"])}
 
 
 def open_window() -> bool:

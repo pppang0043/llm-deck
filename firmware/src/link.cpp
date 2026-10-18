@@ -286,10 +286,14 @@ void link_loop() {
         Serial.printf("[link] usage via %s: %u services (%s)\n", link_tag(from), (unsigned)services.size(),
                       doc["host"] | "?");
       }
-      // 미러링 창 (USB 만)
-      if (doc["mirror"].is<bool>() && from == LINK_USB) mirror_keep(doc["mirror"]);
-      if (doc["touch"].is<JsonObjectConst>() && from == LINK_USB) {
+      // 미러링 창 (USB, Wi-Fi)
+      bool mirror_link = from == LINK_USB || from == LINK_WIFI;
+      if (doc["mirror"].is<bool>() && mirror_link) mirror_keep(doc["mirror"]);
+      if (doc["touch"].is<JsonObjectConst>() && mirror_link) {
         display_remote_touch(doc["touch"]["x"] | 0, doc["touch"]["y"] | 0, doc["touch"]["down"] | false);
+      }
+      for (JsonObjectConst t : doc["touch"].as<JsonArrayConst>()) {
+        if (mirror_link) display_remote_touch(t["x"] | 0, t["y"] | 0, t["down"] | false);
       }
       if (doc["screenshot"] == true) {
         // 진단용: 지금 화면을 사진처럼 PC 로 보낸다 (같이 온 목록, 알림까지 그린 뒤)
