@@ -20,6 +20,12 @@ CONFIRM_SECONDS = 10
 KNOWN_FILE = Path.home() / ".llm-deck" / "usb_serial"
 # 이번 실행에서 LLM Deck 이 아니라고 확인된 기기 (시리얼 번호)
 _rejected: set[str] = set()
+# 펌웨어는 돌고 있는 동안 1분마다 배터리 기록을 보낸다 (battery.cpp). 이만큼 한 바이트도 오지 않으면
+# 펌웨어가 돌지 않는 것이다 (도우미를 다시 켜거나 펌웨어를 올린 뒤 다운로드 모드 등에 멈춘 적이 있다). 기기를 다시 켠다
+SILENT_SECONDS = 150
+# 다시 켜도 안 살아나면 되풀이하지 않게, 다시 켜는 것은 이 간격에 한 번까지
+RESET_GAP_SECONDS = 600
+_last_reset = 0.0
 
 
 def _known_serial() -> str:
@@ -54,6 +60,7 @@ class UsbTransport:
         self.ser = None
         self.serial_number = ""
         self.opened_at = 0.0
+        self.last_rx = 0.0  # 기기에서 마지막으로 무언가 받은 시각
         self.confirmed = False
         # 메인 루프와 미러링 창(누르기)이 따로 보내므로 한 줄씩 차례로 쓴다
         self._send_lock = threading.Lock()
@@ -74,7 +81,7 @@ class UsbTransport:
         except serial.SerialException:
             return False
         self.ser = ser
-        self.opened_at = time.time()
+        self.opened_at = self.last_rx = time.time()
         # 설정에 포트를 직접 적었거나 전에 확인한 기기면 바로 믿는다
         self.confirmed = bool(self.port_name) or (self.serial_number and self.serial_number == _known_serial())
         threading.Thread(target=self._read_loop, args=(ser,), daemon=True).start()
@@ -95,7 +102,34 @@ class UsbTransport:
         # 케이블을 뽑으면 읽는 쪽이 오류로 끝나며 포트가 닫히거나, 포트 자체가 사라진다
         if not self.ser or not self.ser.is_open:
             return False
+        if self._silent():
+            self._reset_device()
+            return False
         return self.port_name != "" or any(p.device == self.ser.port for p in list_ports.comports())
+
+    def _silent(self) -> bool:
+        """LLM Deck 이라고 아는 기기(기억해 둔 시리얼 번호)가 오래 아무것도 보내지 않는지"""
+        known = self.serial_number and self.serial_number == _known_serial()
+        return bool(known) and time.time() - self.last_rx > SILENT_SECONDS and time.time() - _last_reset > RESET_GAP_SECONDS
+
+    def _reset_device(self) -> None:
+        """기기를 다시 켠다. esptool 의 보통 재시작과 같다: DTR 을 끈 채(다운로드 모드로 가지 않게) RTS 로 잠깐 리셋"""
+        global _last_reset
+        _last_reset = time.time()
+        port = self.ser.port
+        print(f"[USB] 기기가 {SILENT_SECONDS}초 동안 아무것도 보내지 않아 다시 켭니다 ({port})")
+        self.close()
+        try:
+            ser = serial.Serial()
+            ser.port, ser.baudrate = port, 115200
+            ser.dtr = ser.rts = False  # 열 때 신호가 바뀌지 않게 먼저 정한다
+            ser.open()
+            ser.rts = True
+            time.sleep(0.1)
+            ser.rts = False
+            ser.close()
+        except (serial.SerialException, OSError) as e:
+            print(f"[USB] 기기를 다시 켜지 못했습니다: {e}")
 
     def send(self, message: dict) -> None:
         if not self.confirmed and time.time() - self.opened_at > CONFIRM_SECONDS:
@@ -120,9 +154,12 @@ class UsbTransport:
         buf = b""
         while ser.is_open:
             try:
-                buf += ser.read(4096)
+                data = ser.read(4096)
             except (serial.SerialException, OSError, TypeError):
                 return
+            if data:
+                self.last_rx = time.time()
+                buf += data
             if not self.confirmed and (b"[link]" in buf or b"\xa5\x5a" in buf):
                 # LLM Deck 펌웨어만 내는 로그·묶음이 보이면 우리 기기다
                 self._confirm()
