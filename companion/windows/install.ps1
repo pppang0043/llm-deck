@@ -1,16 +1,21 @@
 ﻿# LLM Deck PC 도우미 설치 (Windows)
 #   install.cmd    설치하고 로그인할 때 자동으로 켜지게 한다 (다시 실행해도 된다)
 #   uninstall.cmd  자동 실행과 Claude Code 상태줄 설정을 되돌린다
-#   mirror.cmd     켜져 있는 도우미의 미러링 창(기기 화면)을 연다. 미러링 앱이 없으면 브라우저로
+#   mirror.cmd     켜져 있는 도우미의 미러링 창(기기 화면)을 연다. 도우미 앱이 없으면 브라우저로
 param([switch]$Uninstall, [switch]$Mirror)
 $ErrorActionPreference = 'Stop'
 $Dir = Split-Path -Parent $PSScriptRoot
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $Name = 'LLMDeck'
 $LogFile = Join-Path $env:USERPROFILE '.llm-deck\companion.log'
-# 브라우저 대신 쓰는 미러링 앱 (설치할 때 mirror.cs 를 컴파일해 만든다)
-$MirrorExe = Join-Path $PSScriptRoot 'LLM Deck Mirror.exe'
-$MirrorLink = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\LLM Deck 미러링.lnk'
+# 도우미 앱: 트레이 아이콘을 두고 도우미를 띄우며, 거기서 미러링 창을 연다 (설치할 때 app.cs 를 컴파일해 만든다)
+$AppExe = Join-Path $PSScriptRoot 'LLM Deck.exe'
+$Programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+$AppLink = Join-Path $Programs 'LLM Deck.lnk'
+$HelperKey = 'HKCU:\Software\LLMDeck\Helper'  # 앱이 도우미를 띄우는 방법 (uvw.exe, app 폴더, 기록 파일)
+# 예전에 따로 만들던 미러링 앱
+$OldMirrorExe = Join-Path $PSScriptRoot 'LLM Deck Mirror.exe'
+$OldMirrorLink = Join-Path $Programs 'LLM Deck 미러링.lnk'
 
 function Find-Uv {
     # 회사 보안 때문에 uv 를 저절로 깔 수 없으면, 직접 받은 uv.exe(와 uvw.exe)를 install.cmd 옆이나 app 폴더에 둔다 (INSTALL.txt)
@@ -116,52 +121,55 @@ function Use-SystemCerts([string]$uv) {
     Write-Host '      회사망: Windows 에 깔린 회사 인증서를 믿습니다'
 }
 
-function Stop-Mirror {
-    $apps = @(Get-Process -Name 'LLM Deck Mirror' -ErrorAction SilentlyContinue)
+function Stop-App {
+    # 앱을 끄면 Windows 가 앱이 띄운 도우미도 같이 끈다
+    $apps = @(Get-Process -Name 'LLM Deck', 'LLM Deck Mirror' -ErrorAction SilentlyContinue)
     if (-not $apps) { return }
     $apps | Stop-Process -Force -ErrorAction SilentlyContinue
     # 다 꺼져야 exe 를 지우거나 새로 쓸 수 있다
     $apps | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
 }
 
-# 미러링 앱을 만든다. Windows 에 처음부터 들어 있는 .NET Framework 4 의 C# 컴파일러(csc.exe)를 쓴다
-function Build-Mirror {
+# 도우미 앱을 만든다. Windows 에 처음부터 들어 있는 .NET Framework 4 의 C# 컴파일러(csc.exe)를 쓴다
+function Build-App {
     $csc = $null
     foreach ($fw in 'Framework64', 'Framework') {
         $path = Join-Path $env:WINDIR "Microsoft.NET\$fw\v4.0.30319\csc.exe"
         if (Test-Path $path) { $csc = $path; break }
     }
     if (-not $csc) { throw '.NET Framework 4 의 csc.exe 를 찾지 못했습니다' }
-    Stop-Mirror
-    Remove-Item $MirrorExe -Force -ErrorAction SilentlyContinue
+    Stop-App
+    Remove-Item $AppExe, $OldMirrorExe, $OldMirrorLink -Force -ErrorAction SilentlyContinue
     # csc 가 경고를 내도 멈추지 않게 이 안에서만 풀어 둔다
     $ErrorActionPreference = 'Continue'
-    $cscArgs = @('/nologo', '/target:winexe', '/optimize+', '/codepage:65001', "/out:$MirrorExe",
-        '/r:System.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', (Join-Path $PSScriptRoot 'mirror.cs'))
+    $cscArgs = @('/nologo', '/target:winexe', '/optimize+', '/codepage:65001', "/out:$AppExe",
+        '/r:System.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', (Join-Path $PSScriptRoot 'app.cs'))
     $out = & $csc $cscArgs 2>&1
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $MirrorExe)) {
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $AppExe)) {
         $out | ForEach-Object { Write-Host "      $_" }
         throw '컴파일에 실패했습니다'
     }
     $shell = New-Object -ComObject WScript.Shell
-    $link = $shell.CreateShortcut($MirrorLink)
-    $link.TargetPath = $MirrorExe
+    $link = $shell.CreateShortcut($AppLink)
+    $link.TargetPath = $AppExe
     $link.WorkingDirectory = $PSScriptRoot
-    $link.Description = 'LLM Deck 기기 화면을 보고 눌러서 조작'
+    $link.Description = 'LLM Deck 도우미를 켜고 기기 화면(미러링)을 연다'
     $link.Save()
 }
 
 function Stop-Companion {
-    # 이 폴더의 도우미만 끈다
+    Stop-App
+    # 앱 없이 켠 도우미(예전 방식이나 앱을 만들지 못했을 때)도 끈다. 이 폴더의 도우미만
     Get-CimInstance Win32_Process |
         Where-Object { $_.CommandLine -and $_.CommandLine -like '*main.py*' -and ($_.CommandLine -like "*$Dir*" -or $_.CommandLine -like '*llm-deck*') } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
 if ($Mirror) {
-    # 미러링 앱이 있으면 직접 띄운다 (uv 를 거치면 uv 가 끝날 때 앱도 같이 꺼질 수 있다). 도우미가 꺼져 있으면 앱 창에 안내가 뜬다
-    if (Test-Path $MirrorExe) {
-        Start-Process -FilePath $MirrorExe -WorkingDirectory $PSScriptRoot
+    # 도우미 앱이 있으면 직접 띄운다 (uv 를 거치면 uv 가 끝날 때 앱도 같이 꺼질 수 있다).
+    # 앱이 떠 있으면 그 앱이 창을 열고, 도우미가 꺼져 있으면 창에 안내가 뜬다
+    if (Test-Path $AppExe) {
+        Start-Process -FilePath $AppExe -ArgumentList '--mirror' -WorkingDirectory $PSScriptRoot
         exit 0
     }
     # 앱이 없으면 브라우저로 연다 (mirror.py)
@@ -173,9 +181,8 @@ if ($Mirror) {
 
 if ($Uninstall) {
     Stop-Companion
-    Stop-Mirror
-    Remove-Item $MirrorExe, $MirrorLink -Force -ErrorAction SilentlyContinue
-    Remove-Item 'HKCU:\Software\LLMDeck' -Recurse -ErrorAction SilentlyContinue  # 미러링 앱 설정 (항상 위, 배율, 창 위치)
+    Remove-Item $AppExe, $AppLink, $OldMirrorExe, $OldMirrorLink -Force -ErrorAction SilentlyContinue
+    Remove-Item 'HKCU:\Software\LLMDeck' -Recurse -ErrorAction SilentlyContinue  # 도우미 앱 설정 (도우미 띄우는 방법, 미러링 창의 항상 위·배율·위치)
     Remove-ItemProperty -Path $RunKey -Name $Name -ErrorAction SilentlyContinue
     Set-Firewall 'remove' | Out-Null
     $uv = Find-Uv
@@ -324,13 +331,15 @@ if ($blocked) {
     Write-Host '            Windows 보안 > 방화벽 및 네트워크 보호 > 고급 설정 > 인바운드 규칙에서 지우세요.'
 }
 
-Write-Host '[6/7] 미러링 앱 (기기 화면 창)'
+Write-Host '[6/7] 도우미 앱 (트레이 아이콘, 미러링 창)'
+$appOk = $false
 try {
-    Build-Mirror
-    Write-Host '      시작 메뉴의 "LLM Deck 미러링" 이나 mirror.cmd 로 엽니다.'
+    Build-App
+    $appOk = $true
+    Write-Host '      작업 표시줄 오른쪽 아래의 LLM Deck 아이콘이나 시작 메뉴의 "LLM Deck" 으로 미러링 창을 엽니다.'
 } catch {
     Write-Host "      건너뜁니다: $($_.Exception.Message)"
-    Write-Host '      mirror.cmd 를 누르면 브라우저로 엽니다 (http://127.0.0.1:4013/).'
+    Write-Host '      도우미는 창 없이 돌고, mirror.cmd 를 누르면 브라우저로 엽니다 (http://127.0.0.1:4013/).'
 }
 
 Write-Host '[7/7] 로그인할 때 자동 실행'
@@ -343,11 +352,25 @@ if ($storage['clean_cache'] -eq $true) {
 # 예전 방식(공유만 하는 도우미)이 등록되어 있으면 지운다. 이제 이 도우미가 공유도 함께 한다.
 Remove-ItemProperty -Path $RunKey -Name 'LLMDeckSync' -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Split-Path $LogFile) | Out-Null
-$command = "`"$uvw`" run --directory `"$Dir`" main.py --log `"$LogFile`""
-Set-ItemProperty -Path $RunKey -Name $Name -Value $command
-Start-Process -FilePath $uvw -ArgumentList @('run', '--directory', "`"$Dir`"", 'main.py', '--log', "`"$LogFile`"") -WindowStyle Hidden
+if ($appOk) {
+    # 앱이 도우미를 띄운다. 로그인할 때는 미러링 창 없이 트레이 아이콘만
+    New-Item -Path $HelperKey -Force | Out-Null
+    Set-ItemProperty -Path $HelperKey -Name 'Uvw' -Value $uvw
+    Set-ItemProperty -Path $HelperKey -Name 'Dir' -Value $Dir
+    Set-ItemProperty -Path $HelperKey -Name 'Log' -Value $LogFile
+    Set-ItemProperty -Path $RunKey -Name $Name -Value "`"$AppExe`" --background"
+    Start-Process -FilePath $AppExe -ArgumentList '--background' -WorkingDirectory $PSScriptRoot
+} else {
+    $command = "`"$uvw`" run --directory `"$Dir`" main.py --log `"$LogFile`""
+    Set-ItemProperty -Path $RunKey -Name $Name -Value $command
+    Start-Process -FilePath $uvw -ArgumentList @('run', '--directory', "`"$Dir`"", 'main.py', '--log', "`"$LogFile`"") -WindowStyle Hidden
+}
 
 Write-Host ''
-Write-Host '설치했습니다. 도우미가 창 없이 실행 중입니다.'
+if ($appOk) {
+    Write-Host '설치했습니다. 도우미가 실행 중입니다 (작업 표시줄 오른쪽 아래 LLM Deck 아이콘).'
+} else {
+    Write-Host '설치했습니다. 도우미가 창 없이 실행 중입니다.'
+}
 Write-Host "기록: $LogFile"
 Write-Host '기기 연결: USB 케이블, 블루투스(LLM-Deck), 같은 Wi-Fi 중 되는 것으로 자동 연결합니다.'

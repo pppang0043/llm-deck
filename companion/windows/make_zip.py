@@ -27,7 +27,7 @@ def main() -> None:
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "companion"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
     files = [f for f in files if (ROOT / f).is_file() and not f.startswith(SKIP)]  # 지웠지만 아직 커밋하지 않은 파일도 뺀다
-    # 미러링 앱(LLM Deck Mirror.exe)은 설치할 때 mirror.cs 를 컴파일해 만드므로 넣지 않는다
+    # 도우미 앱(LLM Deck.exe)은 설치할 때 app.cs 를 컴파일해 만드므로 넣지 않는다
     files = [f for f in files if not f.endswith(".exe")]
     # 음성 인식 모델(model.bin 등 큰 파일)이 섞여 들어가지 않게 막는다
     big = [f for f in files if f.endswith((".bin", ".zip", ".safetensors")) or (ROOT / f).stat().st_size > 2_000_000]

@@ -1,10 +1,12 @@
-// LLM Deck Mirror.app 의 실행 파일. 브라우저 대신 작은 창에 기기 화면을 보여 주고, 눌러서 기기를 조작한다.
-// 도우미가 띄운 http://127.0.0.1:4013/ (mirror.py) 에서 화면을 받아 오고 누르기를 보낸다. 서버 쪽 규칙은 mirror.py 의 PAGE 와 같다.
-// 창이 열려 있는 동안(화면을 받아 가는 동안)만 기기가 화면을 보낸다. install.sh 가 swiftc 로 컴파일한다.
+// LLM Deck.app 의 실행 파일. install.sh 가 swiftc 로 컴파일한다.
+// 블루투스·마이크 권한은 "앱" 단위로만 받을 수 있어서, 파이썬 도우미(main.py)를 이 앱의 자식 프로세스로 띄워 둔다.
+// 메뉴 막대 아이콘에서 미러링 창을 연다. 앱이 이미 떠 있을 때 한 번 더 열어도 (Finder, Spotlight, `uv run main.py --mirror`) 연다.
+// 미러링 창은 도우미가 띄운 http://127.0.0.1:4013/ (mirror.py) 에서 화면을 받아 오고 누르기를 보낸다. 서버 쪽 규칙은 mirror.py 의 PAGE 와 같다.
+// 창이 열려 있는 동안(화면을 받아 가는 동안)만 기기가 화면을 보낸다.
 import AppKit
 
 let BASE = URL(string: "http://127.0.0.1:4013/")!
-let BUNDLE_ID = "com.llmdeck.mirror"
+let LOG = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".llm-deck/companion.log")
 let OFFLINE = "도우미와 연결이 끊겼습니다. 도우미가 켜져 있는지 확인하세요"
 
 // 기기가 줄인 화면을 푼다 (펌웨어 mirror.cpp 의 pack): 머리 h < 128 이면 h+1 점 그대로, 아니면 한 점을 h-126 번
@@ -163,17 +165,18 @@ final class ScreenView: NSView {
 }
 
 @MainActor
-final class Mirror: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
   let defaults = UserDefaults.standard
   let session: URLSession
-  var window: NSWindow!
+  var window: NSWindow?
   let view = ScreenView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
   // 첫 장이 오기 전에는 320x240 으로 둔다
   var w = 320, h = 240, seq = 0
   var got = false
   var sending: Task<Void, Never>?
-  // 다른 앱을 쓰는 동안에도(항상 위) macOS 가 이 앱을 쉬게 하거나(App Nap) 화면 받기를 늦추지 않게 한다
-  let awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "기기 화면 미러링")
+  var polling: Task<Void, Never>?
+  // 창이 열려 있는 동안은 다른 앱을 쓰고 있어도(항상 위) macOS 가 이 앱을 쉬게 하거나(App Nap) 화면 받기를 늦추지 않게 한다
+  var awake: NSObjectProtocol?
 
   override init() {
     let config = URLSessionConfiguration.ephemeral
@@ -181,34 +184,60 @@ final class Mirror: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     config.timeoutIntervalForRequest = 10  // 서버는 1.5초 안에 답한다
     session = URLSession(configuration: config)
     super.init()
+    // 예전 미러링 앱(LLM Deck Mirror.app)에 저장해 둔 배율·항상 위·창 위치를 한 번 옮겨 온다
+    if defaults.object(forKey: "zoom") == nil, let old = UserDefaults(suiteName: "com.llmdeck.mirror") {
+      for key in ["zoom", "onTop", "NSWindow Frame mirror"] {
+        if let v = old.object(forKey: key) { defaults.set(v, forKey: key) }
+      }
+    }
     defaults.register(defaults: ["onTop": true, "zoom": 1])
   }
 
   var zoom: Int { min(max(defaults.integer(forKey: "zoom"), 1), 3) }
   var onTop: Bool { defaults.bool(forKey: "onTop") }
 
-  func applicationDidFinishLaunching(_ note: Notification) {
+  // 창을 연다 (열려 있으면 앞으로). 창이 떠 있는 동안만 Dock 아이콘과 메뉴 막대 메뉴를 보인다
+  @objc func open() {
+    let window = self.window ?? makeWindow()
+    NSApp.setActivationPolicy(.regular)
     NSApp.mainMenu = makeMainMenu()
-    window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled, .closable, .miniaturizable],
-                      backing: .buffered, defer: false)
-    window.title = "LLM Deck 미러링"
-    window.isReleasedWhenClosed = false
-    window.contentView = view
-    view.app = self
-    window.center()
-    window.setFrameAutosaveName("mirror")  // 지난번 창 위치를 기억한다
     fit()
     applyOnTop()
     window.makeKeyAndOrderFront(nil)
     window.makeFirstResponder(view)
     NSApp.activate()
-    Task { await poll() }
+    if polling == nil {
+      awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "기기 화면 미러링")
+      polling = Task { await poll() }
+    }
   }
 
-  func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+  func makeWindow() -> NSWindow {
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled, .closable, .miniaturizable],
+                          backing: .buffered, defer: false)
+    window.title = "LLM Deck 미러링"
+    window.isReleasedWhenClosed = false
+    window.contentView = view
+    window.delegate = self
+    view.app = self
+    window.center()
+    window.setFrameAutosaveName("mirror")  // 지난번 창 위치를 기억한다
+    self.window = window
+    return window
+  }
+
+  // 창을 닫으면 화면 받기를 멈춘다 (도우미가 기기에 미러링을 그만 보내게). 도우미는 계속 돈다
+  func windowWillClose(_ note: Notification) {
+    polling?.cancel()
+    polling = nil
+    if let awake { ProcessInfo.processInfo.endActivity(awake) }
+    awake = nil
+    NSApp.setActivationPolicy(.accessory)
+  }
 
   // 창 내용 크기를 기기 화면 × 배율로 맞춘다 (창 왼쪽 위 모서리는 그대로)
   func fit() {
+    guard let window else { return }
     let size = NSSize(width: w * zoom, height: h * zoom)
     let now = window.frame
     if window.contentRect(forFrameRect: now).size == size { return }
@@ -218,12 +247,12 @@ final class Mirror: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   }
 
   func applyOnTop() {
-    window.level = onTop ? .floating : .normal
+    window?.level = onTop ? .floating : .normal
   }
 
   // 새 장을 계속 받아 간다. 이 요청이 이어지는 동안만 도우미가 기기에 화면을 보내 달라고 한다
   func poll() async {
-    while true {
+    while !Task.isCancelled {
       var req = URLRequest(url: URL(string: "frame?after=\(seq)", relativeTo: BASE)!)
       req.cachePolicy = .reloadIgnoringLocalCacheData
       do {
@@ -245,6 +274,7 @@ final class Mirror: NSObject, NSApplicationDelegate, NSMenuItemValidation {
           try? await Task.sleep(for: .seconds(1))  // 모르는 답이면 너무 자주 묻지 않게
         }
       } catch {
+        if Task.isCancelled { break }
         view.say(OFFLINE)
         try? await Task.sleep(for: .seconds(2))
       }
@@ -315,7 +345,8 @@ final class Mirror: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let menu = NSMenu()
     for it in items() { menu.addItem(it) }
     menu.addItem(.separator())
-    menu.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    // 종료는 두지 않는다 (도우미까지 꺼진다). 창을 닫아도 도우미는 메뉴 막대에 남는다
+    menu.addItem(withTitle: "미러링 닫기", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     return menu
   }
 
@@ -323,8 +354,6 @@ final class Mirror: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let bar = NSMenu()
     let top = NSMenuItem()
     top.submenu = makeMenu()
-    top.submenu?.insertItem(withTitle: "창 닫기", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w", at: 0)
-    top.submenu?.insertItem(.separator(), at: 1)
     bar.addItem(top)
     return bar
   }
@@ -340,16 +369,196 @@ final class Mirror: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   }
 }
 
-// 이미 떠 있으면 그 창을 앞으로 가져오고 끝낸다
-let me = ProcessInfo.processInfo.processIdentifier
-if let other = NSRunningApplication.runningApplications(withBundleIdentifier: BUNDLE_ID).first(where: { $0.processIdentifier != me }) {
-  other.activate()
-  exit(0)
+// ---- 도우미 (파이썬) ----
+
+// 기록 파일이 이보다 커지면 도우미를 띄울 때 companion.log.1 로 넘기고 새로 쓴다 (하나만 남긴다)
+let LOG_LIMIT = 2_000_000
+
+// 앱의 출력(launchd 가 open --stdout 으로 기록 파일에 이어 둔다)을 새 파일로 바꾼다. 도우미는 이것을 물려받는다.
+// 터미널에서 띄웠을 때처럼 출력이 기록 파일이 아니면 건드리지 않는다
+func rotateLog() {
+  var out = stat(), file = stat()
+  guard fstat(1, &out) == 0, stat(LOG.path, &file) == 0, out.st_ino == file.st_ino, out.st_dev == file.st_dev,
+        file.st_size > LOG_LIMIT else { return }
+  let old = LOG.path + ".1"
+  guard rename(LOG.path, old) == 0 else { return }
+  let fd = open(LOG.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+  guard fd >= 0 else { return }
+  fflush(stdout)
+  dup2(fd, 1)
+  dup2(fd, 2)
+  close(fd)
+  log("[app] 기록이 커서 지난 기록은 \(old) 로 옮겼습니다")
 }
+
+// 출력이 파일이면 print 가 모아 두었다가 쓰므로 바로 내보낸다
+func log(_ text: String) {
+  print(text)
+  fflush(stdout)
+}
+
+// 앱이 받은 인자는 도우미에게 그대로 넘긴다 (예: --link ble). 도우미가 제대로 끝나면 앱도 끝난다 (그러면 launchd 가 다시 띄운다).
+// 오류로 끝나면(설정 파일이 틀림, .venv 없음 등) 앱은 남아서 메뉴 막대 아이콘으로 알리고, 30초마다 다시 띄워 본다
+@MainActor
+final class Helper {
+  var process: Process?
+  var restarting = false
+  var stopping = false  // 종료 신호를 넘겼다 (끝나면 앱도 끝낸다)
+  var failed = false
+  // 오류 상태가 바뀔 때 (메뉴 막대 아이콘을 바꾼다)
+  var onFailed: (Bool) -> Void = { _ in }
+
+  func start() {
+    rotateLog()
+    let dir = Bundle.main.object(forInfoDictionaryKey: "LLMDeckCompanionDir") as? String ?? ""  // install.sh 가 넣어 준다
+    let p = Process()
+    p.currentDirectoryURL = URL(fileURLWithPath: dir)
+    p.executableURL = URL(fileURLWithPath: dir + "/.venv/bin/python")
+    p.arguments = ["main.py"] + CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
+    var env = ProcessInfo.processInfo.environment
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    p.environment = env
+    p.terminationHandler = { p in
+      let code = p.terminationReason == .exit ? p.terminationStatus : 1
+      Task { @MainActor in self.exited(code) }
+    }
+    do {
+      try p.run()
+      process = p
+    } catch {
+      log("[app] 도우미를 띄우지 못했습니다 (\(dir)): \(error)")
+      fail()
+      return
+    }
+    // 한동안 돌면 오류 표시를 거둔다 (설정 파일 오류 같은 것은 띄우자마자 끝난다)
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(15))
+      if self.failed, self.process === p, p.isRunning { self.setFailed(false) }
+    }
+  }
+
+  func exited(_ code: Int32) {
+    if restarting {
+      restarting = false
+      start()
+    } else if code == 0 || stopping {
+      exit(code)
+    } else {
+      log("[app] 도우미가 오류로 끝났습니다 (코드 \(code)). 30초 뒤 다시 띄웁니다")
+      fail()
+    }
+  }
+
+  // 메뉴 막대에 오류를 보이고 30초 뒤 다시 띄운다 (예전에는 앱이 끝나 launchd 가 30초마다 다시 띄웠다)
+  func fail() {
+    process = nil
+    setFailed(true)
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(30))
+      if self.process == nil && !self.stopping { self.start() }
+    }
+  }
+
+  func setFailed(_ value: Bool) {
+    failed = value
+    onFailed(value)
+  }
+
+  @objc func restart() {
+    guard let process, process.isRunning else {
+      if self.process == nil { start() }  // 오류로 끝나 있으면 바로 다시 띄운다
+      return
+    }
+    log("[app] 도우미를 다시 시작합니다")
+    restarting = true
+    process.terminate()
+  }
+
+  // 앱이 꺼질 때 도우미도 같이 끝낸다 (USB 포트를 붙잡은 채 남지 않도록)
+  func stop() {
+    guard let process, process.isRunning else { return }
+    process.terminate()
+    let until = Date().addingTimeInterval(3)
+    while process.isRunning && Date() < until { usleep(50_000) }
+  }
+}
+
+@MainActor
+final class App: NSObject, NSApplicationDelegate {
+  let helper = Helper()
+  let mirror = Mirror()
+  var status: NSStatusItem?
+  var errorItem: NSMenuItem?
+  var signals: [DispatchSourceSignal] = []
+
+  func applicationDidFinishLaunching(_ note: Notification) {
+    // 종료 신호(launchctl bootout, Ctrl+C)는 도우미에게 넘긴다. 도우미가 끝나면 앱도 끝난다
+    for sig in [SIGTERM, SIGINT, SIGHUP] {
+      signal(sig, SIG_IGN)
+      let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+      source.setEventHandler {
+        MainActor.assumeIsolated {
+          self.helper.stopping = true
+          if let p = self.helper.process, p.isRunning { kill(p.processIdentifier, sig) } else { exit(0) }
+        }
+      }
+      source.resume()
+      signals.append(source)
+    }
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    item.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "LLM Deck")
+    item.button?.toolTip = "LLM Deck"
+    let menu = NSMenu()
+    func add(_ title: String, _ target: AnyObject, _ action: Selector) {
+      let it = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+      it.target = target
+    }
+    add("미러링 열기", mirror, #selector(Mirror.open))
+    menu.addItem(.separator())
+    add("도우미 다시 시작", helper, #selector(Helper.restart))
+    add("기록 보기", self, #selector(showLog))
+    item.menu = menu
+    status = item
+    helper.onFailed = { [weak self] failed in self?.showFailed(failed) }
+    helper.start()
+  }
+
+  // 도우미가 오류로 끝나 있으면 아이콘을 경고 표시로 바꾸고 메뉴 맨 위에 알린다
+  func showFailed(_ failed: Bool) {
+    guard let status, let menu = status.menu else { return }
+    let symbol = failed ? "exclamationmark.triangle" : "rectangle.on.rectangle"
+    status.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "LLM Deck")
+    status.button?.toolTip = failed ? "LLM Deck: 도우미가 오류로 멈췄습니다 (30초마다 다시 띄웁니다)" : "LLM Deck"
+    if failed && errorItem == nil {
+      let it = NSMenuItem(title: "도우미 오류 — 기록 보기", action: #selector(showLog), keyEquivalent: "")
+      it.target = self
+      menu.insertItem(it, at: 0)
+      menu.insertItem(.separator(), at: 1)
+      errorItem = it
+    } else if !failed, let it = errorItem {
+      let index = menu.index(of: it)
+      menu.removeItem(at: index + 1)  // 아래 구분선
+      menu.removeItem(it)
+      errorItem = nil
+    }
+  }
+
+  // 이미 떠 있는 앱을 한 번 더 열면 미러링 창을 연다
+  func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    mirror.open()
+    return false
+  }
+
+  func applicationWillTerminate(_ note: Notification) { helper.stop() }
+
+  @objc func showLog() { NSWorkspace.shared.open(LOG) }
+}
+
 MainActor.assumeIsolated {
   let app = NSApplication.shared
-  let mirror = Mirror()
-  app.delegate = mirror
-  app.setActivationPolicy(.regular)
+  let delegate = App()
+  app.delegate = delegate
+  app.setActivationPolicy(.accessory)
   app.run()
 }

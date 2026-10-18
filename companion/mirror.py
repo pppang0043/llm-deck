@@ -19,9 +19,9 @@ from pathlib import Path
 PORT = 4013  # 4012 는 도우미가 하나만 돌게 잡는 포트 (main.py)
 URL = f"http://127.0.0.1:{PORT}/"
 OLD_URL_FILE = Path.home() / ".llm-deck" / "mirror_url.txt"  # 예전에 주소가 바뀌던 때 쓰던 파일
-# 브라우저 대신 쓰는 미러링 앱 (항상 위에 뜨는 창)
-MAC_APP = Path.home() / "Applications" / "LLM Deck Mirror.app"
-WIN_APP = Path(__file__).resolve().parent / "windows" / "LLM Deck Mirror.exe"
+# 브라우저 대신 쓰는 미러링 창 (항상 위). Mac 은 도우미 앱(macos/app.swift)을 한 번 더 열면 창이 뜬다
+MAC_APP = Path.home() / "Applications" / "LLM Deck.app"
+WIN_APP = Path(__file__).resolve().parent / "windows" / "LLM Deck.exe"  # windows/app.cs. --mirror 로 창만 연다
 HEAD = struct.Struct("<IIIHH")  # 장 번호, 위치, 장 크기, 폭, 높이
 # 페이지가 이만큼 화면을 받아 가지 않으면 창이 닫힌 것으로 본다
 VIEWER_SECONDS = 3
@@ -304,7 +304,7 @@ def _point(p: dict) -> dict:
 
 
 def open_window() -> bool:
-    """켜져 있는 도우미의 미러링 창을 연다. 미러링 앱(Mac 은 install.sh, Windows 는 install.cmd 가 만든다)이 있으면 그것을, 없으면 브라우저로"""
+    """켜져 있는 도우미의 미러링 창을 연다. 미러링 창(install.sh, install.cmd 가 만든 도우미 앱)이 있으면 그것을, 없으면 브라우저로"""
     import subprocess
     import sys
     import webbrowser
@@ -317,15 +317,18 @@ def open_window() -> bool:
         print("[mirror] 도우미가 켜져 있지 않거나 미러링이 꺼져 있습니다.")
         return False
     try:
-        if sys.platform == "darwin" and MAC_APP.exists():
+        # 앱이 떠 있지 않으면 (터미널에서 도우미를 띄웠으면) 열지 않는다. 열면 도우미를 하나 더 띄우려 한다
+        mac_app_up = sys.platform == "darwin" and subprocess.run(
+            ["pgrep", "-f", "LLM Deck.app/Contents/MacOS/llm-deck"], capture_output=True).returncode == 0
+        if mac_app_up:
             subprocess.run(["open", str(MAC_APP)], check=True, timeout=10)
             return True
         if sys.platform == "win32" and WIN_APP.exists():
             # uv 가 이 파이썬을 작업 묶음(job)에 넣어 두면 파이썬이 끝날 때 앱도 같이 꺼진다. 묶음 밖으로 띄우고, 막혀 있으면 그냥 띄운다
             try:
-                subprocess.Popen([str(WIN_APP)], creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.DETACHED_PROCESS)
+                subprocess.Popen([str(WIN_APP), "--mirror"], creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.DETACHED_PROCESS)
             except OSError:
-                subprocess.Popen([str(WIN_APP)], creationflags=subprocess.DETACHED_PROCESS)
+                subprocess.Popen([str(WIN_APP), "--mirror"], creationflags=subprocess.DETACHED_PROCESS)
             return True
     except (OSError, subprocess.SubprocessError) as e:
         print(f"[mirror] 미러링 앱을 열지 못해 브라우저로 엽니다: {e}")

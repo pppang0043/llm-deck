@@ -1,11 +1,17 @@
-﻿// LLM Deck 미러링 앱 (Windows). 브라우저 대신 작은 창에 기기 화면을 띄우고, 눌러서 기기를 조작한다 (USB 나 Wi-Fi 로 연결했을 때).
-// 도우미(mirror.py)가 이 PC 안에 띄운 http://127.0.0.1:4013/ 에서 화면을 받아 가고 누르기를 보낸다. 하는 일은 mirror.py 의 PAGE 와 같다.
-// 이 창이 화면을 받아 가는 동안만 기기가 화면을 보낸다.
+﻿// LLM Deck.exe (Windows). 작업 표시줄 오른쪽 아래(트레이)에 아이콘을 두고, 파이썬 도우미(main.py)를 자식 프로세스로 띄워 둔다.
+// 트레이 아이콘에서 미러링 창을 연다: 작은 창에 기기 화면을 띄우고, 눌러서 기기를 조작한다 (USB 나 Wi-Fi 로 연결했을 때).
+// 미러링 창은 도우미(mirror.py)가 이 PC 안에 띄운 http://127.0.0.1:4013/ 에서 화면을 받아 가고 누르기를 보낸다.
+// 하는 일은 mirror.py 의 PAGE 와 같다. 이 창이 화면을 받아 가는 동안만 기기가 화면을 보낸다.
+//
+//   LLM Deck.exe               (시작 메뉴) 도우미가 꺼져 있으면 켜고, 미러링 창을 연다
+//   LLM Deck.exe --background  (로그인할 때) 도우미만 켠다
+//   LLM Deck.exe --mirror      (mirror.cmd, main.py --mirror) 미러링 창만. 앱이 떠 있으면 그 앱이 연다
 //
 // install.ps1 이 Windows 에 처음부터 들어 있는 .NET Framework 4 의 csc.exe 로 컴파일한다 (따로 설치할 것이 없다).
 // 그 csc 는 C# 5 까지만 알아서 $"..." 나 ?. 같은 새 문법은 쓰지 않는다.
 using System;
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -30,7 +36,6 @@ class MirrorForm : Form
     const int WM_SYSCOMMAND = 0x112, MF_SEPARATOR = 0x800, MF_CHECKED = 0x8;
     static readonly Color Back = Color.FromArgb(0x0b, 0x0e, 0x11);
 
-    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
@@ -55,24 +60,17 @@ class MirrorForm : Form
     bool pressing;
     int lastMove, lastSwipe, wheel;
 
-    [STAThread]
-    static void Main()
+    // 앱 없이 미러링 창만 띄운다 (터미널에서 도우미를 띄웠을 때). 이미 떠 있으면 그 창을 앞으로 가져온다
+    public static void RunAlone()
     {
         bool fresh;
         using (Mutex one = new Mutex(true, "LLMDeckMirror", out fresh))
         {
             if (!fresh)
             {
-                // 이미 떠 있으면 그 창을 앞으로 가져오고 끝낸다
                 ShowOther();
                 return;
             }
-            // Windows 배율(125%, 150%)로 키우지 않고 기기 1픽셀 = 화면 1픽셀로 그린다. 작으면 2배·3배로
-            try { SetProcessDPIAware(); } catch (EntryPointNotFoundException) { }
-            ServicePointManager.Expect100Continue = false;  // 보내기 전에 서버 대답을 기다리지 않는다
-            ServicePointManager.DefaultConnectionLimit = 8;  // 화면 기다리기와 누르기가 서로 막지 않게
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MirrorForm());
         }
     }
@@ -94,7 +92,7 @@ class MirrorForm : Form
         for (int i = 0; i < 64; i++) G6[i] = Round(i * 255 / 63.0);
     }
 
-    MirrorForm()
+    public MirrorForm()
     {
         Text = Title;
         FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -536,5 +534,257 @@ class MirrorForm : Form
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RegPath)) key.SetValue(name, value, RegistryValueKind.DWord);
         }
         catch (Exception) { }
+    }
+}
+
+// 트레이 아이콘과 도우미 자식 프로세스. 미러링 창은 열 때마다 새로 만든다 (닫으면 화면 받기를 멈춘다)
+class DeckApp : ApplicationContext
+{
+    // install.ps1 이 도우미를 띄우는 방법(uvw.exe, app 폴더, 기록 파일)을 적어 둔다
+    const string RegPath = @"Software\LLMDeck\Helper";
+    // 앱이 이미 떠 있을 때 한 번 더 열면 이 신호로 떠 있는 앱에 창을 열라고 알린다
+    const string OpenSignal = "LLMDeckOpenMirror";
+
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateJobObject(IntPtr attrs, string name);
+    [DllImport("kernel32.dll")] static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref JobLimits info, int size);
+    [DllImport("kernel32.dll")] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [DllImport("kernel32.dll")] static extern bool TerminateJobObject(IntPtr job, uint code);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+
+    // JOBOBJECT_EXTENDED_LIMIT_INFORMATION (64비트·32비트 둘 다 맞게 포인터 크기 칸은 UIntPtr)
+    [StructLayout(LayoutKind.Sequential)]
+    struct JobLimits
+    {
+        public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass, SchedulingClass;
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount;
+        public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+    }
+    const int ExtendedLimitInformation = 9;
+    const uint KillOnJobClose = 0x2000;
+
+    readonly NotifyIcon tray = new NotifyIcon();
+    readonly Control invoker = new Control();  // 다른 스레드에서 온 일을 이 스레드로 넘길 때
+    readonly string uvw, dir, log;
+    Process helper;
+    IntPtr job;  // 도우미(uvw 와 그 아래 python)를 묶어 둔다. 앱이 어떻게 끝나든 Windows 가 묶음째 끈다
+    bool restarting, quitting;
+    MirrorForm mirror;
+
+    [STAThread]
+    static void Main(string[] args)
+    {
+        bool background = Array.IndexOf(args, "--background") >= 0;
+        bool mirrorOnly = Array.IndexOf(args, "--mirror") >= 0;
+        // Windows 배율(125%, 150%)로 키우지 않고 기기 1픽셀 = 화면 1픽셀로 그린다. 작으면 2배·3배로
+        try { SetProcessDPIAware(); } catch (EntryPointNotFoundException) { }
+        ServicePointManager.Expect100Continue = false;  // 보내기 전에 서버 대답을 기다리지 않는다
+        ServicePointManager.DefaultConnectionLimit = 8;  // 화면 기다리기와 누르기가 서로 막지 않게
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+
+        EventWaitHandle running;
+        if (EventWaitHandle.TryOpenExisting(OpenSignal, out running))
+        {
+            // 앱이 이미 떠 있다. 로그인할 때가 아니면 그 앱에 미러링 창을 열라고 알린다
+            if (!background) running.Set();
+            running.Dispose();
+            return;
+        }
+        if (mirrorOnly)
+        {
+            MirrorForm.RunAlone();
+            return;
+        }
+        bool fresh;
+        using (EventWaitHandle open = new EventWaitHandle(false, EventResetMode.AutoReset, OpenSignal, out fresh))
+        {
+            if (!fresh)
+            {
+                // 거의 같은 때 둘이 켜졌다
+                if (!background) open.Set();
+                return;
+            }
+            DeckApp app = new DeckApp(open);
+            if (!app.quitting)
+            {
+                if (!background) app.OpenMirror();
+                Application.Run(app);
+            }
+        }
+    }
+
+    DeckApp(EventWaitHandle open)
+    {
+        IntPtr handle = invoker.Handle;  // 창 스레드에 묶는다 (BeginInvoke 를 쓰려면)
+        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RegPath))
+        {
+            if (key != null)
+            {
+                uvw = key.GetValue("Uvw") as string;
+                dir = key.GetValue("Dir") as string;
+                log = key.GetValue("Log") as string;
+            }
+        }
+        if (string.IsNullOrEmpty(uvw) || string.IsNullOrEmpty(dir) || !File.Exists(uvw))
+        {
+            MessageBox.Show("도우미 설치 정보를 찾지 못했습니다. install.cmd 를 다시 실행하세요.", "LLM Deck", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            quitting = true;
+            return;
+        }
+
+        ContextMenuStrip menu = new ContextMenuStrip();
+        ToolStripMenuItem openItem = new ToolStripMenuItem("미러링 열기", null, (s, e) => OpenMirror());
+        openItem.Font = new Font(openItem.Font, FontStyle.Bold);  // 아이콘을 두 번 누르면 하는 일
+        menu.Items.Add(openItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem("도우미 다시 시작", null, (s, e) => Restart()));
+        menu.Items.Add(new ToolStripMenuItem("기록 보기", null, (s, e) => ShowLog()));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem("종료 (다음 로그인 때 다시 켜짐)", null, (s, e) => Quit()));
+        tray.ContextMenuStrip = menu;
+        tray.Icon = MakeIcon();
+        tray.Text = "LLM Deck";
+        tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) OpenMirror(); };
+        tray.Visible = true;
+
+        StartHelper();
+
+        Thread listen = new Thread(() =>
+        {
+            while (open.WaitOne()) Later(OpenMirror);
+        });
+        listen.IsBackground = true;
+        listen.Start();
+    }
+
+    void Later(MethodInvoker action)
+    {
+        try { invoker.BeginInvoke(action); }
+        catch (InvalidOperationException) { }  // 끝나는 중
+    }
+
+    void StartHelper()
+    {
+        job = CreateJobObject(IntPtr.Zero, null);
+        JobLimits limits = new JobLimits();
+        limits.LimitFlags = KillOnJobClose;
+        SetInformationJobObject(job, ExtendedLimitInformation, ref limits, Marshal.SizeOf(typeof(JobLimits)));
+        ProcessStartInfo info = new ProcessStartInfo(uvw);
+        info.Arguments = "run --directory \"" + dir + "\" main.py" + (string.IsNullOrEmpty(log) ? "" : " --log \"" + log + "\"");
+        info.WorkingDirectory = dir;
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        try
+        {
+            helper = Process.Start(info);
+        }
+        catch (Win32Exception e)
+        {
+            MessageBox.Show("도우미를 켜지 못했습니다: " + e.Message, "LLM Deck", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Quit();
+            return;
+        }
+        // uv 가 python 을 띄우기 전에(준비 확인에 시간이 걸린다) 묶음에 넣는다. python 도 같은 묶음에 들어간다
+        AssignProcessToJobObject(job, helper.Handle);
+        helper.EnableRaisingEvents = true;
+        Process mine = helper;
+        helper.Exited += (s, e) => Later(() => HelperExited(mine));
+    }
+
+    void HelperExited(Process which)
+    {
+        if (which != helper || quitting) return;
+        if (restarting)
+        {
+            restarting = false;
+            StartHelper();
+            return;
+        }
+        // 도우미가 스스로 끝났다 (이미 다른 도우미가 돌고 있거나 설정이 틀렸다). 이유는 기록 파일에 있다
+        tray.ShowBalloonTip(5000, "LLM Deck", "도우미가 꺼졌습니다. 트레이 메뉴의 \"기록 보기\" 에서 이유를 볼 수 있습니다.", ToolTipIcon.Warning);
+        System.Windows.Forms.Timer later = new System.Windows.Forms.Timer();
+        later.Interval = 5000;  // 알림을 읽을 동안 기다렸다 끝낸다
+        later.Tick += (s, e) => { later.Dispose(); Quit(); };
+        later.Start();
+    }
+
+    void StopHelper()
+    {
+        if (job == IntPtr.Zero) return;
+        TerminateJobObject(job, 1);
+        CloseHandle(job);
+        job = IntPtr.Zero;
+    }
+
+    void Restart()
+    {
+        if (helper == null || helper.HasExited) return;
+        restarting = true;
+        StopHelper();  // Exited 가 오면 새로 띄운다
+    }
+
+    public void OpenMirror()
+    {
+        if (mirror == null || mirror.IsDisposed)
+        {
+            mirror = new MirrorForm();
+            mirror.Show();
+        }
+        if (mirror.WindowState == FormWindowState.Minimized) mirror.WindowState = FormWindowState.Normal;
+        mirror.Activate();
+    }
+
+    void ShowLog()
+    {
+        if (string.IsNullOrEmpty(log) || !File.Exists(log)) return;
+        try { Process.Start("notepad.exe", "\"" + log + "\""); }
+        catch (Win32Exception) { }
+    }
+
+    void Quit()
+    {
+        quitting = true;
+        StopHelper();
+        tray.Visible = false;
+        if (mirror != null && !mirror.IsDisposed) mirror.Close();
+        ExitThread();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            tray.Dispose();
+            invoker.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+
+    // 트레이 아이콘: 주황 바탕에 작은 화면
+    static Icon MakeIcon()
+    {
+        int size = SystemInformation.SmallIconSize.Width;
+        using (Bitmap bmp = new Bitmap(size, size))
+        {
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+                using (SolidBrush accent = new SolidBrush(Color.FromArgb(0xD9, 0x77, 0x57))) g.FillRectangle(accent, 0, 0, size, size);
+                int m = size / 5;
+                using (SolidBrush dark = new SolidBrush(Color.FromArgb(0x10, 0x14, 0x18))) g.FillRectangle(dark, m, m + size / 10, size - 2 * m, size - 2 * m - size / 5);
+            }
+            IntPtr h = bmp.GetHicon();
+            Icon icon = (Icon)Icon.FromHandle(h).Clone();
+            DestroyIcon(h);
+            return icon;
+        }
     }
 }
