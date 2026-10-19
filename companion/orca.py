@@ -5,6 +5,8 @@
       s: working(작업 중) / waiting(입력 기다림) / permission(권한 요청) / blocked / done / idle / shell(AI 없는 터미널)
   - 기기에서 세션을 누르면 {"ask": "start", "mode": "dictate", "orca": id}: 그 세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다.
     받아 적은 글은 커서 자리가 아니라 그 세션 터미널에 직접 넣는다 (orca terminal send). Enter 는 누르지 않는다.
+  - 기기에서 세션을 길게 누르면 빠른 답: {"orca": "reply", "id": id, "reply": "allow" | "deny" | "continue"}.
+    정해 둔 답(REPLIES)만 보내고, 보내기 직전에 상태를 다시 읽어 그 답이 맞는 상태일 때만 보낸다.
   - 받아쓰기에서 "슬래시 커밋" 처럼 말하면 "/commit" 으로 바꾼다 (Claude Code 의 / 명령·스킬). slash_words 참고.
 ORCA 가 꺼져 있거나 orca 명령을 못 찾으면 {"ok": false} 를 보낸다.
 """
@@ -31,6 +33,14 @@ BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
 # ORCA 화면 세션 팝업의 키 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter). 나머지 이름은 typer.KEYWORDS 의 글 + Enter.
 # Tab + Enter 는 Claude Code 가 흐리게 보여준 추천 문장을 받아서 바로 보낸다.
 KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": ("Tab + Enter", "\t", True)}
+# 빠른 답 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter, 보내도 되는 상태). 기기는 이름만 보낸다.
+# Claude Code 권한 묻기는 "1. Yes / 2. ... / 3. No (esc)" 고르기라 허용은 "1" (Yes 를 바로 고른다), 거부는 Esc.
+# 허용에 Enter 를 쓰지 않는다: 목록이 늦어 이미 입력칸으로 돌아갔으면 "1" 만 남고 아무것도 보내지지 않는다.
+REPLIES = {
+    "allow": ("허용", "1", False, {"permission"}),
+    "deny": ("거부", "\x1b", False, {"permission"}),
+    "continue": ("계속", "계속", True, {"waiting", "awaiting-input", "done"}),
+}
 
 # 로그인 때 켜진 도우미는 PATH 가 짧아서 orca 명령이 깔리는 자리를 직접 더 찾는다
 EXTRA_PATHS = [
@@ -334,9 +344,10 @@ class Orca:
             rows.append({"id": short, "t": title[:30], "p": Path(path).name[:20],
                          "s": state})
             handles[short] = handle
-        # 프로젝트별로 모으고, 최근에 연 세션(과 그 프로젝트)이 앞에. 연 적이 없으면 AI 세션, 그다음 터미널
+        # 프로젝트별로 모으고, 손댈 일이 있는 세션(승인·입력·완료)이 앞에, 작업 중과 터미널은 뒤에.
+        # 같은 무리 안에서는 최근에 연 세션(과 그 프로젝트)이 앞에
         def rank(row: dict) -> tuple:
-            return (-self.recent.get(handles[row["id"]], 0), row["s"] == "shell")
+            return (row["s"] == "working", row["s"] == "shell", -self.recent.get(handles[row["id"]], 0))
 
         best: dict[str, tuple] = {}
         for row in rows:
@@ -369,6 +380,8 @@ class Orca:
             threading.Thread(target=self.activate, args=(event["id"],), daemon=True).start()
         elif event.get("orca") == "send" and isinstance(event.get("key"), str):
             threading.Thread(target=self.send_key, args=(event["id"], event["key"]), daemon=True).start()
+        elif event.get("orca") == "reply" and isinstance(event.get("reply"), str):
+            threading.Thread(target=self.reply, args=(event["id"], event["reply"]), daemon=True).start()
 
     def activate(self, short: str) -> str | None:
         """세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다. 잘 되면 terminal handle."""
@@ -427,6 +440,30 @@ class Orca:
             ok = self._run("terminal", "send", "--terminal", handle, "--enter") is not None
         print(f"[orca] {short} 에 {shown} {'보냈습니다' if ok else '보내지 못했습니다'}")
         self.pending_toast = f"보냈습니다: {shown}" if ok else f"ORCA 세션에 {shown}\n보내지 못했습니다"
+        self._wake.set()  # 상태가 곧 바뀐다
+
+    def reply(self, short: str, name: str) -> None:
+        """빠른 답(REPLIES)을 보낸다. 상태를 새로 읽어, 지금도 그 답을 받을 상태일 때만 (늦은 목록으로 잘못 보내지 않게)."""
+        if name not in REPLIES:
+            print(f"[orca] 모르는 답: {name}")
+            self.pending_toast = "PC 도우미가 모르는 답입니다\n도우미를 새로 깔아 주세요"
+            return
+        shown, text, enter, states = REPLIES[name]
+        self.state = self._read()
+        row = next((r for r in self.state["list"] if r["id"] == short), None)
+        handle = self.handles.get(short)
+        if not row or not handle:
+            self.pending_toast = "ORCA 세션을 찾지 못했습니다\n목록을 새로 읽습니다"
+            return
+        if row["s"] not in states:
+            print(f"[orca] {short} 는 지금 {row['s']} 라 {shown} 을 보내지 않았습니다")
+            self.pending_toast = f"{row['t']}\n상태가 바뀌어 {shown}을 보내지 않았습니다"
+            return
+        ok = self._run("terminal", "send", "--terminal", handle, "--text", text) is not None
+        if ok and enter:
+            ok = self._run("terminal", "send", "--terminal", handle, "--enter") is not None
+        print(f"[orca] {short} 에 {shown} {'보냈습니다' if ok else '보내지 못했습니다'}")
+        self.pending_toast = f"{row['t']}\n{shown} 보냈습니다" if ok else f"ORCA 세션에 {shown}\n보내지 못했습니다"
         self._wake.set()  # 상태가 곧 바뀐다
 
     def send_text(self, handle: str, text: str) -> str | None:

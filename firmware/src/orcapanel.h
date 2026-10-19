@@ -11,6 +11,8 @@
 //   기기 -> PC: 버튼을 누르면 {"orca": "activate", "id": id}
 //              띄운 뒤 오른쪽 팝업(키워드 단축키, Tab, Tab + Enter, Enter)을 누르면 {"orca": "send", "id": id, "key": 이름}
 //              띄운 버튼을 또 누르면 {"ask": "start", "mode": "dictate", "orca": id} ... {"ask": "stop"} (askpanel.cpp)
+//              길게 누르면 빠른 답 창: 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속 -> {"orca": "reply", "id": id, "reply": "allow" | "deny" | "continue"}
+// 상태가 바뀌면 (새 권한 요청, 작업 중 -> 완료·입력 기다림) 어느 화면에서나 알림과 소리 (처음 받은 목록은 알리지 않는다).
 
 void orcapanel_build(lv_obj_t *parent);
 // 상태줄 아래 영역. 화면을 돌리면 다시 부른다.
@@ -20,3 +22,5 @@ void orcapanel_show(bool on);
 void orcapanel_set(JsonObjectConst orca);
 // 받아쓰기 진행이나 연결이 바뀌었을 때 다시 그린다 (ui_refresh_talk 가 부른다)
 void orcapanel_refresh();
+// 키워드 단축키 목록이 바뀌면 세션 팝업 버튼을 다시 만든다 (pcpanel.cpp 가 부른다)
+void orcapanel_keywords_changed();

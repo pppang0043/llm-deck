@@ -1,6 +1,7 @@
 """기기의 키워드 버튼({"type": 이름})을 누르면 이 PC 에서 지금 커서가 있는 곳에 정해 둔 글을 입력하고 Enter 를 누른다.
 
-여기 적어 둔 글만 입력한다 (기기나 다른 사람이 아무 글·명령이나 치게 하지 못하게).
+여기 적어 둔 글(기본 목록이나 config.toml 의 [keywords])만 입력한다 (기기나 다른 사람이 아무 글·명령이나 치게 하지 못하게).
+기기에는 버튼 이름과 id 만 보낸다 ({"keywords": ITEMS}). 기기는 누른 버튼의 id 만 돌려보내고, 글은 이 PC 에만 있다.
   - Windows: 글자를 하나씩 키보드 입력으로 보낸다 (SendInput 의 유니코드 입력. 한글도 한/영 상태와 상관없이 들어간다).
     관리자 권한으로 띄운 창에는 입력되지 않는다 (Windows 가 막는다).
   - Mac: 키보드 입력을 직접 보낸다 (CoreGraphics 의 유니코드 입력. 한/영 상태와 상관없고 클립보드를 건드리지 않는다).
@@ -11,12 +12,74 @@
 import sys
 import time
 
-KEYWORDS = {
-    "commit": "커밋해줘",
-    "deploy": "배포해줘",
-    "error": "에러 확인",
-    "orchestration": "/orchestration",
-}
+# 기본 키워드 (config.toml 에 [keywords] 가 없을 때). 이름(id)은 예전 펌웨어도 그대로 보낸다.
+DEFAULT_KEYWORDS = [
+    ("commit", "커밋", "커밋해줘"),
+    ("deploy", "배포", "배포해줘"),
+    ("push", "푸쉬", "푸쉬해줘"),
+    ("error", "에러 확인", "에러 확인"),
+    ("orchestration", "/orchestration", "/orchestration"),
+]
+MAX_KEYWORDS = 5  # 기기 단축키 화면은 6칸 (마지막 칸은 Tab + Enter)
+MAX_NAME = 12  # 버튼 이름 글자 수
+MAX_TEXT = 200  # 입력할 글 글자 수
+
+# 기기 버튼 이름(id) -> 입력할 글. 여기 있는 것만 입력한다. configure() 가 config.toml 대로 바꾼다.
+KEYWORDS = {kid: text for kid, _, text in DEFAULT_KEYWORDS}
+# 기기에 보내는 목록 [{"id", "name", "obj"}] (글은 PC 에만 둔다. obj 는 기기 알림 "PC에 ○○ 입력합니다" 의 ○○)
+ITEMS: list[dict] = []
+
+
+def _bad(value) -> bool:
+    return not isinstance(value, str) or not value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value)
+
+
+def particle(word: str) -> str:
+    """word 뒤에 붙일 을/를. 마지막 글자가 받침으로 끝나면 을."""
+    last = word.rstrip()[-1:].lower()
+    if not last:
+        return "를"
+    code = ord(last)
+    if 0xAC00 <= code <= 0xD7A3:
+        return "을" if (code - 0xAC00) % 28 else "를"
+    if last.isdigit():
+        return "을" if last in "013678" else "를"  # 영 일 삼 육 칠 팔
+    if last.isascii() and last.isalpha():
+        return "을" if last in "bcdgklmnpt" else "를"  # 대충 소리로 (뒤의 e 는 읽지 않는 경우가 많아 를)
+    return "을(를)"
+
+
+def _item(kid: str, name: str, text: str) -> dict:
+    # 알림에는 글을 보인다 (길면 버튼 이름)
+    shown = text if len(text) <= 14 else name
+    return {"id": kid, "name": name, "obj": f"\"{shown}\"{particle(shown)}"}
+
+
+def configure(section: dict | None) -> None:
+    """config.toml 의 [keywords] items = [{name, text}, ...] 를 읽는다. 없거나 쓸 것이 없으면 기본 목록."""
+    global KEYWORDS, ITEMS
+    raw = (section or {}).get("items")
+    chosen = []
+    if isinstance(raw, list):
+        for n, entry in enumerate(raw, 1):
+            name = entry.get("name") if isinstance(entry, dict) else None
+            text = entry.get("text") if isinstance(entry, dict) else None
+            if _bad(name) or _bad(text) or len(name.strip()) > MAX_NAME or len(text) > MAX_TEXT:
+                print(f"[type] [keywords] {n}번째 키워드를 건너뜁니다 "
+                      f"(name 은 {MAX_NAME}자, text 는 {MAX_TEXT}자까지, 줄바꿈·탭 없이)")
+                continue
+            if len(chosen) >= MAX_KEYWORDS:
+                print(f"[type] [keywords] 키워드는 {MAX_KEYWORDS}개까지입니다. 나머지는 건너뜁니다.")
+                break
+            chosen.append((f"k{len(chosen)}", name.strip(), text))
+        if not chosen:
+            print("[type] [keywords] 쓸 수 있는 키워드가 없어 기본 목록을 씁니다.")
+    entries = chosen or DEFAULT_KEYWORDS
+    KEYWORDS = {kid: text for kid, _, text in entries}
+    ITEMS = [_item(*e) for e in entries]
+
+
+configure(None)
 # 글 없이 키만 누르는 버튼 (이름 -> 화면 알림에 쓰는 이름, Enter 앞에 Tab 을 누를지).
 # Tab + Enter 는 Claude Code 가 흐리게 보여준 추천 문장을 받아서 바로 보낸다.
 # (ORCA 화면 아래 버튼은 앞에 있는 창이 아니라 고른 세션에 보내야 해서 orca.py 가 따로 맡는다)

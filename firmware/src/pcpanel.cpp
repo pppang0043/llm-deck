@@ -1,6 +1,13 @@
 #include "pcpanel.h"
 
+#include <Preferences.h>
+
 #include "link.h"
+#include "orcapanel.h"
+
+#define COUNT(a) (sizeof(a) / sizeof(a[0]))
+#define MAX_BUTTONS 6
+#define MAX_BUTTONS_KW (KW_MAX + 1)
 #include "ui.h"
 
 LV_FONT_DECLARE(font_ko_14);
@@ -27,16 +34,33 @@ static const Shortcut PROGRAMS[] = {
     {"powershell", "파워쉘", "파워쉘을", ">_", 0x2B5797},
     {"powershell_admin", "파워쉘 (관리자)", "관리자 파워쉘을", ">_", 0x7A2E3B},
 };
-static const Shortcut KEYWORDS[] = {
-    {"commit", "커밋해줘", "\"커밋해줘\"를", nullptr, 0x2E7D5B},
-    {"deploy", "배포해줘", "\"배포해줘\"를", nullptr, 0x3A6EA5},
-    {"error", "에러 확인", "\"에러 확인\"을", nullptr, 0xB0563A},
-    {"orchestration", "/orchestration", "\"/orchestration\"을", nullptr, 0x6A4FB0},
-    // 글 대신 Tab 을 누르고 Enter: Claude Code 의 추천 문장을 받아서 보낸다
-    {"tab_enter", "Tab + Enter", "Tab + Enter를", nullptr, 0x5B6573},
+// 키워드 버튼: PC 도우미가 config.toml 대로 보내 준 목록 ({"keywords": [{"id", "name", "obj"}]}), 받은 적이 없으면 기본 목록.
+// 입력되는 글은 PC 에만 있다 (companion/typer.py). 받은 목록은 NVS 에 두어 PC 가 없을 때도 같은 버튼이 보인다.
+// 글을 입력하는 버튼은 한 색으로 (ORCA 상태 색과 겹치지 않는 보라)
+#define KW_COLOR 0x6A4FB0
+#define KW_MAX 5  // + 맨 끝 Tab + Enter = 6칸 (MAX_BUTTONS)
+static const Shortcut DEFAULT_KEYWORDS[] = {
+    {"commit", "커밋", "\"커밋해줘\"를", nullptr, KW_COLOR},
+    {"deploy", "배포", "\"배포해줘\"를", nullptr, KW_COLOR},
+    {"push", "푸쉬", "\"푸쉬해줘\"를", nullptr, KW_COLOR},
+    {"error", "에러 확인", "\"에러 확인\"을", nullptr, KW_COLOR},
+    {"orchestration", "/orchestration", "\"/orchestration\"을", nullptr, KW_COLOR},
 };
-#define COUNT(a) (sizeof(a) / sizeof(a[0]))
-#define MAX_BUTTONS 6
+// 글 대신 Tab 을 누르고 Enter: Claude Code 의 추천 문장을 받아서 보낸다
+static const Shortcut TAB_ENTER = {"tab_enter", "Tab + Enter", "Tab + Enter를", nullptr, 0x5B6573};
+// 받은 목록 (NVS 에 이대로 저장한다. 모양을 바꾸면 KW_VERSION 을 올린다)
+#define KW_VERSION 1
+struct KwSlot {
+  char id[16];
+  char name[52];  // 12글자 (한글 3바이트, 그림 글자 4바이트)
+  char obj[72];   // 알림에 쓰는 말 ("\"커밋해줘\"를")
+};
+struct KwStore {
+  uint8_t version, count;
+  KwSlot slot[KW_MAX];
+};
+static KwStore kw_store;
+static Shortcut KEYWORDS[MAX_BUTTONS_KW];
 #define RAIL_W 66  // 왼쪽 끝의 고르기 칸 폭
 
 // 단축키 화면 안의 한 묶음 (프로그램 / 키워드). 왼쪽 끝 칸에서 고른다.
@@ -53,7 +77,7 @@ struct ButtonPage {
 static ButtonPage programs = {"프로그램", "사용 중인 PC에서 엽니다", "launch", "PC에서 %s 엽니다", PROGRAMS,
                               COUNT(PROGRAMS)};
 static ButtonPage keywords = {"키워드", "PC의 커서 자리에 입력하고 Enter", "type", "PC에 %s 입력합니다",
-                              KEYWORDS, COUNT(KEYWORDS)};
+                              KEYWORDS, 0};
 static ButtonPage *const PAGES[] = {&programs, &keywords};
 static lv_obj_t *short_panel, *rail;
 static int selected = 0;
@@ -115,11 +139,103 @@ static void button_clicked(lv_event_t *e) {
 }
 
 bool pcpanel_keyword(int i, const char **id, const char **name, uint32_t *color) {
-  if (i < 0 || i >= (int)COUNT(KEYWORDS)) return false;
+  if (i < 0 || i >= (int)keywords.count) return false;
   *id = KEYWORDS[i].id;
   *name = KEYWORDS[i].name;
   *color = KEYWORDS[i].color;
   return true;
+}
+
+// ---- 키워드 목록 (PC 가 보낸 것 / NVS / 기본) ----
+
+static void layout_shortcuts(int x, int y, int w, int h);
+static void build_buttons(ButtonPage &page);
+
+// 바이트 수 안에서 자르되 UTF-8 글자 중간에서 끊지 않는다
+static void copy_utf8(char *dst, const char *src, size_t size) {
+  size_t n = strlen(src);
+  if (n >= size) {
+    n = size - 1;
+    while (n > 0 && ((uint8_t)src[n] & 0xC0) == 0x80) n--;
+  }
+  memcpy(dst, src, n);
+  dst[n] = 0;
+}
+
+// 기기가 PC 로 보내는 id 는 짧은 영문·숫자·_ 만 (보내는 JSON 에 그대로 넣는다)
+static bool good_id(const char *id) {
+  size_t n = strlen(id);
+  if (n == 0 || n >= sizeof(KwSlot::id)) return false;
+  for (size_t i = 0; i < n; i++) {
+    if (!isalnum((uint8_t)id[i]) && id[i] != '_') return false;
+  }
+  return strcmp(id, "tab_enter") != 0;
+}
+
+// kw_store (비어 있으면 기본 목록) 로 KEYWORDS 를 채운다. 맨 끝은 늘 Tab + Enter
+static void kw_fill() {
+  size_t n = 0;
+  if (kw_store.count) {
+    for (; n < kw_store.count; n++) {
+      const KwSlot &k = kw_store.slot[n];
+      KEYWORDS[n] = {k.id, k.name, k.obj, nullptr, KW_COLOR};
+    }
+  } else {
+    for (; n < COUNT(DEFAULT_KEYWORDS); n++) KEYWORDS[n] = DEFAULT_KEYWORDS[n];
+  }
+  KEYWORDS[n++] = TAB_ENTER;
+  keywords.count = n;
+}
+
+static void kw_load() {
+  Preferences prefs;
+  memset(&kw_store, 0, sizeof(kw_store));
+  if (prefs.begin("keywords", true)) {
+    if (prefs.getBytes("list", &kw_store, sizeof(kw_store)) != sizeof(kw_store) || kw_store.version != KW_VERSION ||
+        kw_store.count > KW_MAX) {
+      memset(&kw_store, 0, sizeof(kw_store));
+    }
+    prefs.end();
+  }
+  kw_fill();
+}
+
+void pcpanel_set_keywords(JsonArrayConst list) {
+  KwStore next;
+  memset(&next, 0, sizeof(next));
+  next.version = KW_VERSION;
+  for (JsonObjectConst k : list) {
+    const char *id = k["id"] | "";
+    const char *name = k["name"] | "";
+    const char *obj = k["obj"] | "";
+    if (next.count >= KW_MAX || !good_id(id) || !name[0]) continue;
+    KwSlot &slot = next.slot[next.count++];
+    strlcpy(slot.id, id, sizeof(slot.id));
+    copy_utf8(slot.name, name, sizeof(slot.name));
+    copy_utf8(slot.obj, obj[0] ? obj : name, sizeof(slot.obj));
+  }
+  if (!next.count) return;  // 빈 목록은 받지 않는다 (지금 버튼을 그대로 둔다)
+  if (memcmp(&next, &kw_store, sizeof(next)) == 0) return;  // 같은 목록 (사용량을 보낼 때마다 온다)
+  kw_store = next;
+  Preferences prefs;
+  if (prefs.begin("keywords")) {
+    prefs.putBytes("list", &kw_store, sizeof(kw_store));
+    prefs.end();
+  }
+  Serial.printf("[pcpanel] keywords from PC: %u\n", kw_store.count);
+  if (!short_panel) {
+    kw_fill();
+    return;
+  }
+  // 버튼을 지우고 새 목록으로 다시 만든다
+  for (size_t i = 0; i < keywords.count; i++) {
+    if (keywords.btns[i]) lv_obj_del(keywords.btns[i]);
+    keywords.btns[i] = nullptr;
+  }
+  kw_fill();
+  build_buttons(keywords);
+  if (short_w > 0) layout_shortcuts(short_x, short_y, short_w, short_h);
+  orcapanel_keywords_changed();
 }
 
 static void select_page(int index) {
@@ -155,6 +271,10 @@ static void build_page(ButtonPage &page, int index) {
   lv_obj_clear_flag(page.area, LV_OBJ_FLAG_SCROLLABLE);
   page.note_lbl = add_label(page.area, page.note, &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(page.note_lbl, LV_LABEL_LONG_DOT);
+  build_buttons(page);
+}
+
+static void build_buttons(ButtonPage &page) {
   for (size_t i = 0; i < page.count && i < MAX_BUTTONS; i++) {
     const Shortcut &s = page.items[i];
     lv_obj_t *b = lv_btn_create(page.area);
@@ -354,6 +474,7 @@ static void build_status(lv_obj_t *parent) {
 }
 
 void pcpanel_build(lv_obj_t *parent) {
+  kw_load();
   build_shortcuts(parent);
   build_status(parent);
 }

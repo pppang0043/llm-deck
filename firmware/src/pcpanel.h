@@ -27,6 +27,9 @@ bool pcpanel_status_visible();
 
 // 키워드 단축키 목록 (ORCA 화면의 세션 팝업도 같은 목록을 쓴다). 없는 번호면 false.
 bool pcpanel_keyword(int i, const char **id, const char **name, uint32_t *color);
+// PC 가 보낸 {"keywords": [{"id", "name", "obj"}]} (link.cpp 가 부른다). 최대 5개 + 맨 끝 Tab + Enter.
+// 바뀌었을 때만 NVS 에 저장하고 키워드 버튼과 ORCA 팝업을 다시 만든다 (받은 적이 없으면 기본 목록).
+void pcpanel_set_keywords(JsonArrayConst list);
 
 // 사용 중인 PC 의 종류 ("mac", "win", "linux"). Mac 이면 파워쉘 버튼을 "터미널" 로 보이고 관리자 버튼은 뺀다
 // (Mac 도우미는 둘 다 터미널을 연다)

@@ -3,6 +3,7 @@
 #include "askpanel.h"
 #include "link.h"
 #include "pcpanel.h"
+#include "speaker.h"
 #include "ui.h"
 
 LV_FONT_DECLARE(font_ko_14);
@@ -21,6 +22,7 @@ LV_FONT_DECLARE(font_ko_20);
 #define POP_BTN_H 32
 #define POP_MAX 10
 #define KEEP_ORDER_MS 15000  // 누른 뒤 이만큼은 순서를 바꾸지 않는다 (누르려던 자리에 다른 세션이 오지 않게)
+#define ALERT_QUIET_MS 60000  // 한 세션의 같은 알림은 이만큼 안에 다시 내지 않는다 (상태가 오락가락할 때)
 
 struct Session {
   char id[12];
@@ -54,6 +56,12 @@ static int pop_count = 0;
 static bool pop_open = false;
 static int area_w, area_h;  // 마지막 배치 (팝업 자리를 정한다)
 static void set_pop(bool open);
+// 빠른 답 창: 세션을 길게 누르면 가운데에 뜬다. 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속.
+static lv_obj_t *qr, *qr_title, *qr_btn[2], *qr_lbl[2];
+static char qr_id[12] = "";  // 빠른 답을 보낼 세션 (비어 있으면 닫혀 있다)
+static bool qr_permission = false;
+static bool long_pressed = false;  // 길게 누른 뒤 손을 떼면 오는 CLICKED 는 무시한다
+static void close_qr();
 
 // 작업 상태는 버튼 색으로 (orca.py 의 s)
 struct StateLook {
@@ -62,7 +70,7 @@ struct StateLook {
   bool dark_text;
 };
 static const StateLook LOOKS[] = {
-    {"working", 0x2F6FD0, false},    {"waiting", 0xE0A030, true},   {"awaiting-input", 0xE0A030, true},
+    {"working", 0x2B4A73, false},    {"waiting", 0xE0A030, true},   {"awaiting-input", 0xE0A030, true},
     {"permission", 0xD8433A, false}, {"blocked", 0xD8433A, false}, {"done", 0x2E8B5E, false},
     {"idle", 0x4A535E, false},       {"shell", 0x2A3038, false},
 };
@@ -92,9 +100,23 @@ static bool dictating_to(const Session &s) {
   return askpanel_dictating() || askpanel_dictate_step() != DICTATE_IDLE;
 }
 
+static bool is_permission(const char *state) {
+  return strcmp(state, "permission") == 0;
+}
+
+// 다음 입력을 기다리는 상태 (orca.py 의 REPLIES "continue" 와 같다)
+static bool is_waiting(const char *state) {
+  return strcmp(state, "waiting") == 0 || strcmp(state, "awaiting-input") == 0 || strcmp(state, "done") == 0;
+}
+
 // 처음 누르면 그 세션을 ORCA 에서 앞으로 띄우기만 한다. 띄운 세션을 다시 누르면 받아쓰기, 또 누르면 넣는다.
 static void btn_event(lv_event_t *e) {
   int i = (intptr_t)lv_obj_get_user_data(lv_event_get_current_target(e));
+  if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+    long_pressed = false;
+    return;
+  }
+  if (long_pressed) return;
   if (i < 0 || i >= count) return;
   touched_at = lv_tick_get();
   const Session &s = sessions[i];
@@ -126,6 +148,107 @@ static void btn_event(lv_event_t *e) {
     return;
   }
   if (askpanel_press_orca(s.id)) orcapanel_refresh();
+}
+
+// 길게 누르면 빠른 답 창 (누르기는 그대로: 띄우기, 받아쓰기)
+static void btn_long_event(lv_event_t *e) {
+  int i = (intptr_t)lv_obj_get_user_data(lv_event_get_current_target(e));
+  if (i < 0 || i >= count) return;
+  long_pressed = true;
+  touched_at = lv_tick_get();
+  const Session &s = sessions[i];
+  if (!pc_connected()) {
+    ui_toast("연결된 PC가 없습니다", 2000);
+    return;
+  }
+  if (!is_permission(s.state) && !is_waiting(s.state)) {
+    ui_toast("빠른 답은 권한 요청이나\n입력 기다림일 때만 됩니다", 2500);
+    return;
+  }
+  snprintf(qr_id, sizeof(qr_id), "%s", s.id);
+  qr_permission = is_permission(s.state);
+  lv_label_set_text(qr_title, s.title);
+  lv_label_set_text(qr_lbl[0], qr_permission ? "허용" : "계속");
+  lv_obj_set_style_bg_color(qr_btn[0], lv_color_hex(0x2E8B5E), 0);
+  if (qr_permission) {
+    lv_label_set_text(qr_lbl[1], "거부");
+    lv_obj_clear_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_obj_clear_flag(qr, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(qr);
+}
+
+// 빠른 답 버튼: 이름만 보낸다. 보낼 키와 지금 상태 확인은 PC 가 한다 (orca.py 의 REPLIES)
+static void qr_event(lv_event_t *e) {
+  int k = (intptr_t)lv_event_get_user_data(e);
+  if (!qr_id[0]) return;
+  if (!pc_connected()) {
+    ui_toast("연결된 PC가 없습니다", 2000);
+    return;
+  }
+  touched_at = lv_tick_get();
+  const char *reply = !qr_permission ? "continue" : k == 0 ? "allow" : "deny";
+  char json[96];
+  snprintf(json, sizeof(json), "{\"orca\":\"reply\",\"id\":\"%s\",\"reply\":\"%s\"}", qr_id, reply);
+  link_send_event(json);
+  close_qr();
+}
+
+static void close_qr() {
+  qr_id[0] = 0;
+  if (qr) lv_obj_add_flag(qr, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void build_qr() {
+  qr = lv_obj_create(panel);
+  lv_obj_remove_style_all(qr);
+  lv_obj_set_style_bg_color(qr, lv_color_hex(0x1C232B), 0);
+  lv_obj_set_style_bg_opa(qr, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(qr, 12, 0);
+  lv_obj_set_style_pad_all(qr, 8, 0);
+  lv_obj_set_style_border_width(qr, 1, 0);
+  lv_obj_set_style_border_color(qr, lv_color_hex(0x3A4350), 0);
+  lv_obj_set_style_shadow_width(qr, 24, 0);
+  lv_obj_set_style_shadow_color(qr, lv_color_black(), 0);
+  lv_obj_set_style_shadow_opa(qr, LV_OPA_80, 0);
+  lv_obj_clear_flag(qr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(qr, LV_OBJ_FLAG_HIDDEN);
+  qr_title = add_label(qr, "", &font_ko_14, COLOR_ACCENT);
+  lv_label_set_long_mode(qr_title, LV_LABEL_LONG_DOT);
+  lv_obj_align(qr_title, LV_ALIGN_TOP_LEFT, 0, 2);
+  lv_obj_t *close = lv_btn_create(qr);
+  lv_obj_set_size(close, 24, 22);
+  lv_obj_set_style_bg_opa(close, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_shadow_width(close, 0, 0);
+  lv_obj_set_style_pad_all(close, 0, 0);
+  lv_obj_set_ext_click_area(close, 8);
+  lv_obj_align(close, LV_ALIGN_TOP_RIGHT, 0, 0);
+  lv_obj_add_event_cb(close, [](lv_event_t *e) { close_qr(); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_center(add_label(close, LV_SYMBOL_CLOSE, &lv_font_montserrat_14, COLOR_DIM));
+  for (int k = 0; k < 2; k++) {
+    qr_btn[k] = lv_btn_create(qr);
+    lv_obj_set_style_radius(qr_btn[k], 8, 0);
+    lv_obj_set_style_shadow_width(qr_btn[k], 0, 0);
+    lv_obj_set_style_bg_color(qr_btn[k], lv_color_hex(k == 0 ? 0x2E8B5E : 0xD8433A), 0);
+    lv_obj_add_event_cb(qr_btn[k], qr_event, LV_EVENT_CLICKED, (void *)(intptr_t)k);
+    qr_lbl[k] = add_label(qr_btn[k], "", &font_ko_20, lv_color_white());
+    lv_obj_center(qr_lbl[k]);
+  }
+}
+
+// 가운데에 뜬다. 버튼 두 개(거부가 숨으면 계속 하나가 넓게)
+static void place_qr() {
+  int w = LV_MIN(area_w - 24, 320), h = 112;
+  lv_obj_set_size(qr, w, h);
+  lv_obj_align(qr, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_width(qr_title, w - 16 - 28);
+  int bw = (w - 16 - 8) / 2, bh = h - 16 - 32;
+  lv_obj_set_size(qr_btn[0], bw, bh);
+  lv_obj_set_pos(qr_btn[0], 0, 32);
+  lv_obj_set_size(qr_btn[1], bw, bh);
+  lv_obj_set_pos(qr_btn[1], bw + 8, 32);
 }
 
 // 버튼 글자: 버튼에 들어가는 만큼(세 줄까지), 넘치면 ... 으로. 짧으면 버튼 가운데에.
@@ -171,6 +294,13 @@ void orcapanel_refresh() {
   while (active < count && strcmp(sessions[active].id, active_id) != 0) active++;
   if (pop_open && (problem || active == count)) set_pop(false);
   if (pop_open) lv_label_set_text(pop_title, sessions[active].title);
+  // 빠른 답 창: 세션이 사라졌거나 더는 그 답을 받을 상태가 아니면 닫는다
+  if (qr_id[0]) {
+    int q = 0;
+    while (q < count && strcmp(sessions[q].id, qr_id) != 0) q++;
+    bool fits = q < count && (qr_permission ? is_permission(sessions[q].state) : is_waiting(sessions[q].state));
+    if (problem || !fits) close_qr();
+  }
   for (int n = 0; n < MAX_PAGES; n++) {
     Page &p = pages[n];
     if (n >= page_count || problem) {
@@ -250,6 +380,20 @@ static void add_pop_btn(const char *key, const char *name, uint32_t color) {
   lv_obj_center(lbl);
 }
 
+// 키워드 버튼 (PC 가 보낸 목록이면 그 이름), 그 아래 키
+static void fill_pop() {
+  const char *id, *name;
+  uint32_t color;
+  for (int i = 0; pcpanel_keyword(i, &id, &name, &color); i++) {
+    if (strcmp(id, "tab_enter") != 0) add_pop_btn(id, name, color);  // 아래 키 버튼과 겹친다
+  }
+  add_pop_btn("tab", "Tab", 0x3A4350);
+  add_pop_btn("tab_enter", "Tab + Enter", 0x5B6573);
+  add_pop_btn("enter", "Enter", 0x3A4350);
+}
+
+static void place_pop();
+
 static void build_pop() {
   pop = lv_obj_create(panel);
   lv_obj_remove_style_all(pop);
@@ -290,14 +434,15 @@ static void build_pop() {
   lv_obj_set_style_pad_row(pop_list, 4, 0);
   lv_obj_set_style_pad_column(pop_list, 4, 0);
   lv_obj_clear_flag(pop_list, LV_OBJ_FLAG_SCROLLABLE);
-  const char *id, *name;
-  uint32_t color;
-  for (int i = 0; pcpanel_keyword(i, &id, &name, &color); i++) {
-    if (strcmp(id, "tab_enter") != 0) add_pop_btn(id, name, color);  // 아래 키 버튼과 겹친다
-  }
-  add_pop_btn("tab", "Tab", 0x3A4350);
-  add_pop_btn("tab_enter", "Tab + Enter", 0x5B6573);
-  add_pop_btn("enter", "Enter", 0x3A4350);
+  fill_pop();
+}
+
+void orcapanel_keywords_changed() {
+  if (!pop_list) return;
+  lv_obj_clean(pop_list);
+  pop_count = 0;
+  fill_pop();
+  if (area_w > 0) place_pop();
 }
 
 // 세션 버튼은 그대로 두고 그 위에 겹친다
@@ -358,6 +503,66 @@ static void set_pop(bool open) {
   reveal_active();
 }
 
+// 상태 알림: 지난번 목록과 비교해 새 권한 요청, 작업 중 -> 완료·입력 기다림이면 알림과 소리.
+// 처음 받은 목록(켠 직후, ORCA 를 다시 읽기 시작)은 비교할 것이 없어 알리지 않는다. 같은 목록을 다시 받아도(다시 연결) 바뀐 것이 없다.
+struct Seen {
+  char id[12];
+  char state[16];
+  uint32_t asked_at, done_at;  // 그 알림을 마지막으로 낸 시각 (0 이면 아직)
+};
+static Seen seen[MAX_ROWS];
+static int seen_count = 0;
+static bool seen_ok = false;  // seen 이 ORCA 를 읽은 목록인지
+
+static bool quiet(uint32_t at) {
+  return at && lv_tick_elaps(at) < ALERT_QUIET_MS;
+}
+
+static void check_alerts(const Session *next, int n) {
+  static Seen now[MAX_ROWS];
+  const char *asked = nullptr, *done = nullptr;  // 알릴 세션 이름 (처음 것)
+  int asked_n = 0, done_n = 0;
+  for (int i = 0; i < n; i++) {
+    const Session &s = next[i];
+    Seen &m = now[i];
+    snprintf(m.id, sizeof(m.id), "%s", s.id);
+    snprintf(m.state, sizeof(m.state), "%s", s.state);
+    m.asked_at = m.done_at = 0;
+    int j = 0;
+    while (j < seen_count && strcmp(seen[j].id, s.id) != 0) j++;
+    const char *before = j < seen_count ? seen[j].state : "";
+    if (j < seen_count) m.asked_at = seen[j].asked_at, m.done_at = seen[j].done_at;
+    if (!seen_ok) continue;
+    if (is_permission(s.state) && !is_permission(before) && !quiet(m.asked_at)) {
+      m.asked_at = lv_tick_get() | 1;
+      if (!asked_n++) asked = s.title;
+    } else if (strcmp(before, "working") == 0 && is_waiting(s.state) && !quiet(m.done_at)) {
+      m.done_at = lv_tick_get() | 1;
+      if (!done_n++) done = s.title;
+    }
+  }
+  memcpy(seen, now, sizeof(Seen) * n);
+  seen_count = n;
+  seen_ok = true;
+  if (!asked && !done) return;
+  // 권한 요청이 먼저 (기다리게 하면 작업이 멈춘다)
+  char text[160];
+  const char *name = asked ? asked : done;
+  int more = (asked ? asked_n : done_n) - 1;
+  if (more > 0) {
+    snprintf(text, sizeof(text), "%s\n%.60s 외 %d개", asked ? "ORCA 권한 요청" : "ORCA 작업 끝", name, more);
+  } else {
+    snprintf(text, sizeof(text), "%s\n%.60s", asked ? "ORCA 권한 요청" : "ORCA 작업 끝", name);
+  }
+  const char *sound = asked ? "limit_warn" : "limit_reset";  // alerts.cpp 의 소리를 같이 쓴다
+  Serial.printf("[orca] alert %s\n", sound);
+  ui_toast(text, 6000);
+  if (speaker_play(sound)) return;
+  char event[48];
+  snprintf(event, sizeof(event), "{\"sound\":\"%s\"}", sound);
+  link_send_event(event);
+}
+
 void orcapanel_set(JsonObjectConst orca) {
   received = true;
   orca_ok = orca["ok"] | false;
@@ -370,6 +575,12 @@ void orcapanel_set(JsonObjectConst orca) {
     snprintf(s.title, sizeof(s.title), "%s", item["t"] | "");
     snprintf(s.project, sizeof(s.project), "%s", item["p"] | "");
     snprintf(s.state, sizeof(s.state), "%s", item["s"] | "idle");
+  }
+  // ORCA 를 못 읽은 목록(꺼짐)은 비교하지 않는다. 다시 읽기 시작하면 첫 목록은 알리지 않는다.
+  if (orca_ok) {
+    check_alerts(next, n);
+  } else {
+    seen_ok = false;
   }
   // 방금 눌렀으면 같은 세션들인 동안은 자리를 그대로 두고 상태만 바꾼다
   bool keep = n == count && touched_at && lv_tick_elaps(touched_at) < KEEP_ORDER_MS;
@@ -430,6 +641,8 @@ void orcapanel_build(lv_obj_t *parent) {
       lv_obj_set_style_pad_all(p.btn[k], 6, 0);
       lv_obj_set_style_border_color(p.btn[k], lv_color_white(), 0);
       lv_obj_add_event_cb(p.btn[k], btn_event, LV_EVENT_CLICKED, NULL);
+      lv_obj_add_event_cb(p.btn[k], btn_event, LV_EVENT_PRESSED, NULL);
+      lv_obj_add_event_cb(p.btn[k], btn_long_event, LV_EVENT_LONG_PRESSED, NULL);
       p.lbl[k] = add_label(p.btn[k], "", &font_ko_14, lv_color_white());
       lv_obj_set_style_text_align(p.lbl[k], LV_TEXT_ALIGN_CENTER, 0);
       lv_label_set_long_mode(p.lbl[k], LV_LABEL_LONG_DOT);
@@ -438,6 +651,7 @@ void orcapanel_build(lv_obj_t *parent) {
     lv_obj_add_flag(p.page, LV_OBJ_FLAG_HIDDEN);
   }
   build_pop();
+  build_qr();
   orcapanel_refresh();
 }
 
@@ -450,6 +664,7 @@ void orcapanel_layout(int x, int y, int w, int h) {
   lv_obj_set_size(pager, w, h);
   lv_obj_set_pos(pager, 0, 0);
   place_pop();
+  place_qr();
   // 세로 화면은 폭이 좁아 2칸으로 (이름이 ... 으로 잘리지 않게). 홈 아이콘과 같다 (ui.cpp layout_home).
   cols = w > h ? 3 : 2;
   rows = PER_PAGE / cols;
@@ -479,6 +694,7 @@ void orcapanel_show(bool on) {
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
   } else {
     // 받아쓰기는 다른 화면으로 가도 이어진다 (사용량 화면 버튼과 같다)
+    close_qr();
     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
   }
 }
