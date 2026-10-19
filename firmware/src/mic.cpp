@@ -6,6 +6,7 @@
 
 #include "ble_link.h"
 #include "link.h"
+#include "net.h"
 #include "pins.h"
 #include "usb_link.h"
 
@@ -36,6 +37,7 @@ static bool open_i2s() {
 static void mic_task(void *) {
   static int32_t raw[MIC_FRAME_SAMPLES];
   static Packet packet;
+  static uint8_t trailer[NET_UDP_TRAILER];
   uint32_t seq = 0;
   bool opened = false;
 
@@ -82,9 +84,11 @@ static void mic_task(void *) {
         ble_send_audio(packet.seq, packet.pcm, MIC_FRAME_SAMPLES);
         break;
       case LINK_WIFI:
-        if (target != 0) {
+        // 서명을 붙인다 (net.h)
+        if (target != 0 && net_udp_trailer((const uint8_t *)&packet, sizeof(packet), trailer)) {
           udp.beginPacket(IPAddress(target), MIC_UDP_PORT);
           udp.write((const uint8_t *)&packet, sizeof(packet));
+          udp.write(trailer, sizeof(trailer));
           udp.endPacket();
         }
         break;

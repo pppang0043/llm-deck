@@ -7,6 +7,7 @@
 #include "display.h"
 #include "link.h"
 #include "mic.h"
+#include "net.h"
 #include "ui.h"
 #include "usb_link.h"
 #include "video.h"
@@ -71,6 +72,11 @@ static void send_wifi(const uint8_t *data, size_t len, Head head) {
     tcp.stop();
     if (!tcp.connect(mic_target(), VIDEO_TCP_PORT, 2000)) {
       Serial.println("[mirror] cannot reach the PC over TCP");
+      return;
+    }
+    if (!net_tcp_hello(tcp)) {
+      Serial.println("[mirror] PC refused Wi-Fi auth");
+      tcp.stop();
       return;
     }
     tcp.setNoDelay(true);

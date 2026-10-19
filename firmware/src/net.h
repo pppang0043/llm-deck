@@ -21,3 +21,21 @@ void net_set_enabled(bool on);
 String net_saved_names();
 // PC 도우미로 추가한 Wi-Fi 개수 (secrets.h 의 것은 빼고)
 int net_added_count();
+
+// Wi-Fi 인증. 같은 네트워크의 누구나 기기에 명령을 보내거나 PC 인 척할 수 없게, USB 로 한 번 받아 간
+// 비밀 키(32바이트)로 서명한다. 키는 기기가 처음 요청받을 때 만들어 기기(NVS)에 저장한다.
+//   PC -> 기기 HTTP: 머리글 X-Deck-Auth: <nonce 32자>.<순번>.<서명 64자>
+//       서명 = HMAC-SHA256(키, "http" + nonce 16바이트 + 순번 4바이트(LE) + 경로 + "\n" + 내용)
+//       nonce 는 /status 가 줄 때마다 새로 만든다 (기기가 다시 켜지면 옛 것은 모두 무효). 같은 순번은 한 번만 받는다
+//   기기 -> PC UDP: [내용][순번 4바이트(LE)][서명 앞 16바이트]
+//       서명 = HMAC-SHA256(키, "udp" + 그 PC 의 nonce 16바이트 + 순번 4바이트 + 내용)
+//   기기 -> PC TCP: 접속하면 PC 가 16바이트 도전값을 보내고, 기기는 첫 묶음 [A5 5A][6][32][HMAC(키, "tcp" + 도전값)] 으로 답한다
+#define NET_FRAME_AUTH 6
+#define NET_UDP_TRAILER 20
+// USB 로 연결한 PC 에 줄 {"pair": {"id": 기기 MAC, "key": 키 64자}} (키가 없으면 만든다). 블루투스는 암호화가 없어 주지 않는다
+String net_pair_json();
+// UDP 로 보낼 내용 뒤에 붙일 순번·서명 (NET_UDP_TRAILER 바이트). Wi-Fi 로 인증된 PC 가 없으면 false. 어느 태스크에서 불러도 된다
+bool net_udp_trailer(const uint8_t *data, size_t len, uint8_t *trailer);
+// TCP 로 PC 에 접속한 직후 부른다 (위 TCP 인증). 실패하면 false (끊고 다시 시도)
+#include <WiFiClient.h>
+bool net_tcp_hello(WiFiClient &client);

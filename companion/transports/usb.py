@@ -9,7 +9,7 @@ from pathlib import Path
 import serial
 from serial.tools import list_ports
 
-from . import frames
+from . import auth, frames
 
 ESPRESSIF_VID = 0x303A
 # ESP32-S3 내장 USB(시리얼/JTAG). 같은 회사의 다른 기기(M5Stack UiFlow 등)는 다른 번호라 걸러진다.
@@ -54,7 +54,7 @@ class UsbTransport:
     def __init__(self, cfg: dict, on_audio, on_event=None, on_photo=None, on_video=None):
         self.port_name = cfg.get("port", "")
         self.on_audio = on_audio
-        self.on_event = on_event or (lambda event: None)
+        self._on_event = on_event or (lambda event: None)
         self.on_photo = on_photo or (lambda offset, data: None)
         self.on_video = on_video or (lambda no, offset, total, ms, data: None)
         self.ser = None
@@ -64,6 +64,22 @@ class UsbTransport:
         self.confirmed = False
         # 메인 루프와 미러링 창(누르기)이 따로 보내므로 한 줄씩 차례로 쓴다
         self._send_lock = threading.Lock()
+        # Wi-Fi 인증 키를 받았는지, 마지막으로 달라고 한 시각 (auth.py). 케이블로 연결했을 때만 받는다
+        self.paired = False
+        self._pair_asked = 0.0
+
+    def on_event(self, event) -> None:
+        pair = event.get("pair") if isinstance(event, dict) else None
+        if isinstance(pair, dict):
+            # 키는 기록에 남기지 않고 저장만 한다
+            self.paired = True
+            try:
+                if auth.save_key(str(pair.get("id", "")), str(pair.get("key", ""))):
+                    print(f"[USB] 기기({pair.get('id')})의 Wi-Fi 인증 키를 받았습니다. 이제 Wi-Fi 로도 연결할 수 있습니다.")
+            except OSError as e:
+                print(f"[USB] Wi-Fi 인증 키를 저장하지 못했습니다: {e}")
+            return
+        self._on_event(event)
 
     def _find_port(self) -> str | None:
         found = find_port(self.port_name)
@@ -141,6 +157,9 @@ class UsbTransport:
         try:
             with self._send_lock:
                 self.ser.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
+                if not self.paired and time.time() - self._pair_asked > 30:
+                    self._pair_asked = time.time()
+                    self.ser.write(b'{"pair":true}\n')
         except (serial.SerialException, AttributeError) as e:
             raise OSError(str(e)) from e
 

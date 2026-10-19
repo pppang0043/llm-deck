@@ -6,6 +6,7 @@
 
 #include "link.h"
 #include "mic.h"
+#include "net.h"
 #include "sd_video.h"
 #include "settings.h"
 #include "storage.h"
@@ -60,6 +61,9 @@ static void sender_task(void *) {
       tcp.stop();
       if (!tcp.connect(mic_target(), VIDEO_TCP_PORT, 3000)) {
         Serial.println("[video] cannot reach the PC over TCP");
+      } else if (!net_tcp_hello(tcp)) {
+        Serial.println("[video] PC refused Wi-Fi auth");
+        tcp.stop();
       }
     }
     if (job.kind == JOB_FRAME && link_used == LINK_WIFI) {
