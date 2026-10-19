@@ -13,6 +13,7 @@
 #include "net.h"
 #include "speaker.h"
 #include "speaker_proto.h"
+#include "sd_video.h"
 #include "storage.h"
 #include "ui.h"
 
@@ -626,6 +627,11 @@ static void wifi_clear_clicked(lv_event_t *e) {
 }
 
 static void sd_recheck_clicked(lv_event_t *e) {
+  // 동영상을 아직 쓰고 있으면 (녹화를 멈춘 뒤에도 잠깐) 카드를 건드리지 않는다
+  if (sd_video_active()) {
+    ui_toast("동영상을 저장하는 중입니다\n잠시 뒤에 다시 해 주세요", 2500);
+    return;
+  }
   bool ok = storage_recheck();
   refresh_page();
   ui_toast(ok ? "SD 카드를 찾았습니다" : "SD 카드가 없습니다", 2000);
@@ -633,6 +639,11 @@ static void sd_recheck_clicked(lv_event_t *e) {
 
 static void sd_format_clicked(lv_event_t *e) {
   if (!confirmed(sd_format_btn)) return;
+  // 동영상을 아직 쓰고 있으면 (녹화를 멈춘 뒤에도 잠깐) 카드를 건드리지 않는다
+  if (sd_video_active()) {
+    ui_toast("동영상을 저장하는 중입니다\n잠시 뒤에 다시 해 주세요", 2500);
+    return;
+  }
   ui_toast("SD 카드를 포맷하는 중...", 30000);
   lv_refr_now(NULL);
   bool ok = storage_format();
@@ -642,6 +653,11 @@ static void sd_format_clicked(lv_event_t *e) {
 
 static void sd_clear_clicked(lv_event_t *e) {
   if (!confirmed(sd_clear_btn)) return;
+  // 동영상을 아직 쓰고 있으면 (녹화를 멈춘 뒤에도 잠깐) 카드를 건드리지 않는다
+  if (sd_video_active()) {
+    ui_toast("동영상을 저장하는 중입니다\n잠시 뒤에 다시 해 주세요", 2500);
+    return;
+  }
   int photos = storage_clear("/photos");
   int videos = storage_clear("/videos");
   refresh_page();
@@ -763,7 +779,7 @@ static void build_speaker(lv_obj_t *parent) {
 static void build_notify(lv_obj_t *parent) {
   lv_obj_t *p = add_sub_page(parent, PAGE_NOTIFY, "알림 및 사운드");
   mic_sw = add_switch(add_row(p, "마이크", "기기 마이크 소리를 PC로"), mic_is_on(), mic_changed);
-  alert_sw = add_switch(add_row(p, "한도 알림", "80%, 90%, 초기화 때"), limit_alerts, alert_changed);
+  alert_sw = add_switch(add_row(p, "한도 알림", "80%, 90%, 곧 소진, 초기화 때"), limit_alerts, alert_changed);
   sound_sw = add_switch(add_row(p, "마이크 알림음", "켜고 끌 때 소리"), mic_sound, sound_changed);
   add_note(p, "알림음은 블루투스 스피커를 연결해 두었으면 그 스피커로, 아니면 사용 중인 PC의 스피커로 나옵니다.");
 }

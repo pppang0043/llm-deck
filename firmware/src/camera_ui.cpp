@@ -7,6 +7,7 @@
 #include "display.h"
 #include "gallery.h"
 #include "photo.h"
+#include "sd_video.h"
 #include "ui.h"
 #include "link.h"
 #include "video.h"
@@ -97,6 +98,11 @@ static void open_camera() {
 
 static void take_photo() {
   if (!camera_running()) return;
+  // 사진은 크기를 바꿔 찍으므로 녹화 중에 찍으면 녹화 크기(640)로 돌아오지 않아 녹화가 끊긴다
+  if (video_recording()) {
+    show_message("녹화 중에는 사진을 찍을 수 없습니다", 2500);
+    return;
+  }
   show_message("찍는 중...", 0);
   lv_refr_now(NULL);
   uint8_t *jpg;
@@ -273,10 +279,15 @@ static void show_send_progress() {
   static uint32_t seen = 0;
   bool ok;
   uint32_t ms;
-  uint32_t count = photo_finished(&ok, &ms);
+  const char *name;
+  uint32_t count = photo_finished(&ok, &ms, &name);
   if (count != seen) {
     seen = count;
-    if (ms > 2000) ui_toast(ok ? "사진을 PC에 보냈습니다" : "사진을 PC에 보내지 못했습니다", 2500);
+    // 갤러리에서 다시 보낸 동영상(.mov)도 같은 길로 간다
+    const char *dot = strrchr(name, '.');
+    bool movie = dot && strcasecmp(dot, ".mov") == 0;
+    if (ms > 2000 && movie) ui_toast(ok ? "동영상을 PC에 보냈습니다" : "동영상을 PC에 보내지 못했습니다", 3000);
+    else if (ms > 2000) ui_toast(ok ? "사진을 PC에 보냈습니다" : "사진을 PC에 보내지 못했습니다", 2500);
   }
   int pct;
   if (is_open && photo_progress(&pct)) {
@@ -316,6 +327,8 @@ void camera_ui_loop() {
     if (strcmp(lv_label_get_text(rec_lbl), t) != 0) lv_label_set_text(rec_lbl, t);
     // PC 로만 녹화하는 중에 PC 연결이 끊기면 멈춘다 (SD 카드에도 쓰는 중이면 계속한다)
     if (video_needs_pc() && link_active() != LINK_USB && link_active() != LINK_WIFI) stop_recording();
+    // SD 카드가 가득 차 더 쓰지 못하면, PC 로도 보내는 중이 아니면 멈춘다 (알림은 sd_video 가 띄운다)
+    if (sd_video_failed() && link_active() != LINK_USB && link_active() != LINK_WIFI) stop_recording();
   }
   if (!camera_preview(frame_buf, display_width(), display_height(), display_rotation(), &w, &h)) return;
   static uint32_t frames = 0, counted_ms = 0;
@@ -337,6 +350,12 @@ void camera_ui_loop() {
 }
 
 void camera_ui_command(const char *cmd) {
+  // 갤러리는 카메라 화면 위에 덮이므로, 열린 동안 켜면 카메라가 안 보이는 채로 돈다
+  bool needs_camera = strcmp(cmd, "open") == 0 || strcmp(cmd, "shoot") == 0 || strcmp(cmd, "record") == 0;
+  if (needs_camera && gallery_open()) {
+    ui_toast("갤러리를 닫은 뒤에 다시 해 주세요", 3000);
+    return;
+  }
   if (strcmp(cmd, "open") == 0) {
     open_camera();
   } else if (strcmp(cmd, "shoot") == 0) {

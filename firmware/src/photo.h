@@ -26,7 +26,14 @@ bool photo_sending();
 // 보내는 중이면 true 와 진행률(%)
 bool photo_progress(int *pct);
 // 지금까지 다 보낸(또는 실패한) 사진 수. 마지막 것의 성공 여부와 걸린 시간도 준다.
-uint32_t photo_finished(bool *ok, uint32_t *ms);
+uint32_t photo_finished(bool *ok, uint32_t *ms, const char **name = nullptr);
 
 // 진단용: 아무 파일이나 사진처럼 PC 로 보낸다 (USB·블루투스). data 는 ps_malloc 으로 잡은 것, 보낸 뒤 해제한다.
 bool photo_send_file(const char *name, uint8_t *data, size_t len);
+
+// 카드의 파일(갤러리의 동영상 등)을 이름 그대로 USB 로 연결한 PC 로 보낸다. 파일 전체를 메모리에 올리지 않고
+// 16KB 씩 읽어 보내므로 크기 제한이 없고 화면도 멈추지 않는다. 형식은 사진과 같다 (알림 + USB_FRAME_PHOTO 조각).
+// USB 가 아니거나 앞의 것을 보내는 중이라 줄에 못 넣으면 false.
+bool photo_send_sd_file(const char *path);
+// 카드 파일을 보내는 중인지 (path 를 주면 그 파일인지). 보내는 중인 파일은 지우거나 카드 연결을 끊지 않는다.
+bool photo_streaming(const char *path = nullptr);

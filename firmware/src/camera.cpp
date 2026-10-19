@@ -374,7 +374,8 @@ static uint8_t *add_orientation(const uint8_t *jpg, size_t len, uint8_t k, size_
 }
 
 bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len) {
-  if (!running) return false;
+  // 녹화 중에 크기를 바꾸면 녹화 크기로 돌아오지 않는다
+  if (!running || video_mode) return false;
   sensor_t *s = esp_camera_sensor_get();
   s->set_framesize(s, FRAMESIZE_UXGA);
   // 크기를 바꾼 직전 몇 장은 이전 크기가 섞여 나오므로 버린다

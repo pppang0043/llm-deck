@@ -9,7 +9,10 @@
 
 #include "display.h"
 #include "health.h"
+#include "link.h"
+#include "mov_repair.h"
 #include "photo.h"
+#include "sd_video.h"
 #include "storage.h"
 
 LV_FONT_DECLARE(font_ko_14);
@@ -28,11 +31,26 @@ LV_FONT_DECLARE(font_ko_20);
 #define GRID_MAX 200
 // 이보다 많은 작은 그림을 가지고 있으면 화면에서 먼 것부터 버린다
 #define THUMB_KEEP 60
+// 카드에 저장해 둔 작은 그림 (storage_thumb_path): 머리 16바이트 + RGB565 픽셀. 머리가 맞지 않거나 크기가 다르면 원본에서 다시 만든다
+#define THUMB_MAGIC 0x31485447  // "GTH1"
+#define THUMB_BOX_MAX 160
+// 저장해 둔 작은 그림은 빨리 읽히므로 한 번에 여러 칸을 채운다 (이 시간 안에서)
+#define THUMB_BUDGET_MS 25
+// USB 로 PC 에 다시 보낼 수 있는 동영상 크기 (PC 도우미가 받는 한도, photos.py). 실제로는 PSRAM 의 빈 곳만큼.
 
 struct Item {
   String path;
   String key;  // 이름에서 "IMG_" / "VID_" 를 뺀 것 (찍은 시각 순으로 정렬된다)
   bool video;
+  uint32_t size;  // 저장해 둔 작은 그림이 이 파일의 것인지 확인한다
+};
+
+struct ThumbHead {
+  uint32_t magic;
+  uint16_t w, h;
+  uint16_t box;  // 만들 때의 칸 크기
+  uint16_t pad;
+  uint32_t src_size;  // 원본 파일 크기
 };
 
 // 격자 칸의 작은 그림 (PSRAM)
@@ -59,6 +77,7 @@ static void (*close_cb)() = nullptr;
 static uint32_t gestured_ms = 0;
 static uint32_t delete_armed_ms = 0;  // 지우기를 한 번 누른 시각 (0 이면 안 누름)
 static uint32_t msg_until = 0;  // 잠깐 띄운 글을 숨길 시각 (0 이면 그대로 둔다)
+static const char *open_error = nullptr;  // 열 때 실패한 까닭 (메모리 부족 등). 있으면 빈 격자에 이것을 보여 준다
 
 static lv_obj_t *overlay, *img, *close_btn, *delete_btn, *send_btn, *prev_btn, *next_btn, *info_lbl, *msg_lbl, *play_icon,
     *time_lbl;
@@ -280,24 +299,30 @@ static bool parse_moov(const uint8_t *moov, size_t n) {
   return true;
 }
 
-static bool open_video(const char *path) {
+enum VideoOpen { VIDEO_OK, VIDEO_BAD, VIDEO_UNFINISHED };
+
+static VideoOpen open_video(const char *path) {
   video = SD.open(path);
-  if (!video) return false;
+  if (!video) return VIDEO_BAD;
   uint32_t size = video.size(), pos = 0;
   uint8_t head[8];
+  bool mdat = false;
   while (pos + 8 <= size) {
-    if (!video.seek(pos) || video.read(head, 8) != 8) return false;
+    if (!video.seek(pos) || video.read(head, 8) != 8) return VIDEO_BAD;
     uint32_t box = be32(head);
-    if (box < 8) return false;  // 녹화가 끝나지 않은 파일 (전원이 꺼졌을 때)
+    bool is_mdat = memcmp(head + 4, "mdat", 4) == 0;
+    // 녹화가 끝나지 않은 파일 (전원이 꺼졌을 때): mdat 크기가 0 이고 목차(moov)가 없다
+    if (box < 8 || pos + box > size) return is_mdat ? VIDEO_UNFINISHED : VIDEO_BAD;
     if (memcmp(head + 4, "moov", 4) == 0) {
       uint8_t *moov = (uint8_t *)ps_malloc(box - 8);
       bool ok = moov && video.read(moov, box - 8) == box - 8 && parse_moov(moov, box - 8);
       free(moov);
-      return ok;
+      return ok ? VIDEO_OK : VIDEO_BAD;
     }
+    mdat |= is_mdat;
     pos += box;
   }
-  return false;
+  return mdat ? VIDEO_UNFINISHED : VIDEO_BAD;
 }
 
 static void format_time(char *out, size_t size, uint32_t ms) {
@@ -342,8 +367,8 @@ static void scan(const char *dir, const char *ext, bool is_video) {
     String name = f.name();
     // Mac 이 카드에 남기는 "._IMG..." 같은 숨은 파일은 뺀다
     bool ok = !f.isDirectory() && f.size() > 0 && name.length() > 4 && name[0] != '.' && name.endsWith(ext);
+    if (ok) items.push_back({String(dir) + "/" + name, name.substring(4), is_video, (uint32_t)f.size()});
     f.close();
-    if (ok) items.push_back({String(dir) + "/" + name, name.substring(4), is_video});
     health_watch_feed();  // 파일이 많으면 오래 걸린다
   }
   d.close();
@@ -357,6 +382,7 @@ static void apply_filter() {
 }
 
 static const char *empty_text() {
+  if (open_error) return open_error;
   if (!storage_ready()) return "SD 카드가 없습니다";
   if (filter == FILTER_PHOTOS) return "SD 카드에 사진이 없습니다";
   if (filter == FILTER_VIDEOS) return "SD 카드에 동영상이 없습니다";
@@ -370,6 +396,44 @@ static void disarm_delete() {
   delete_armed_ms = 0;
   lv_obj_set_style_bg_color(delete_btn, lv_color_black(), 0);
   show_message(nullptr);
+}
+
+static void free_thumb(Thumb &t);
+
+static void repair_progress(int pct) {
+  lv_label_set_text_fmt(msg_lbl, "끝나지 않은 동영상을 고치는 중... %d%%", pct);
+  display_poke();
+  lv_refr_now(NULL);
+}
+
+// 녹화를 멈춘 뒤 sd_video 가 아직 마저 쓰고 있는 파일인지
+static bool being_written(const Item &item) {
+  const char *p = sd_video_path();
+  return item.video && p && item.path == p;
+}
+
+static String sending_path;  // PC 로 보내는 중인 동영상 (없으면 "")
+
+// 녹화 중에 전원이 꺼져 끝나지 않은 동영상을 고쳐서 다시 연다. 못 고치면 까닭을 *why 에.
+static VideoOpen repair_video(int i, const char **why) {
+  close_video();
+  Item &item = items[shown[i]];
+  // 녹화를 멈춘 뒤 마저 쓰는 중인 파일일 수 있다 (그 파일도 아직 목차가 없다)
+  if (being_written(item)) {
+    *why = "동영상을 SD 카드에 저장하는 중입니다\n잠시 뒤에 다시 여세요";
+    return VIDEO_BAD;
+  }
+  repair_progress(0);
+  uint32_t frames = mov_repair(item.path.c_str(), repair_progress);
+  if (!frames) {
+    *why = "끝나지 않은 동영상을 고치지 못했습니다";
+    return VIDEO_BAD;
+  }
+  // 크기가 바뀌었으니 격자의 작은 그림도 새로 만든다
+  File f = SD.open(item.path);
+  if (f) item.size = f.size(), f.close();
+  if (i < (int)thumbs.size()) free_thumb(thumbs[i]);
+  return open_video(item.path.c_str());
 }
 
 static void load_item(int i) {
@@ -387,8 +451,8 @@ static void load_item(int i) {
   current = constrain(i, 0, (int)shown.size() - 1);
   const Item &item = items[shown[current]];
   set_visible(delete_btn, true);
-  // 동영상은 PC 로 다시 보내지 못한다 (녹화할 때 장마다 보내는 방식이라)
-  set_visible(send_btn, !item.video);
+  // 동영상은 USB 로 연결한 PC 에만 보낼 수 있다 (누르면 알려 준다)
+  set_visible(send_btn, true);
   set_visible(prev_btn, current > 0);
   set_visible(next_btn, current + 1 < (int)shown.size());
   // 위: "3/12 · 10월 19일 14:05" (이름에 시각이 없으면 파일 이름)
@@ -406,8 +470,15 @@ static void load_item(int i) {
   lv_refr_now(NULL);
   uint32_t t0 = millis();
   bool ok;
+  const char *why = nullptr;
+  bool repaired = false;
   if (item.video) {
-    ok = open_video(item.path.c_str()) && show_video_frame(0);
+    VideoOpen st = open_video(item.path.c_str());
+    if (st == VIDEO_UNFINISHED) {
+      st = repair_video(current, &why);
+      repaired = st == VIDEO_OK;
+    }
+    ok = st == VIDEO_OK && show_video_frame(0);
     if (ok) {
       show_video_time(0);
       set_visible(time_lbl, true);
@@ -420,10 +491,12 @@ static void load_item(int i) {
   }
   Serial.printf("[gallery] %s %s (%lu ms)\n", item.path.c_str(), ok ? "shown" : "failed", (unsigned long)(millis() - t0));
   if (ok) {
-    show_message(nullptr);
+    show_message(repaired ? "끝나지 않은 동영상을 고쳤습니다" : nullptr, 2500);
   } else {
     lv_obj_add_flag(img, LV_OBJ_FLAG_HIDDEN);
-    show_message(item.video ? "열 수 없는 동영상입니다" : "열 수 없는 사진입니다");
+    // 카드를 뺐으면 그렇게 알린다
+    if (!why && !storage_present()) why = "SD 카드가 없습니다";
+    show_message(why ? why : item.video ? "열 수 없는 동영상입니다" : "열 수 없는 사진입니다");
   }
 }
 
@@ -445,6 +518,16 @@ static void go(int step) {
 static void delete_clicked(lv_event_t *e) {
   if (shown.empty()) return;
   const Item &item = items[shown[current]];
+  // 열지 못한 동영상은 지금 마저 쓰는 중인 파일일 수 있다. 열려 있는 파일을 지우면 카드가 망가진다.
+  if (being_written(item)) {
+    show_message("동영상을 SD 카드에 저장하는 중입니다\n잠시 뒤에 다시 하세요", 2500);
+    return;
+  }
+  // PC 로 보내는 중인 파일도 열려 있다
+  if (photo_streaming(item.path.c_str())) {
+    show_message("PC로 보내는 중입니다\n다 보낸 뒤에 지우세요", 2500);
+    return;
+  }
   if (!delete_armed_ms) {
     delete_armed_ms = millis();
     if (playing) set_playing(false);
@@ -456,6 +539,8 @@ static void delete_clicked(lv_event_t *e) {
   close_video();  // 열린 파일은 지울 수 없다
   bool ok = SD.remove(path);
   Serial.printf("[gallery] delete %s: %s\n", path.c_str(), ok ? "ok" : "failed");
+  if (ok) SD.remove(storage_thumb_path(path));  // 없으면 그만
+  if (ok) storage_note_removed();
   if (!ok) {
     disarm_delete();
     show_message("지우지 못했습니다", 2500);
@@ -467,11 +552,61 @@ static void delete_clicked(lv_event_t *e) {
   load_item(min(current, (int)shown.size() - 1));
 }
 
-// 이 사진을 이름 그대로 PC 로 다시 보낸다
+// 이 동영상을 이름 그대로 USB 로 연결한 PC 로 보낸다. 카드에서 조금씩 읽어 보내므로(photo_send_sd_file)
+// 크기 제한이 없고, 보내는 동안에도 화면은 움직인다. 진행률은 gallery_loop 가 보인다.
+static void send_video(const Item &item) {
+  if (link_active() != LINK_USB) {
+    show_message("동영상은 USB 케이블로 연결한\nPC로만 보낼 수 있습니다", 3000);
+    return;
+  }
+  if (!v_count) {
+    show_message("열 수 없는 동영상은 보낼 수 없습니다", 2500);
+    return;
+  }
+  if (photo_sending()) {
+    show_message("앞의 것을 PC로 보내는 중입니다", 2500);
+    return;
+  }
+  if (playing) set_playing(false);
+  bool sent = photo_send_sd_file(item.path.c_str());
+  Serial.printf("[gallery] resend video %s %u bytes: %d\n", item.path.c_str(), (unsigned)video.size(), sent);
+  if (sent) {
+    sending_path = item.path;
+    show_message("PC로 보내는 중 0%");
+  } else {
+    show_message("보내지 못했습니다", 2500);
+  }
+}
+
+// 보내는 중인 동영상을 보고 있으면 진행률을, 다 보내면 결과를 가운데 글로 보인다
+static void show_send_progress() {
+  if (!sending_path.length()) return;
+  bool here = viewing && !shown.empty() && items[shown[current]].path == sending_path;
+  if (photo_streaming(sending_path.c_str())) {
+    int pct;
+    if (here && photo_progress(&pct)) {
+      char t[40];
+      snprintf(t, sizeof(t), "PC로 보내는 중 %d%%", pct);
+      if (strcmp(lv_label_get_text(msg_lbl), t) != 0 || lv_obj_has_flag(msg_lbl, LV_OBJ_FLAG_HIDDEN)) show_message(t);
+    }
+    return;
+  }
+  sending_path = "";
+  bool ok;
+  uint32_t ms;
+  photo_finished(&ok, &ms);
+  // 결과 알림은 camera_ui 도 띄운다 (오래 걸렸을 때). 여기서는 보던 화면의 글만 바꾼다.
+  if (here) show_message(ok ? "PC로 보냈습니다" : "PC로 보내지 못했습니다", 2500);
+}
+
+// 이 사진(또는 동영상)을 이름 그대로 PC 로 다시 보낸다
 static void send_clicked(lv_event_t *e) {
   if (shown.empty()) return;
   const Item &item = items[shown[current]];
-  if (item.video) return;
+  if (item.video) {
+    send_video(item);
+    return;
+  }
   File f = SD.open(item.path);
   size_t len = f ? f.size() : 0;
   uint8_t *copy = len ? (uint8_t *)ps_malloc(len) : nullptr;
@@ -570,8 +705,51 @@ static void show_grid() {
   if (current < (int)thumbs.size()) lv_obj_scroll_to_view(thumbs[current].cell, LV_ANIM_OFF);
 }
 
-// 칸 하나의 작은 그림을 만든다 (사진은 파일 전체를, 동영상은 첫 장을 읽어 푼다)
-static void make_thumb(int i) {
+// 카드에 저장해 둔 작은 그림을 읽어 size x size 안에 맞게 out_buf 에 둔다. 없거나 깨졌거나 원본이 바뀌었으면 false.
+static bool load_cached_thumb(const Item &item, int size, int *ow, int *oh) {
+  File f = SD.open(storage_thumb_path(item.path));
+  if (!f) return false;
+  ThumbHead th;
+  bool ok = f.read((uint8_t *)&th, sizeof(th)) == sizeof(th) && th.magic == THUMB_MAGIC && th.src_size == item.size &&
+            th.box >= size && th.box <= THUMB_BOX_MAX && th.w > 0 && th.h > 0 && th.w <= th.box && th.h <= th.box &&
+            f.size() == sizeof(th) + th.w * th.h * 2;
+  // 픽셀은 잠깐 dec_buf 에 (THUMB_BOX_MAX 크기면 충분하다)
+  ok = ok && f.read(dec_buf, th.w * th.h * 2) == (size_t)(th.w * th.h * 2);
+  f.close();
+  if (!ok) return false;
+  // 칸이 만들 때보다 작으면(화면을 돌렸을 때) 줄인다
+  float g = (float)size / th.box;
+  int w = max(1, (int)(th.w * g)), h = max(1, (int)(th.h * g));
+  const uint16_t *src = (const uint16_t *)dec_buf;
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) out_buf[y * w + x] = src[(y * th.h / h) * th.w + x * th.w / w];
+  }
+  *ow = w;
+  *oh = h;
+  return true;
+}
+
+// 만든 작은 그림을 카드에 저장해 둔다 (다음에 열 때 원본을 다시 풀지 않게). 실패하면 반쯤 쓴 파일은 지운다.
+static void save_thumb(const Item &item, int size, int w, int h) {
+  static bool dir_ok = false;
+  if (!dir_ok) dir_ok = SD.exists(STORAGE_THUMBS) || SD.mkdir(STORAGE_THUMBS);
+  if (!dir_ok) return;
+  String path = storage_thumb_path(item.path);
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) {
+    dir_ok = false;  // 카드를 뺐다 꽂았으면 폴더부터 다시
+    return;
+  }
+  ThumbHead th = {THUMB_MAGIC, (uint16_t)w, (uint16_t)h, (uint16_t)size, 0, item.size};
+  size_t px = w * h * 2;
+  bool ok = f.write((const uint8_t *)&th, sizeof(th)) == sizeof(th) && f.write((const uint8_t *)out_buf, px) == px;
+  f.close();
+  if (!ok) SD.remove(path);
+}
+
+// 칸 하나의 작은 그림을 만든다: 카드에 저장해 둔 것이 있으면 그것을, 없으면 원본을 풀어서 (사진은 파일 전체를,
+// 동영상은 첫 장을 읽어 푼다) 만들고 저장해 둔다. 저장해 둔 것을 썼으면 true (빠르다).
+static bool make_thumb(int i) {
   Thumb &t = thumbs[i];
   t.tried = true;
   const Item &item = items[shown[i]];
@@ -579,8 +757,11 @@ static void make_thumb(int i) {
   int w = 0, h = 0;
   bool ok;
   uint32_t t0 = millis();
-  if (item.video) {
-    ok = open_video(item.path.c_str()) && read_into_buf(video, v_off[0], v_size[0]) &&
+  bool cached = size <= THUMB_BOX_MAX && load_cached_thumb(item, size, &w, &h);
+  if (cached) {
+    ok = true;
+  } else if (item.video) {
+    ok = open_video(item.path.c_str()) == VIDEO_OK && read_into_buf(video, v_off[0], v_size[0]) &&
          decode_fit(jpg_buf, v_size[0], v_turns, size, size, out_buf, &w, &h);
     close_video();
   } else {
@@ -588,13 +769,20 @@ static void make_thumb(int i) {
     ok = f && read_into_buf(f, 0, f.size()) &&
          decode_fit(jpg_buf, f.size(), exif_turns(jpg_buf, f.size()), size, size, out_buf, &w, &h);
     if (f) f.close();
+    if (!f && !storage_present()) {
+      // 카드를 뺐다. 나머지 칸도 시도하지 않는다.
+      for (Thumb &o : thumbs) o.tried = true;
+      lv_label_set_text(grid_msg, "SD 카드가 없습니다");
+      lv_obj_clear_flag(grid_msg, LV_OBJ_FLAG_HIDDEN);
+    }
   }
   if (!ok) {
     Serial.printf("[gallery] thumb %s failed\n", item.path.c_str());
-    return;
+    return false;
   }
+  if (!cached && size <= THUMB_BOX_MAX) save_thumb(item, size, w, h);
   t.px = (uint16_t *)ps_malloc(w * h * 2);
-  if (!t.px) return;
+  if (!t.px) return false;
   memcpy(t.px, out_buf, w * h * 2);
   t.dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
   t.dsc.header.w = w;
@@ -604,10 +792,15 @@ static void make_thumb(int i) {
   lv_img_set_src(t.img, &t.dsc);
   lv_obj_center(t.img);
   static uint32_t logged = 0;
-  if (logged++ < 3) Serial.printf("[gallery] thumb %s %dx%d (%lu ms)\n", item.path.c_str(), w, h, (unsigned long)(millis() - t0));
+  if (logged++ < 3) {
+    Serial.printf("[gallery] thumb %s %dx%d%s (%lu ms)\n", item.path.c_str(), w, h, cached ? " cached" : "",
+                  (unsigned long)(millis() - t0));
+  }
+  return cached;
 }
 
-// 화면에 보이는 (또는 바로 아래) 칸 중 아직 그림이 없는 것 하나를 만들고, 너무 많으면 먼 것을 버린다
+// 화면에 보이는 (또는 바로 아래) 칸 중 아직 그림이 없는 것을 만들고, 너무 많으면 먼 것을 버린다.
+// 원본을 푸는 것은 한 번에 하나, 저장해 둔 작은 그림은 THUMB_BUDGET_MS 안에서 여러 개.
 static void grid_loop() {
   if (thumbs.empty()) return;
   // 누르고 있거나 밀어 넘기는 중이면 기다린다 (그림을 푸는 0.1~0.2초 동안 화면이 멈추므로)
@@ -616,13 +809,9 @@ static void grid_loop() {
   lv_area_t view;
   lv_obj_get_coords(grid_list, &view);
   int size = cell_size();
-  int kept = 0, todo = -1;
-  for (int i = 0; i < (int)thumbs.size(); i++) {
-    lv_area_t a;
-    lv_obj_get_coords(thumbs[i].cell, &a);
-    bool near = a.y2 >= view.y1 - size && a.y1 <= view.y2 + size;
-    if (near && !thumbs[i].tried && todo < 0) todo = i;
-    if (thumbs[i].px) kept++;
+  int kept = 0;
+  for (const Thumb &t : thumbs) {
+    if (t.px) kept++;
   }
   if (kept > THUMB_KEEP) {
     for (int i = 0; i < (int)thumbs.size() && kept > THUMB_KEEP; i++) {
@@ -635,7 +824,17 @@ static void grid_loop() {
       }
     }
   }
-  if (todo >= 0) make_thumb(todo);
+  uint32_t t0 = millis();
+  for (;;) {
+    int todo = -1;
+    for (int i = 0; i < (int)thumbs.size() && todo < 0; i++) {
+      if (thumbs[i].tried) continue;
+      lv_area_t a;
+      lv_obj_get_coords(thumbs[i].cell, &a);
+      if (a.y2 >= view.y1 - size && a.y1 <= view.y2 + size) todo = i;
+    }
+    if (todo < 0 || !make_thumb(todo) || millis() - t0 > THUMB_BUDGET_MS) break;
+  }
 }
 
 static void filter_clicked(lv_event_t *e) {
@@ -820,12 +1019,15 @@ void gallery_layout() {
 void gallery_show(void (*on_close)()) {
   if (is_open) return;
   close_cb = on_close;
+  open_error = nullptr;
   out_buf = (uint16_t *)ps_malloc(OUT_MAX_PIXELS * 2);
   dec_buf = (uint8_t *)ps_malloc(DECODE_MAX_PIXELS * 2);
   if (!out_buf || !dec_buf) {
+    // 카메라는 이미 꺼졌으므로 그냥 돌아가지 않고, 빈 격자에 알린다 (닫으면 on_close 로 돌아간다)
+    Serial.println("[gallery] no memory");
     free(out_buf), free(dec_buf);
     out_buf = nullptr, dec_buf = nullptr;
-    return;
+    open_error = "메모리가 부족해 갤러리를 열 수 없습니다";
   }
   dsc.data = (const uint8_t *)out_buf;
   display_poke();
@@ -841,7 +1043,8 @@ void gallery_show(void (*on_close)()) {
   lv_refr_now(NULL);
 
   items.clear();
-  if (storage_ready()) {
+  // 열어 둔 사이에 카드를 뺐을 수 있어 실제로 읽어 확인한다 (뺐다 꽂았으면 다시 연결된다)
+  if (!open_error && storage_present()) {
     scan("/photos", ".jpg", false);
     scan("/videos", ".mov", true);
   }
@@ -859,6 +1062,7 @@ bool gallery_open() {
 void gallery_loop() {
   if (!is_open) return;
   if (msg_until && (int32_t)(millis() - msg_until) > 0) show_message(nullptr);
+  show_send_progress();
   if (delete_armed_ms && millis() - delete_armed_ms > DELETE_CONFIRM_MS) disarm_delete();
   if (!viewing) {
     grid_loop();

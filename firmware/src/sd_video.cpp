@@ -4,6 +4,7 @@
 #include <freertos/idf_additions.h>
 
 #include "storage.h"
+#include "ui.h"
 
 #define TIMESCALE 1000  // ms 단위
 // 쓰기를 기다리는 장 수. 넘치면 그 장은 버린다.
@@ -27,6 +28,13 @@ static bool failed = false;
 static uint32_t result_frames = 0, result_dropped = 0;
 static bool result_failed = false;
 static char path[64];
+static uint32_t flushed_ms = 0;
+// 남은 공간: 시작할 때 센 값에서 쓴 만큼 뺀다. 목차(moov)를 쓸 자리는 남기고 멈춘다.
+static int64_t space_left = -1;
+#define SPACE_RESERVE (1024 * 1024)
+// 쓰는 태스크가 정하고 loop(sd_video_loop) 가 화면에 알린다
+static volatile bool tell_low = false, tell_full = false, tell_error = false;
+static bool told_low = false;
 
 // 장마다의 위치·크기·시각 (PSRAM, 필요할 때 늘린다)
 static uint32_t *offsets = nullptr, *sizes = nullptr, *times = nullptr;
@@ -37,13 +45,22 @@ static uint32_t count = 0, capacity = 0;
 struct Buf {
   uint8_t *p = nullptr;
   size_t len = 0, cap = 0;
-  void need(size_t n) {
-    if (len + n <= cap) return;
-    cap = max(cap * 2, len + n + 1024);
-    p = (uint8_t *)ps_realloc(p, cap);
+  bool bad = false;  // 메모리가 모자라 다 쓰지 못했다 (쓴 것은 버린다)
+  bool need(size_t n) {
+    if (bad) return false;
+    if (len + n <= cap) return true;
+    size_t want = max(cap * 2, len + n + 1024);
+    uint8_t *grown = (uint8_t *)ps_realloc(p, want);
+    if (!grown) {
+      bad = true;
+      return false;
+    }
+    p = grown;
+    cap = want;
+    return true;
   }
   void u8(uint8_t v) {
-    need(1);
+    if (!need(1)) return;
     p[len++] = v;
   }
   void u16(uint16_t v) {
@@ -55,12 +72,12 @@ struct Buf {
     u16(v);
   }
   void bytes(const void *d, size_t n) {
-    need(n);
+    if (!need(n)) return;
     memcpy(p + len, d, n);
     len += n;
   }
   void zeros(size_t n) {
-    need(n);
+    if (!need(n)) return;
     memset(p + len, 0, n);
     len += n;
   }
@@ -71,6 +88,7 @@ struct Buf {
     return at;
   }
   void end(size_t at) {
+    if (bad) return;
     uint32_t size = len - at;
     p[at] = size >> 24;
     p[at + 1] = size >> 16;
@@ -133,6 +151,12 @@ static void write_moov() {
     }
   }
   if (run_count) stts.u32(run_count), stts.u32(run_gap), runs++;
+  if (stts.bad) {
+    free(stts.p);
+    failed = true;
+    Serial.println("[sdvideo] out of memory for index");
+    return;
+  }
   stts.p[4] = runs >> 24, stts.p[5] = runs >> 16, stts.p[6] = runs >> 8, stts.p[7] = runs;
 
   uint32_t disp_w = (turns & 1) ? height : width, disp_h = (turns & 1) ? width : height;
@@ -215,7 +239,12 @@ static void write_moov() {
   b.end(trak);
   b.end(moov);
 
-  file.write(b.p, b.len);
+  if (b.bad) {
+    failed = true;
+    Serial.println("[sdvideo] out of memory for index");
+  } else {
+    file.write(b.p, b.len);
+  }
   free(b.p);
   free(stts.p);
 }
@@ -231,6 +260,17 @@ static void reset_index() {
 bool sd_video_start(const char *name, uint8_t t) {
   if (writing || !storage_ready()) return false;
   sd_video_loop();  // 쓰는 태스크를 처음 한 번 만든다
+  space_left = storage_free_bytes();
+  if (space_left >= 0 && space_left < 2 * SPACE_RESERVE) {
+    Serial.printf("[sdvideo] card full (%lld bytes left)\n", space_left);
+    ui_toast("SD 카드가 가득 차 녹화할 수 없습니다", 4000);
+    return false;
+  }
+  told_low = space_left >= 0 && space_left < (int64_t)STORAGE_LOW_BYTES;  // 시작할 때 이미 알린다
+  tell_low = false;
+  tell_full = false;
+  tell_error = false;
+  storage_warn_low(true);
   if (!SD.exists("/videos")) SD.mkdir("/videos");
   snprintf(path, sizeof(path), "/videos/%s", name);
   file = SD.open(path, FILE_WRITE);
@@ -242,6 +282,11 @@ bool sd_video_start(const char *name, uint8_t t) {
   size_t ftyp = head.begin("ftyp");
   head.bytes("qt  ", 4), head.u32(0x20050300), head.bytes("qt  ", 4);
   head.end(ftyp);
+  if (head.bad) {
+    file.close();
+    SD.remove(path);
+    return false;
+  }
   file.write(head.p, head.len);
   free(head.p);
   mdat_at = file.position();
@@ -252,6 +297,7 @@ bool sd_video_start(const char *name, uint8_t t) {
   width = height = 0;
   dropped = 0;
   failed = false;
+  flushed_ms = millis();
   writing = true;
   active = true;
   Serial.printf("[sdvideo] recording to %s\n", path);
@@ -308,21 +354,53 @@ static void write_frame(Frame &f) {
   if (failed) return;
   if (count == capacity) {
     uint32_t cap = capacity ? capacity * 2 : 1024;
-    offsets = (uint32_t *)ps_realloc(offsets, cap * 4);
-    sizes = (uint32_t *)ps_realloc(sizes, cap * 4);
-    times = (uint32_t *)ps_realloc(times, cap * 4);
+    // 늘리지 못하면 원래 것을 그대로 두고 지금까지 쓴 것만 남긴다
+    uint32_t *o = (uint32_t *)ps_realloc(offsets, cap * 4);
+    if (o) offsets = o;
+    uint32_t *sz = (uint32_t *)ps_realloc(sizes, cap * 4);
+    if (sz) sizes = sz;
+    uint32_t *t = (uint32_t *)ps_realloc(times, cap * 4);
+    if (t) times = t;
+    if (!o || !sz || !t) {
+      failed = true;
+      Serial.println("[sdvideo] out of memory for index");
+      return;
+    }
     capacity = cap;
   }
   if (!width) jpeg_size(f.data, f.len, &width, &height);
+  // 목차를 쓸 자리(장마다 12바이트 + 여유)가 남지 않으면 여기서 멈춘다. 끝까지 채우면 목차를 못 써 재생되지 않는다.
+  if (space_left >= 0 && space_left < (int64_t)(f.len + SPACE_RESERVE + count * 12)) {
+    failed = true;
+    tell_full = true;
+    Serial.println("[sdvideo] card full, stopped writing");
+    return;
+  }
   uint32_t at = file.position();
   if (file.write(f.data, f.len) == f.len && offsets && sizes && times) {
+    storage_note_written(f.len);
+    if (space_left >= 0) {
+      space_left -= f.len;
+      if (!told_low && space_left < (int64_t)STORAGE_LOW_BYTES) {
+        told_low = true;
+        tell_low = true;
+      }
+    }
     offsets[count] = at;
     sizes[count] = f.len;
     times[count] = f.ms;
     count++;
+    // 파일 크기는 flush 해야 카드에 적힌다. 녹화 중 전원이 꺼져도 갤러리가 찾아 고칠 수 있게 가끔 적는다.
+    if (millis() - flushed_ms > 3000) {
+      file.flush();
+      flushed_ms = millis();
+    }
   } else {
     // 카드가 꽉 찼거나 빠졌다. 지금까지 쓴 것만 남긴다.
     failed = true;
+    // 남은 공간을 대충 세므로 모자라서 실패했을 수도 있다
+    if (space_left >= 0 && space_left < 8 * SPACE_RESERVE) tell_full = true;
+    else tell_error = true;
     Serial.println("[sdvideo] write failed (card full or removed?)");
   }
 }
@@ -343,6 +421,21 @@ static void writer_task(void *) {
 }
 
 void sd_video_loop() {
+  // 쓰는 태스크가 정한 알림을 화면에 띄운다 (LVGL 은 loop 에서만)
+  if (tell_full) {
+    tell_full = false;
+    ui_toast("SD 카드가 가득 차 녹화를 멈췄습니다", 5000);
+  }
+  if (tell_error) {
+    tell_error = false;
+    ui_toast("SD 카드에 쓰지 못해 녹화를 멈췄습니다\n카드가 빠졌는지 확인하세요", 5000);
+  }
+  if (tell_low) {
+    tell_low = false;
+    char t[80];
+    snprintf(t, sizeof(t), "SD 카드 공간이 얼마 남지 않았습니다 (%lu MB)", (unsigned long)(max(space_left, (int64_t)0) / (1024 * 1024)));
+    ui_toast(t, 4000);
+  }
   static bool started = false;
   if (started) return;
   started = true;
@@ -350,8 +443,16 @@ void sd_video_loop() {
   xTaskCreatePinnedToCoreWithCaps(writer_task, "sdvideo", 6144, NULL, 1, NULL, 1, MALLOC_CAP_SPIRAM);
 }
 
+bool sd_video_failed() {
+  return writing && failed;
+}
+
 bool sd_video_active() {
   return writing;
+}
+
+const char *sd_video_path() {
+  return writing ? path : nullptr;
 }
 
 void sd_video_result(uint32_t *frames, uint32_t *d, bool *f) {

@@ -13,12 +13,16 @@
 import struct
 import sys
 import threading
+import time
 from pathlib import Path
 
 from photos import open_new
 
 DEFAULT_DIR = Path.home() / ("Movies" if sys.platform == "darwin" else "Videos") / "LLM Deck"
 TIMESCALE = 1000  # ms 단위
+# 녹화 중에 이만큼 조각이 오지 않으면(연결이 끊김, 끝 알림을 놓침) 받은 데까지 파일을 마무리한다.
+# 마무리하지 않으면 목차(moov)가 없어 재생되지 않는 파일이 남는다
+IDLE_SECONDS = 10
 
 
 def _box(kind: bytes, *parts: bytes) -> bytes:
@@ -158,6 +162,7 @@ class VideoReceiver:
         self.frame = bytearray()
         self.got = 0
         self.lost = 0
+        self.last_chunk = 0.0  # 마지막 조각(또는 녹화 시작)을 받은 시각
 
     def on_event(self, event: dict) -> None:
         video = event.get("video") if isinstance(event, dict) else None
@@ -173,10 +178,30 @@ class VideoReceiver:
                     return
                 self.writer = MovWriter(path, int(video.get("turns", 0)), f)
                 self.frame_no, self.got, self.lost = -1, 0, 0
+                self.last_chunk = time.monotonic()
                 print(f"[video] 녹화 받는 중: {path.name}")
+                threading.Thread(target=self._watch, args=(self.writer,), daemon=True).start()
             elif "end" in video:
                 dropped = int(video.get("dropped", 0))
                 self._finish(dropped)
+
+    def finish(self) -> None:
+        """받던 녹화를 받은 데까지 마무리한다 (연결이 끊기거나 바뀔 때)."""
+        with self.lock:
+            if self.writer:
+                print("[video] 녹화를 받던 중 연결이 끊겨 받은 데까지 저장합니다")
+            self._finish()
+
+    def _watch(self, writer: "MovWriter") -> None:
+        while True:
+            time.sleep(1)
+            with self.lock:
+                if self.writer is not writer:
+                    return
+                if time.monotonic() - self.last_chunk > IDLE_SECONDS:
+                    print(f"[video] {IDLE_SECONDS}초 동안 조각이 오지 않아 받은 데까지 저장합니다")
+                    self._finish()
+                    return
 
     def _finish(self, dropped: int = 0) -> None:
         if not self.writer:
@@ -196,6 +221,7 @@ class VideoReceiver:
         with self.lock:
             if not self.writer or total > 4_000_000:
                 return
+            self.last_chunk = time.monotonic()
             if no != self.frame_no:
                 if self.frame_no >= 0 and self.got < len(self.frame):
                     self.lost += 1

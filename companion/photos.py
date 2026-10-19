@@ -3,9 +3,15 @@
 기기는 먼저 알림 {"photo": {"name", "size"}} 을 보내고, 이어서 사진 조각을 보낸다 (USB / 블루투스).
 Wi-Fi 는 알림에 "url" 이 붙어 오고, transport 가 그 주소에서 사진을 통째로 받아 넘긴다.
 저장 위치는 설정의 [photos] dir (기본: 사진 폴더 아래 "LLM Deck").
+갤러리에서 다시 보낸 동영상(.mov)도 같은 길로 오고, 동영상 폴더에 저장한다 (받는 대로 임시 파일에 쓴다).
+이미 같은 이름·크기·내용의 파일이 있으면 새로 만들지 않고 기기에 "PC에 이미 있습니다" 를 알린다.
+이름은 같은데 내용이 다르면 이름 뒤에 _1, _2 ... 를 붙여 저장한다.
 """
 
+import hashlib
+import os
 import re
+import tempfile
 import threading
 from pathlib import Path
 
@@ -40,44 +46,148 @@ def open_new(folder: Path, name: str, default: str, fallback: str):
         return path, path.open("xb")
 
 
+# 사진은 메모리에 모아 저장한다. 동영상(.mov)은 클 수 있어 받는 대로 임시 파일에 쓴다 (FAT32 카드라 4GB 미만).
+PHOTO_MAX = 20_000_000
+VIDEO_MAX = 2_000_000_000
+
+
+def _sha256(path: Path) -> bytes:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.digest()
+
+
+def find_same(folders: list[Path], name: str, default: str, size: int, digest) -> Path | None:
+    """folders 에 이미 같은 파일(같은 이름 또는 그 이름_1, _2 ...; 크기와 내용이 같음)이 있으면 그 경로.
+    digest 는 받은 내용의 sha256 을 돌려주는 함수 (크기가 같은 파일이 있을 때만 부른다)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(name).name) or default
+    stem, suffix = Path(safe).stem, Path(safe).suffix
+    want = None
+    for folder in folders:
+        path, n = folder / safe, 1
+        while path.exists():
+            try:
+                if path.stat().st_size == size:
+                    want = want or digest()
+                    if _sha256(path) == want:
+                        return path
+            except OSError:
+                pass
+            path = folder / f"{stem}_{n}{suffix}"
+            n += 1
+    return None
+
+
 class PhotoReceiver:
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, video_dir: Path | None = None):
         self.dir = Path(cfg.get("dir", "")).expanduser() if cfg.get("dir") else DEFAULT_DIR
+        self.video_dir = video_dir or self.dir
         self.lock = threading.Lock()
         self.name = None
-        self.buf = None
+        self.size = 0
+        self.buf = None  # 사진: bytearray
+        self.tmp = None  # 동영상: 받는 중인 임시 파일 (열린 파일)
         self.got = 0
+        self.pending_toast: str | None = None  # main.py 가 기기 알림으로 보낸다
+
+    def _folders(self, name: str) -> tuple[Path, str, str]:
+        if name.lower().endswith(".mov"):
+            return self.video_dir, "video.mov", "videos"
+        return self.dir, "photo.jpg", "photos"
+
+    def _drop(self) -> None:
+        """받던 것을 버린다 (lock 을 잡고 부른다)."""
+        if self.tmp is not None:
+            try:
+                self.tmp.close()
+                Path(self.tmp.name).unlink(missing_ok=True)
+            except OSError:
+                pass
+        self.tmp = None
+        self.buf = None
+
+    def _open_tmp(self, name: str):
+        folder, _, fallback = self._folders(name)
+        for where in (folder, FALLBACK_ROOT / fallback):
+            try:
+                where.mkdir(parents=True, exist_ok=True)
+                return tempfile.NamedTemporaryFile(dir=where, prefix=".receiving-", suffix=".part", delete=False)
+            except OSError as e:
+                print(f"[photo] {where} 에 임시 파일을 만들 수 없습니다 ({e})")
+        return None
 
     def on_event(self, event: dict) -> None:
         photo = event.get("photo") if isinstance(event, dict) else None
         if not isinstance(photo, dict) or "url" in photo:
             return
-        size = int(photo.get("size", 0))
-        if not 0 < size <= 20_000_000:
+        try:
+            size = int(photo.get("size", 0))
+        except (TypeError, ValueError):
+            return
+        name = str(photo.get("name", "photo.jpg"))
+        video = name.lower().endswith(".mov")
+        if not 0 < size <= (VIDEO_MAX if video else PHOTO_MAX):
+            print(f"[photo] {name} 은 너무 커서 받지 않습니다 ({size // 1024}KB)")
             return
         with self.lock:
-            if self.buf is not None and self.got < len(self.buf):
-                print(f"[photo] {self.name} 받는 중 끊겨 버립니다 ({self.got}/{len(self.buf)})")
-            self.name = photo.get("name", "photo.jpg")
-            self.buf = bytearray(size)
-            self.got = 0
-        print(f"[photo] {self.name} 받는 중 ({size // 1024}KB)")
+            if (self.buf is not None or self.tmp is not None) and self.got < self.size:
+                print(f"[photo] {self.name} 받는 중 끊겨 버립니다 ({self.got}/{self.size})")
+            self._drop()
+            self.name, self.size, self.got = name, size, 0
+            if video:
+                self.tmp = self._open_tmp(name)
+                if self.tmp is None:
+                    return
+            else:
+                self.buf = bytearray(size)
+        print(f"[photo] {name} 받는 중 ({size // 1024}KB)")
 
     def on_chunk(self, offset: int, data: bytes) -> None:
         with self.lock:
-            if self.buf is None or offset + len(data) > len(self.buf):
+            if (self.buf is None and self.tmp is None) or offset < 0 or offset + len(data) > self.size:
                 return
-            self.buf[offset : offset + len(data)] = data
+            try:
+                if self.tmp is not None:
+                    if self.tmp.tell() != offset:
+                        self.tmp.seek(offset)
+                    self.tmp.write(data)
+                else:
+                    self.buf[offset : offset + len(data)] = data
+            except OSError as e:
+                print(f"[photo] {self.name} 을 쓰지 못해 버립니다: {e}")
+                self._drop()
+                return
             self.got += len(data)
-            if self.got < len(self.buf):
+            if self.got < self.size:
                 return
-            name, data_all = self.name, bytes(self.buf)
-            self.buf = None
-        self.save(name, data_all)
+            name, buf, tmp = self.name, self.buf, self.tmp
+            self.buf = self.tmp = None
+        if tmp is not None:
+            self.save_file(name, tmp)
+        else:
+            self.save(name, bytes(buf))
+
+    def _same(self, name: str, size: int, digest) -> Path | None:
+        folder, default, fallback = self._folders(name)
+        try:
+            return find_same([folder, FALLBACK_ROOT / fallback], name, default, size, digest)
+        except OSError:
+            return None
+
+    def _skip(self, name: str, same: Path) -> None:
+        print(f"[photo] 이미 있습니다: {same} (같은 파일이라 저장하지 않습니다)")
+        self.pending_toast = f"PC에 이미 있습니다\n{same.name}"
 
     def save(self, name: str, data: bytes) -> Path | None:
+        same = self._same(name, len(data), lambda: hashlib.sha256(data).digest())
+        if same:
+            self._skip(name, same)
+            return same
+        folder, default, fallback = self._folders(name)
         try:
-            path, f = open_new(self.dir, name, "photo.jpg", "photos")
+            path, f = open_new(folder, name, default, fallback)
             with f:
                 f.write(data)
         except OSError as e:
@@ -85,4 +195,28 @@ class PhotoReceiver:
             print(f"[photo] 저장하지 못했습니다: {e}")
             return None
         print(f"[photo] 저장했습니다: {path} ({len(data) // 1024}KB)")
+        return path
+
+    def save_file(self, name: str, tmp) -> Path | None:
+        """다 받은 임시 파일을 이름을 붙여 옮긴다. 같은 파일이 이미 있으면 지운다."""
+        part = Path(tmp.name)
+        try:
+            tmp.close()
+            size = part.stat().st_size
+            same = self._same(name, size, lambda: _sha256(part))
+            if same:
+                part.unlink(missing_ok=True)
+                self._skip(name, same)
+                return same
+            # 임시 파일과 같은 폴더(같은 디스크)라 바로 옮겨진다
+            path = unique_path(part.parent, name, self._folders(name)[1])
+            os.replace(part, path)
+        except OSError as e:
+            print(f"[photo] 저장하지 못했습니다: {e}")
+            try:
+                part.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+        print(f"[photo] 저장했습니다: {path} ({size // 1024}KB)")
         return path
