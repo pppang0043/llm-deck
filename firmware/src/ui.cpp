@@ -113,7 +113,7 @@ static void add_table(lv_obj_t *parent, JsonArrayConst table) {
   }
 }
 
-// ---- 사용률 기록 그래프 (구간을 누르면 화면 전체에 최근 24시간) ----
+// ---- 사용률 기록 그래프 (구간을 누르면 화면 전체에 최근 24시간, 오른쪽 위 버튼으로 7일) ----
 
 struct GaugeKey {
   char service[32];
@@ -124,11 +124,22 @@ static GaugeKey gauge_keys[MAX_GAUGES];
 static int gauge_count = 0;
 static bool no_history = false;  // 미러링 중 기기 화면에 그릴 때는 눌러도 그래프를 열지 않는다
 static lv_obj_t *hist_panel, *hist_title, *hist_chart, *hist_note, *hist_left, *hist_right;
+static lv_obj_t *hist_mode_btn, *hist_mode_lbl, *hist_days;  // 24시간/7일 버튼, 7일 막대 아래 요일
 static lv_chart_series_t *hist_series;
 static lv_coord_t hist_points[HISTORY_SLOTS];
+static GaugeKey hist_key;
+static bool hist_week_mode = false;
+static const char *const WDAY_NAMES[7] = {"일", "월", "화", "수", "목", "금", "토"};
 
 static void hist_close(lv_event_t *e) {
   lv_obj_add_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void hist_render();
+
+static void hist_mode_clicked(lv_event_t *e) {
+  hist_week_mode = !hist_week_mode;
+  hist_render();
 }
 
 static void hist_build() {
@@ -146,6 +157,21 @@ static void hist_build() {
   hist_note = add_label(hist_panel, "", &font_ko_14, COLOR_DIM);
   lv_obj_align(hist_note, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
+  // 오른쪽 위: 누르면 24시간 <-> 7일 (닫히지 않는다)
+  hist_mode_btn = lv_btn_create(hist_panel);
+  lv_obj_set_style_bg_color(hist_mode_btn, lv_color_hex(0x1C232B), 0);
+  lv_obj_set_style_border_color(hist_mode_btn, COLOR_ACCENT, 0);
+  lv_obj_set_style_border_width(hist_mode_btn, 1, 0);
+  lv_obj_set_style_shadow_width(hist_mode_btn, 0, 0);
+  lv_obj_set_style_radius(hist_mode_btn, 12, 0);
+  lv_obj_set_style_pad_hor(hist_mode_btn, 8, 0);
+  lv_obj_set_style_pad_ver(hist_mode_btn, 3, 0);
+  lv_obj_set_ext_click_area(hist_mode_btn, 8);
+  lv_obj_align(hist_mode_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+  lv_obj_add_event_cb(hist_mode_btn, hist_mode_clicked, LV_EVENT_CLICKED, NULL);
+  hist_mode_lbl = add_label(hist_mode_btn, "7일", &font_ko_14, COLOR_ACCENT);
+  lv_obj_center(hist_mode_lbl);
+
   hist_chart = lv_chart_create(hist_panel);
   lv_obj_clear_flag(hist_chart, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(hist_chart, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -158,17 +184,34 @@ static void hist_build() {
   lv_obj_set_style_line_color(hist_chart, lv_color_hex(0x2A323B), LV_PART_MAIN);
   lv_obj_set_style_size(hist_chart, 0, LV_PART_INDICATOR);  // 점은 그리지 않고 선만
   lv_obj_set_style_line_width(hist_chart, 2, LV_PART_ITEMS);
+  lv_obj_set_style_pad_all(hist_chart, 6, 0);
+  lv_obj_set_style_pad_column(hist_chart, 6, 0);  // 7일 막대 사이
   hist_series = lv_chart_add_series(hist_chart, COLOR_ACCENT, LV_CHART_AXIS_PRIMARY_Y);
   // 그래프 아래 양 끝: 시간 축
   hist_left = add_label(hist_panel, "24시간 전", &font_ko_14, COLOR_DIM);
   hist_right = add_label(hist_panel, "지금", &font_ko_14, COLOR_DIM);
   lv_chart_set_ext_y_array(hist_chart, hist_series, hist_points);
+
+  // 7일 막대 아래: 막대마다 요일 (막대와 같은 간격으로 나눈다)
+  hist_days = lv_obj_create(hist_panel);
+  lv_obj_remove_style_all(hist_days);
+  lv_obj_clear_flag(hist_days, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(hist_days, LV_OBJ_FLAG_EVENT_BUBBLE);
+  lv_obj_set_flex_flow(hist_days, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_hor(hist_days, 6, 0);
+  lv_obj_set_style_pad_column(hist_days, 6, 0);
+  for (int i = 0; i < 7; i++) {
+    lv_obj_t *d = add_label(hist_days, "", &font_ko_14, COLOR_DIM);
+    lv_obj_set_flex_grow(d, 1);
+    lv_obj_set_width(d, 1);
+    lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+  }
 }
 
-static void hist_show(const GaugeKey &k) {
-  if (!hist_panel) hist_build();
+// 24시간: 사용률(%) 선 그래프
+static void hist_fill_day(char *note, size_t size) {
   uint8_t v[HISTORY_SLOTS];
-  bool have = history_get(k.service, k.label, v);
+  bool have = history_get(hist_key.service, hist_key.label, v);
   int peak = -1, last = -1, known = 0;
   for (int i = 0; i < HISTORY_SLOTS; i++) {
     bool ok = have && v[i] != HISTORY_NONE;
@@ -179,21 +222,91 @@ static void hist_show(const GaugeKey &k) {
       if (v[i] > peak) peak = v[i];
     }
   }
-  lv_label_set_text_fmt(hist_title, "%s %s", k.service, k.label);
-  lv_label_set_long_mode(hist_title, LV_LABEL_LONG_DOT);
-  lv_obj_set_width(hist_title, display_width() - 20);
   if (known == 0) {
-    lv_label_set_text(hist_note, "아직 기록이 없습니다 (10분마다 모읍니다). 누르면 닫힘");
+    snprintf(note, size, "아직 기록이 없습니다 (10분마다 모읍니다).\n누르면 닫힘");
   } else {
-    lv_label_set_text_fmt(hist_note, "최고 %d%%, 지금 %d%%. 누르면 닫힘", peak, last);
+    snprintf(note, size, "최고 %d%%, 지금 %d%%. 누르면 닫힘", peak, last);
   }
-  // 화면 방향에 맞춰 크기를 다시 정한다
-  lv_obj_set_size(hist_panel, display_width(), display_height());
-  lv_obj_set_size(hist_chart, lv_pct(100), display_height() - 20 - 30 - 42);
+}
+
+// 7일: 날마다 오른 % 의 합을 막대로 (맨 오른쪽이 오늘), 아래에 가장 많이 쓴 날과 시간대
+static void hist_fill_week(char *note, size_t size) {
+  static uint8_t h[WEEK_HOURS];
+  bool have = history_week(hist_key.service, hist_key.label, h);
+  if (!have) memset(h, HISTORY_NONE, sizeof(h));
+  WeekSummary s = history_summarize(h, time(nullptr));
+  int top = 10;
+  for (int d = 0; d < 7; d++) {
+    hist_points[d] = s.day[d];
+    if (s.day[d] > top) top = s.day[d];
+  }
+  lv_chart_set_range(hist_chart, LV_CHART_AXIS_PRIMARY_Y, 0, (top + 9) / 10 * 10);
+  for (int d = 0; d < 7; d++) {
+    lv_obj_t *lbl = lv_obj_get_child(hist_days, d);
+    // 칸이 좁아 요일 한 글자만. 가장 많이 쓴 날은 주황, 오늘은 흰색.
+    lv_label_set_text(lbl, WDAY_NAMES[s.day_wday[d]]);
+    lv_color_t color = d == s.best_day ? COLOR_ACCENT : d == 6 ? lv_color_white() : COLOR_DIM;
+    lv_obj_set_style_text_color(lbl, color, 0);
+  }
+  if (s.best_day < 0) {
+    snprintf(note, size, "최근 7일 쓴 기록이 아직 없습니다.\n막대는 하루 동안 오른 %%. 누르면 닫힘");
+    return;
+  }
+  snprintf(note, size, "가장 많이 쓴 날: %s요일 (+%d%%)\n가장 많이 쓴 시간대: %d~%d시\n7일 동안 +%d%%. 누르면 닫힘",
+           WDAY_NAMES[s.day_wday[s.best_day]], s.day[s.best_day], s.best_hour, (s.best_hour + 2) % 24, s.total);
+}
+
+static void hist_render() {
+  char note[160];
+  if (hist_week_mode) {
+    lv_chart_set_type(hist_chart, LV_CHART_TYPE_BAR);
+    lv_chart_set_point_count(hist_chart, 7);
+    lv_chart_set_div_line_count(hist_chart, 3, 0);
+    hist_fill_week(note, sizeof(note));
+  } else {
+    lv_chart_set_type(hist_chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(hist_chart, HISTORY_SLOTS);
+    lv_chart_set_range(hist_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+    lv_chart_set_div_line_count(hist_chart, 5, 0);  // 25% 마다 가로줄
+    hist_fill_day(note, sizeof(note));
+  }
+  lv_label_set_text(hist_note, note);
+  lv_label_set_text(hist_mode_lbl, hist_week_mode ? "24시간" : "7일");
+  lv_obj_update_layout(hist_mode_btn);
+  int btn_w = lv_obj_get_width(hist_mode_btn);
+  lv_label_set_text_fmt(hist_title, "%s %s", hist_key.service, hist_key.label);
+  lv_label_set_long_mode(hist_title, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(hist_title, display_width() - 20 - btn_w - 6);
+  // 화면 방향에 맞춰 크기를 다시 정한다. 그래프 아래는 축(요일) 글자 한 줄 + 쪽지 줄 수만큼 (한 줄 17px)
+  int lines = 1;
+  for (const char *p = note; *p; p++) lines += *p == '\n';
+  int w = display_width(), hgt = display_height();
+  lv_obj_set_width(hist_note, w - 20);
+  lv_obj_set_size(hist_panel, w, hgt);
+  int below = 25 + 17 * lines;
+  lv_obj_set_size(hist_chart, lv_pct(100), hgt - 20 - 30 - below);
   lv_obj_align(hist_chart, LV_ALIGN_TOP_MID, 0, 30);
   lv_obj_align_to(hist_left, hist_chart, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
   lv_obj_align_to(hist_right, hist_chart, LV_ALIGN_OUT_BOTTOM_RIGHT, 0, 2);
+  lv_obj_set_size(hist_days, w - 20, LV_SIZE_CONTENT);
+  lv_obj_align_to(hist_days, hist_chart, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+  if (hist_week_mode) {
+    lv_obj_add_flag(hist_left, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(hist_right, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(hist_days, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_clear_flag(hist_left, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(hist_right, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(hist_days, LV_OBJ_FLAG_HIDDEN);
+  }
   lv_chart_refresh(hist_chart);
+}
+
+static void hist_show(const GaugeKey &k, bool week = false) {
+  if (!hist_panel) hist_build();
+  hist_key = k;
+  hist_week_mode = week;
+  hist_render();
   lv_obj_clear_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(hist_panel);
 }
@@ -213,34 +326,12 @@ void ui_history_close() {
 
 // ---- 소진 예상: 최근 사용률 기록으로 지금 속도면 언제 100% 가 되는지 ----
 
-// 5시간 구간은 최근 1시간, 그 밖(주간)은 최근 6시간 동안 오른 만큼으로 본다
-#define FORECAST_SLOTS_SHORT 6
-#define FORECAST_SLOTS_LONG 36
-// 이보다 짧게 쌓인 기록으로는 예상하지 않는다 (10분 칸 2개)
-#define FORECAST_MIN_SLOTS 2
-
-// 초기화 전에 한도가 찰 것 같으면 "16:40 소진" (오늘이 아니면 "23일 16시 소진") 을 out 에 넣고 true
+// 초기화 전에 한도가 찰 것 같으면 "16:40 소진" (오늘이 아니면 "23일 16시 소진") 을 out 에 넣고 true.
+// 계산은 history_forecast (한도 알림의 미리 알림도 같은 값을 쓴다).
 static bool forecast(const char *service, JsonObjectConst bar, char *out, size_t size) {
-  int pct = bar["pct"] | 0;
-  uint32_t resets = bar["resets"] | 0u;
+  time_t full = history_forecast(service, bar["label"] | "", bar["pct"] | 0, bar["resets"] | 0u);
+  if (!full) return false;
   time_t now = time(nullptr);
-  if (pct <= 0 || pct >= 100 || now < 1700000000) return false;
-  static uint8_t v[HISTORY_SLOTS];
-  const char *label = bar["label"] | "";
-  if (!history_get(service, label, v)) return false;
-  int lookback = strcmp(label, "5시간") == 0 ? FORECAST_SLOTS_SHORT : FORECAST_SLOTS_LONG;
-  // 맨 끝 칸이 지금. 뒤로 가며 값이 오히려 크면 초기화 전이므로 거기서 멈춘다.
-  int last = HISTORY_SLOTS - 1, from = -1, prev = pct;
-  for (int i = last - 1; i >= 0 && last - i <= lookback; i--) {
-    if (v[i] == HISTORY_NONE) continue;
-    if (v[i] > prev) break;
-    from = i;
-    prev = v[i];
-  }
-  if (from < 0 || last - from < FORECAST_MIN_SLOTS || pct <= v[from]) return false;
-  uint32_t span_s = (last - from) * HISTORY_SLOT_S;
-  time_t full = now + (time_t)((100 - pct) * (uint64_t)span_s / (pct - v[from]));
-  if ((resets && full >= (time_t)resets) || full - now > 7 * 86400) return false;
   struct tm t, today;
   localtime_r(&full, &t);
   localtime_r(&now, &today);
@@ -789,6 +880,8 @@ void ui_layout() {
   }
   ui_refresh_talk();
   layout_home();
+  // 열려 있는 기록 그래프도 새 방향에 맞춘다
+  if (ui_history_visible()) hist_render();
   // 페이지는 크기에 맞춰 새로 만든다
   if (waiting) {
     show_waiting();
@@ -862,7 +955,11 @@ static void usage_retry(lv_timer_t *t) {
 void ui_set_usage(JsonArrayConst services) {
   history_record(services);
   // PC 도우미는 30초마다 같은 내용을 다시 보낸다. 바뀐 것이 없으면 그대로 둔다 (새로 만드는 데 0.1초쯤 멈춘다).
-  if (!waiting && last_usage.as<JsonVariantConst>() == services) return;
+  // 다만 "16:40 소진" 예상과 오늘/날짜 표시는 시간이 지나면 바뀌므로 기록 한 칸(10분)마다 다시 그린다.
+  static long drawn_slot = -1;
+  long slot = (long)(time(nullptr) / HISTORY_SLOT_S);
+  if (!waiting && last_usage.as<JsonVariantConst>() == services && slot == drawn_slot) return;
+  drawn_slot = slot;
   waiting = false;
   last_usage.set(services);
   usage_version++;
@@ -1027,6 +1124,13 @@ void ui_show(const char *name) {
     settings_open("end");
     return;
   }
+  // 진단용: 사용량 화면의 첫 구간 7일 그래프
+  if (strcmp(name, "history_week") == 0) {
+    view = VIEW_USAGE;
+    apply_view();
+    if (gauge_count) hist_show(gauge_keys[0], true);
+    return;
+  }
   // 진단용: 사용량 화면의 첫 구간 기록 그래프. history_demo 는 화면에만 본보기 값을 그린다 (저장하지 않음).
   if (strcmp(name, "history") == 0 || strcmp(name, "history_demo") == 0) {
     view = VIEW_USAGE;
@@ -1134,7 +1238,13 @@ static void log_toast(const char *text) {
   if (!toast_log) toast_log = (ToastLog *)ps_calloc(TOAST_LOG, sizeof(ToastLog));
   if (!toast_log) return;
   char line[96];
-  strlcpy(line, text, sizeof(line));
+  size_t n = strlcpy(line, text, sizeof(line));
+  // 잘렸으면 한글(UTF-8 여러 바이트) 글자 중간에서 끊기지 않게 글자 앞까지 물린다
+  if (n >= sizeof(line)) {
+    size_t end = sizeof(line) - 1;
+    while (end > 0 && ((uint8_t)text[end] & 0xC0) == 0x80) end--;  // text[end] 은 잘려 나간 첫 바이트
+    line[end] = '\0';
+  }
   for (char *p = line; *p; p++) {
     if (*p == '\n') *p = ' ';
   }
@@ -1142,6 +1252,8 @@ static void log_toast(const char *text) {
   if (toast_log_count) {
     ToastLog &prev = toast_log[(toast_log_head + TOAST_LOG - 1) % TOAST_LOG];
     if (strcmp(prev.text, line) == 0 && millis() - prev.ms < 10000) {
+      time_t now = time(nullptr);
+      prev.at = now > 1700000000 ? now : 0;
       prev.ms = millis();
       return;
     }
