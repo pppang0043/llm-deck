@@ -205,7 +205,7 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     applyOnTop()
     window.makeKeyAndOrderFront(nil)
     window.makeFirstResponder(view)
-    NSApp.activate()
+    if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
     if polling == nil {
       awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "기기 화면 미러링")
       polling = Task { await poll() }
@@ -374,7 +374,7 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
 // 기록 파일이 이보다 커지면 도우미를 띄울 때 companion.log.1 로 넘기고 새로 쓴다 (하나만 남긴다)
 let LOG_LIMIT = 2_000_000
 
-// 앱의 출력(launchd 가 open --stdout 으로 기록 파일에 이어 둔다)을 새 파일로 바꾼다. 도우미는 이것을 물려받는다.
+// 앱의 출력(launchd 가 StandardOutPath 로 기록 파일에 이어 둔다)을 새 파일로 바꾼다. 도우미는 이것을 물려받는다.
 // 터미널에서 띄웠을 때처럼 출력이 기록 파일이 아니면 건드리지 않는다
 func rotateLog() {
   var out = stat(), file = stat()
