@@ -51,6 +51,7 @@ import pcstats
 import statusline
 import typer
 import sync
+import version
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
 from transports import TRANSPORTS, frames
@@ -61,6 +62,8 @@ RECORD_SECONDS = 10
 # 기기와 주고받는 바퀴가 이만큼 돌아오지 않으면 멈춘 것으로 보고 도우미를 다시 띄운다.
 # 한 바퀴는 보통 1초 안쪽이고, 인터넷이 느려 모든 요청이 한계시간(10~20초)을 채워도 몇 분이면 끝난다.
 HANG_SECONDS = 600
+# --log 기록 파일이 이보다 크면 시작할 때 .1 로 넘기고 새로 쓴다 (하나만 남긴다. Mac 은 앱이 같은 일을 한다)
+LOG_LIMIT = 2_000_000
 
 
 def load_config() -> dict:
@@ -83,6 +86,13 @@ _last: dict[str, tuple[float, dict | None]] = {}
 
 _sync: sync.Sync | None = None
 
+# 설정 섹션 이름 -> 마지막 수집 오류 (성공하면 지운다). 기기 설정 > 정보 에 한 줄로 보여준다
+_errors: dict[str, str] = {}
+
+
+def _error_text(e: Exception) -> str:
+    return str(e).strip() or type(e).__name__
+
 
 def collect_limits(cfg: dict) -> list:
     """구독 한도 페이지들. 이 PC 에 값이 있으면 그것을 보여주고, 없을 때만 다른 PC 가 올려 둔 값을 쓴다."""
@@ -94,8 +104,10 @@ def collect_limits(cfg: dict) -> list:
     for section, module in enabled:
         try:
             local[section] = module.snapshot(cfg.get(section, {}))
+            _errors.pop(section, None)
         except Exception as e:
             print(f"[{section}] 수집 실패: {e}")
+            _errors[section] = _error_text(e)
     # 공유 저장소에는 여러 PC 의 값을 합친 것을 올린다 (화면에 무엇을 보여주는지와는 별개)
     shared = _sync.merge(local)
     pages = []
@@ -116,8 +128,10 @@ def collect_all(cfg: dict) -> dict:
         if time.time() - called_at >= min_interval:
             try:
                 result = module.collect(cfg)
+                _errors.pop(section, None)
             except Exception as e:  # 한 서비스가 실패해도 나머지는 계속 보여준다
                 print(f"[{section}] 수집 실패: {e}")
+                _errors[section] = _error_text(e)
             _last[section] = (time.time(), result)
         if result:
             services.append(result)
@@ -128,6 +142,78 @@ def collect_all(cfg: dict) -> dict:
     os_name = "mac" if sys.platform == "darwin" else "win" if sys.platform == "win32" else "linux"
     return {"updated": datetime.now().strftime("%H:%M"), "services": services, "host": _host_name(), "os": os_name,
             **clock, **extra}
+
+
+class Collector:
+    """사용량 모으기(gist·API 요청, 느리면 수십 초)를 따로 돌린다.
+
+    그동안에도 기기와 주고받는 바퀴(미러링 유지 신호, 나오는 중인 답, 알림)가 멈추지 않게 한다.
+    한 번에 하나만 돌고, 결과는 잠금 아래에서 바꿔 끼운다.
+    """
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.lock = threading.Lock()
+        self.thread: threading.Thread | None = None
+        self.started_at = 0.0
+        self.result: dict | None = None  # 마지막으로 모은 것
+        self.fresh = False  # 아직 가져가지 않은 새 결과인지
+        self.failed = False  # 마지막 모으기가 오류로 끝났는지
+        self.collected_at = 0.0  # 마지막으로 다 모은 시각
+        self.errors: dict[str, str] = {}  # 그때의 서비스별 오류 (기기 정보 화면에 보여준다)
+
+    def start(self, limits_only: bool = False) -> None:
+        """모으기를 시작한다. 앞의 모으기가 아직 돌고 있으면 그것을 기다린다 (겹쳐 돌지 않는다)."""
+        with self.lock:
+            if self.thread and self.thread.is_alive():
+                if time.monotonic() - self.started_at > HANG_SECONDS:
+                    print(f"[collect] 사용량 모으기가 {HANG_SECONDS // 60}분 넘게 끝나지 않아 도우미를 다시 띄웁니다. 멈춘 곳:")
+                    try:
+                        faulthandler.dump_traceback(sys.stdout, all_threads=True)
+                        sys.stdout.flush()
+                    except (OSError, ValueError, AttributeError):
+                        pass
+                    restart()
+                return
+            self.started_at = time.monotonic()
+            self.thread = threading.Thread(target=self._run, args=(limits_only,), daemon=True)
+            self.thread.start()
+
+    def _run(self, limits_only: bool) -> None:
+        try:
+            if limits_only:
+                # 기기가 없을 때: 이 PC 의 한도 사용률 공유만 한다
+                collect_limits(self.cfg)
+                return
+            result = collect_all(self.cfg)
+        except Exception as e:
+            print("[collect] 사용량을 모으지 못했습니다:")
+            traceback.print_exc()
+            with self.lock:
+                self.failed = True
+                self.errors = {"collect": _error_text(e), **_errors}
+            return
+        with self.lock:
+            self.result, self.fresh, self.failed = result, True, False
+            self.collected_at, self.errors = time.time(), dict(_errors)
+
+    def take(self, wait: float) -> dict:
+        """보낼 사용량. 새 결과를 wait 초까지 기다리고, 그래도 아직이면 지난 결과를 준다.
+
+        지난 결과가 없으면(처음) 끝날 때까지 기다린다. 처음 모으기가 오류로 끝나면 오류를 낸다 (예전처럼 다시 시도한다).
+        """
+        deadline = time.monotonic() + wait
+        while True:
+            with self.lock:
+                result, fresh, running = self.result, self.fresh, bool(self.thread and self.thread.is_alive())
+                if result and (fresh or not running or time.monotonic() >= deadline):
+                    self.fresh = False
+                    # 받는 쪽이 고쳐 쓰므로 복사해 준다. 기기 시계는 보내는 시각으로 맞춘다
+                    return {**result, "services": list(result["services"]), "now": int(time.time()),
+                            "helper": version.status(self.collected_at, self.errors)}
+                if not result and not running:
+                    raise RuntimeError("사용량을 모으지 못했습니다" if self.failed else "사용량 모으기가 시작되지 않았습니다")
+            time.sleep(0.1)
 
 
 def _host_name() -> str:
@@ -277,7 +363,13 @@ def main() -> None:
         # 멈춘 것 같을 때 kill -USR1 <pid> 로 어디서 기다리는지 기록에 남긴다 (Mac, Linux)
         faulthandler.register(signal.SIGUSR1, all_threads=True)
     if args.log:
-        log = open(Path(args.log).expanduser(), "a", encoding="utf-8", buffering=1)
+        path = Path(args.log).expanduser()
+        try:
+            if path.stat().st_size > LOG_LIMIT:
+                path.replace(path.with_name(path.name + ".1"))
+        except OSError:
+            pass  # 없거나, 앞 도우미가 아직 잡고 있으면 (Windows) 이번에는 그대로 이어 쓴다
+        log = open(path, "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stderr = log
     if args.install_statusline:
         return statusline.install()
@@ -326,26 +418,28 @@ def main() -> None:
     names = list(TRANSPORTS) if link == "auto" else [link]
     sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
     speaker = sounds.Sounds(cfg.get("sounds", {}))
-    receiver = photos.PhotoReceiver(cfg.get("photos", {}))
     movies = videos.VideoReceiver(cfg.get("videos", {}))
+    receiver = photos.PhotoReceiver(cfg.get("photos", {}), movies.dir)
     apps = launcher.Launcher()
     pc = pcstats.PcStats()
+    typer.configure(cfg.get("keywords"))  # config.toml 의 키워드 버튼 (없으면 기본 목록)
     keys = typer.Typer()
     ask = assistant.Assistant(cfg.get("assistant", {}), cfg.get("storage", {}).get("model_dir", ""))
     ask.other_audio = lambda: getattr(sink, "stream", None) is not None
     # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
     sessions = orca.Orca(cfg.get("orca", {}))
     ask.orca = sessions
+    # 기기 펌웨어와 버전이 맞는지 (기기가 {"fw_proto"} 로 알려 준다)
+    peer = version.Peer()
+    print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
 
     def on_event(event: dict) -> None:
-        speaker.on_event(event)
-        receiver.on_event(event)
-        movies.on_event(event)
-        apps.on_event(event)
-        keys.on_event(event)
-        pc.on_event(event)
-        ask.on_event(event)
-        sessions.on_event(event)
+        # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
+        for handler in (speaker, receiver, movies, apps, keys, pc, ask, sessions, peer):
+            try:
+                handler.on_event(event)
+            except Exception:
+                frames.report(type(handler).__name__)
 
     transport = None
     # 기기 화면 미러링 (브라우저 창). 화면 조각은 연결 쪽에서 바로 넘긴다
@@ -353,20 +447,28 @@ def main() -> None:
     frames.mirror_sink = view.on_frame
     first = True
     sent_mic = True
+    collector = Collector(cfg)
     watchdog = Watchdog()
     while True:
         watchdog.beat()
         try:
             if transport is None:
+                # 끊긴 연결로 받던 녹화가 있으면 받은 데까지 재생되는 파일로 마무리한다
+                movies.finish()
                 transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
                 if transport:
                     sessions.resend()  # 새로 연결한 기기에도 세션 목록을 보낸다
+                    peer.reset()
             if transport:
-                message = collect_all(cfg)
+                # 모으기는 따로 돈다. 보통 금방 끝나니 잠깐 기다려 새 값을 보내고, 느리면 지난 값을 보낸다 (새 값은 다음 차례에)
+                collector.start()
+                message = collector.take(wait=2)
                 # PC 마이크를 쓸 수 있는지 (없으면 기기의 말하기 버튼이 꺼진다)
                 if hasattr(ask, "mic_available"):
                     ask.mic_available()
                 message["ask_mic"] = ask.mic
+                # 키워드 버튼 이름 (기기가 바뀐 것만 저장하고 단축키 화면·ORCA 팝업을 다시 만든다)
+                message["keywords"] = typer.ITEMS
                 sent_mic = ask.mic
                 if first and args.mic:
                     message["mic"] = args.mic == "on"
@@ -401,6 +503,7 @@ def main() -> None:
                     transport.send(message)
                     print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
                     first = False
+                    peer.sent()
                 except OSError as e:
                     print(f"[device] 전송 실패: {e}")
                     transport.close()
@@ -413,7 +516,7 @@ def main() -> None:
                     continue
             else:
                 # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
-                collect_limits(cfg)
+                collector.start(limits_only=True)
             if args.test_video and transport and not first:
                 # 정해진 초만큼 녹화하고 멈춘 뒤, 파일이 다 쓰일 때까지 기다린다
                 time.sleep(args.test_video)
@@ -476,7 +579,7 @@ def main() -> None:
                     extra = {}
                     if pc.due():
                         extra["pc"] = pc.collect()
-                    for source in (apps, keys, ask, sessions):
+                    for source in (apps, keys, ask, sessions, receiver):
                         if source.pending_toast:
                             extra["toast"], source.pending_toast = source.pending_toast, None
                     # 말로 묻기: 상태(듣는 중·생각 중)와 나오는 중인 답

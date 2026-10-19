@@ -185,7 +185,7 @@ static void show_info() {
   if (!visible || (!just_opened && millis() - checked_ms < 1000)) return;
   checked_ms = millis();
   static const char *LINKS[] = {"없음", "USB", "블루투스", "Wi-Fi", "클라우드"};
-  char text[480];
+  char text[800];
   char err[64];
   if (!health_last_error(err, sizeof(err))) strlcpy(err, "없음", sizeof(err));
   int pct = battery_pct();
@@ -200,6 +200,28 @@ static void show_info() {
       snprintf(bat + n, sizeof(bat) - n, ", 약 %d시간 %d분 남음", left / 60, left % 60);
     }
   }
+  // 지금 쓰는 PC 도우미: 이름, 버전, 마지막 사용량 수집 시각(몇 분 전), 수집 오류
+  const HelperInfo &h = link_helper();
+  char pc[240];
+  if (!h.known) {
+    strlcpy(pc, "PC 도우미: 아직 소식 없음\n", sizeof(pc));
+  } else {
+    int n = snprintf(pc, sizeof(pc), "PC 도우미: %s, %s (proto %d)\n", h.host[0] ? h.host : "?",
+                     h.ver[0] ? h.ver : "옛 버전", h.proto);
+    time_t now = time(nullptr);
+    if (h.at > 0 && now > 1700000000) {
+      struct tm local;
+      time_t at = (time_t)h.at;
+      localtime_r(&at, &local);
+      long ago = max(0L, (long)(now - at));
+      char when[24];
+      if (ago < 60) strlcpy(when, "방금", sizeof(when));
+      else if (ago < 3600) snprintf(when, sizeof(when), "%ld분 전", ago / 60);
+      else snprintf(when, sizeof(when), "%ld시간 전", ago / 3600);
+      n += snprintf(pc + n, sizeof(pc) - n, "마지막 수집: %02d:%02d (%s)\n", local.tm_hour, local.tm_min, when);
+    }
+    if (h.err[0] && n < (int)sizeof(pc)) snprintf(pc + n, sizeof(pc) - n, "수집 오류: %s\n", h.err);
+  }
   snprintf(text, sizeof(text),
            "PC 연결: %s\n"
            "Wi-Fi: %s\n"
@@ -209,10 +231,12 @@ static void show_info() {
            "메모리: 내부 %uKB, PSRAM %uKB 남음\n"
            "켜진 지: %lu분 (%s)\n"
            "오류 재시작: %s\n"
-           "펌웨어: " __DATE__ " " __TIME__,
+           "%s"
+           "펌웨어: " __DATE__ " " __TIME__ " (proto %d)",
            LINKS[link_active()], WiFi.isConnected() ? WiFi.localIP().toString().c_str() : "연결 안 됨", bat,
            settings_brightness(), mic_is_on() ? "켜짐" : "꺼짐", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
-           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned long)(millis() / 60000), health_boot_reason(), err);
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned long)(millis() / 60000), health_boot_reason(), err,
+           pc, FW_PROTO);
   ui_set_info(text);
 }
 

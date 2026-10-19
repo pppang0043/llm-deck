@@ -28,6 +28,7 @@ void link_init(void (*set_mic)(bool on));
 //   {"ask": {"state", "q", "a", "done"}}     질문 화면: 받아 적은 질문과 나오는 중인 답 (askpanel.h)
 //   {"ask_mic": false}                       PC 에 쓸 수 있는 마이크가 없음 (말하기 버튼을 끈다)
 //   {"host": "PC 이름"}                      보낸 PC 의 이름 (블루투스 설정 화면에 보여준다)
+//   {"helper": {"proto", "ver", "at", "err"}} 도우미 버전과 마지막 사용량 수집 시각·오류 (설정 > 정보)
 // usage 가 false 면 사용량("services")은 쓰지 않는다 (블루투스로 붙어 기다리는 중인 PC)
 void link_submit(Link from, const char *data, size_t len, bool usage = true);
 
@@ -40,3 +41,18 @@ void link_send_event(const char *json);
 Link link_active();
 // {"rotate": true} 를 받으면 부를 함수 (화면 돌리기 버튼과 같다)
 void link_set_rotate(void (*rotate)());
+
+// PC 도우미와 주고받는 내용의 버전. 메시지 칸·인증 방식이 바뀔 때 올린다 (companion/version.py 의 PROTO 와 같아야 한다).
+// 사용량을 받으면 연결마다 한 번 {"fw_proto": N, "fw": "빌드 시각"} 으로 알려 주고, 다르면 알림을 띄운다.
+#define FW_PROTO 2
+
+// 지금 쓰는 PC 도우미가 알려 준 것 (사용량 메시지의 "helper"). 보내지 않는 옛 도우미는 proto 0
+struct HelperInfo {
+  bool known;      // 사용량을 한 번이라도 받았는지
+  int proto;
+  char host[32];
+  char ver[24];
+  int64_t at;      // 마지막 수집 시각 (UTC 초, 0: 모름)
+  char err[72];    // 마지막 수집 오류 한 줄 ("" 이면 없음)
+};
+const HelperInfo &link_helper();

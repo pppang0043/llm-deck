@@ -357,6 +357,7 @@ class Assistant:
             return
         self.chunks = []
         self.recording.set()
+        self.last_used = time.monotonic()  # 녹음을 취소해도 열어 둔 마이크·모델을 나중에 내리게
         self.recorder = threading.Thread(target=self._record, daemon=True)
         self.recorder.start()
         # 마이크가 실제로 소리를 받기 시작하면 _record 가 "listening" 으로 바꾼다 (그때부터 말하면 된다)
@@ -639,11 +640,12 @@ class Assistant:
                 self._set("done", q=question, a=answer)
                 if self.voice:
                     self.speaker.speak(spoken_text(question, answer))
-                self.last_used = time.monotonic()
         except Exception as e:
             print(f"[assistant] 실패: {e}")
             self._set("error", a=f"답을 받지 못했습니다\n{str(e)[:80]}")
         finally:
+            # 받아쓰기만 했거나 묻다가 실패해도 모델·CLI·마이크는 올라와 있으므로, 오래 안 쓰면 내리도록 시각을 남긴다
+            self.last_used = time.monotonic()
             self.busy = False
 
     def _finish_dictation(self, text: str) -> None:
