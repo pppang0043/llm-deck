@@ -417,6 +417,7 @@ final class Helper {
     p.arguments = ["main.py"] + CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
     var env = ProcessInfo.processInfo.environment
     env["PYTHONUNBUFFERED"] = "1"
+    env["LLM_DECK_APP_PID"] = String(getpid())  // 이 앱이 SIGUSR1 을 받으면 미러링 창을 연다
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
     p.environment = env
     p.terminationHandler = { p in
@@ -506,6 +507,12 @@ final class App: NSObject, NSApplicationDelegate {
       source.resume()
       signals.append(source)
     }
+    // 도우미가 기기와 새로 연결되면 SIGUSR1 로 미러링 창을 열게 한다 (mirror.py 의 open_window)
+    signal(SIGUSR1, SIG_IGN)
+    let open = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+    open.setEventHandler { MainActor.assumeIsolated { self.mirror.open() } }
+    open.resume()
+    signals.append(open)
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     item.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "LLM Deck")
     item.button?.toolTip = "LLM Deck"
@@ -515,6 +522,7 @@ final class App: NSObject, NSApplicationDelegate {
       it.target = target
     }
     add("미러링 열기", mirror, #selector(Mirror.open))
+    add("항상 위", mirror, #selector(Mirror.toggleOnTop))
     menu.addItem(.separator())
     add("도우미 다시 시작", helper, #selector(Helper.restart))
     add("기록 보기", self, #selector(showLog))

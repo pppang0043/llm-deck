@@ -107,7 +107,7 @@ uv run main.py --saver             # 화면 보호기를 지금 띄워 보기 (�
 uv run main.py --rotate            # 화면 90도 돌리기 (돌리기 버튼과 같다)
 uv run main.py --sd-clear          # 기기 SD 카드의 사진 모두 지우기 (USB)
 uv run main.py --screenshot        # 기기 화면을 찍어 사진 폴더에 저장 (--view home|usage|info|settings 와 함께)
-uv run main.py --mirror            # 미러링 창: 기기 화면을 보고 클릭·끌기·휠·화살표로 조작 (도우미가 켜져 있고 USB·Wi-Fi 연결일 때). 설치한 도우미 앱(Mac 은 메뉴 막대의 LLM Deck, Windows 는 트레이의 LLM Deck)의 창으로 열고, 앱이 없을 때(터미널에서 직접 띄운 도우미 등)만 브라우저로 연다. 미러링 중 기기 화면에는 구독 한도 표가 나오고, 기기를 만지면 30초 동안 원래 화면
+uv run main.py --mirror            # 미러링 창: 기기 화면을 보고 클릭·끌기·휠·화살표로 조작 (도우미가 켜져 있고 USB·Wi-Fi 연결일 때). 설치한 도우미 앱(Mac 은 메뉴 막대의 LLM Deck, Windows 는 트레이의 LLM Deck)의 창으로 열고, 앱이 없을 때(터미널에서 직접 띄운 도우미 등)만 브라우저로 연다. 기기가 USB·Wi-Fi 로 새로 연결되면 도우미 앱 창이 저절로 열린다 (끄려면 [mirror] auto_open = false). 항상 위는 창 오른쪽 메뉴와 메뉴 막대·트레이 메뉴에서 고른다. 미러링 중 기기 화면에는 구독 한도 표가 나오고, 기기를 만지면 30초 동안 원래 화면
 uv run main.py --links ble=off     # 연결 방식 켜고 끄기 (USB 로만, USB 를 꺼 둬도 받는다)
 uv run main.py --camera-mount 0m   # 카메라 방향 (0~3, 좌우 반전이면 m)
 uv run main.py --battery 4.12      # 멀티미터로 잰 배터리 전압으로 보정 (0 이면 보정 지움)

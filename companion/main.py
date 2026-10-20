@@ -458,10 +458,12 @@ def main() -> None:
             if transport is None:
                 # 끊긴 연결로 받던 녹화가 있으면 받은 데까지 재생되는 파일로 마무리한다
                 movies.finish()
+                view.link_lost()
                 transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
                 if transport:
                     sessions.resend()  # 새로 연결한 기기에도 세션 목록을 보낸다
                     peer.reset()
+                    view.link_up(transport.name)
             if transport:
                 # 모으기는 따로 돈다. 보통 금방 끝나니 잠깐 기다려 새 값을 보내고, 느리면 지난 값을 보낸다 (새 값은 다음 차례에)
                 collector.start()
@@ -532,6 +534,7 @@ def main() -> None:
                         transport = faster
                         sessions.resend()
                         peer.reset()
+                        view.link_up(transport.name)
                         continue
             else:
                 # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)

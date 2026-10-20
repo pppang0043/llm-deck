@@ -25,6 +25,8 @@ WIN_APP = Path(__file__).resolve().parent / "windows" / "LLM Deck.exe"  # window
 HEAD = struct.Struct("<IIIHH")  # 장 번호, 위치, 장 크기, 폭, 높이
 # 페이지가 이만큼 화면을 받아 가지 않으면 창이 닫힌 것으로 본다
 VIEWER_SECONDS = 3
+# 이보다 오래 끊겼다가 다시 붙으면 새로 연결한 것으로 보고 미러링 창을 띄운다 (잠깐 끊겼다 붙은 것은 그대로 둔다)
+REJOIN_SECONDS = 60
 KEEP_SECONDS = 2
 
 PAGE = """<!doctype html>
@@ -150,10 +152,14 @@ class Mirror:
         self.size = (0, 0)
         self.seq = 0
         self.last_poll = 0.0
+        self.app_poll = 0.0  # 브라우저가 아닌 미러링 앱 창이 마지막으로 화면을 받아 간 시각
         self.sent_on = 0.0  # 마지막으로 {"mirror": true} 를 보낸 시각 (0 = 꺼짐)
         self._buf = None
         self._no = -1
         self._got = 0
+        self.link = ""  # 붙어 있는(또는 마지막으로 붙었던) 연결 이름. "" = 도우미를 켜고 아직 못 붙음
+        self.lost_at = 0.0  # 연결이 끊긴 시각 (0 = 붙어 있음)
+        self.auto_open = False
         if not cfg.get("enabled", True):
             return
         try:
@@ -165,6 +171,36 @@ class Mirror:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         OLD_URL_FILE.unlink(missing_ok=True)
         print(f"[mirror] 미러링 창: {URL} (uv run main.py --mirror 로도 열린다)")
+        self.auto_open = cfg.get("auto_open", True)
+
+    def link_lost(self) -> None:
+        if self.link and not self.lost_at:
+            self.lost_at = time.time()
+
+    def link_up(self, name: str) -> None:
+        """기기와 새로 연결되면 미러링 창을 띄운다. 블루투스로는 화면이 오지 않아 띄우지 않고,
+        창이 이미 떠 있거나 잠깐 끊겼다 다시 붙은 것이면 그대로 둔다 (그때마다 창이 앞으로 튀어나오지 않게)"""
+        before, lost_at = self.link, self.lost_at
+        self.link, self.lost_at = name, 0.0
+        # 브라우저 탭이 받아 가고 있는 것은 치지 않는다 (숨은 탭 때문에 앱 창이 안 뜨지 않게)
+        if not self.auto_open or name == "Bluetooth" or self.app_watching():
+            return
+        if (before in ("", "Bluetooth")  # 처음 붙었거나, 화면을 못 받던 블루투스에서 바뀜
+                or (name == "USB" and before != "USB")  # USB 케이블을 꽂음
+                or (lost_at and time.time() - lost_at >= REJOIN_SECONDS)):
+            print(f"[mirror] 기기가 {name} 로 연결되어 미러링 창을 엽니다.")
+            threading.Thread(target=self._open_window, daemon=True).start()
+
+    def _open_window(self) -> None:
+        # 도우미 앱이 막 켜진 참이면 (로그인 직후, 다시 시작) 여는 요청을 놓칠 수 있어 창이 화면을 받아 갈 때까지 몇 번 더 연다
+        for _ in range(3):
+            # 저절로 열 때는 앱 창으로만 (앱 없이 터미널에서 띄운 도우미면 열지 않는다)
+            if open_window(browser=False) != "app":
+                return
+            for _ in range(20):
+                time.sleep(0.5)
+                if self.app_watching():
+                    return
 
     def on_frame(self, body: bytes) -> None:
         """기기가 보낸 화면 조각을 모은다 (transports/frames.py 가 부른다)"""
@@ -185,6 +221,9 @@ class Mirror:
 
     def watching(self) -> bool:
         return time.time() - self.last_poll < VIEWER_SECONDS
+
+    def app_watching(self) -> bool:
+        return time.time() - self.app_poll < VIEWER_SECONDS
 
     def pending(self) -> dict | None:
         """메인 루프가 0.5초마다 묻는다: 기기에 보낼 미러링 켜기·끄기"""
@@ -255,6 +294,9 @@ class Mirror:
                 except ValueError:
                     after = 0
                 mirror.last_poll = time.time()
+                # 미러링 앱(Mac URLSession, Windows HttpWebRequest)은 브라우저처럼 Mozilla 를 붙이지 않는다
+                if "Mozilla" not in self.headers.get("User-Agent", ""):
+                    mirror.app_poll = mirror.last_poll
                 if not mirror._link():
                     time.sleep(1)
                     self._reply(503, "기기가 USB 나 Wi-Fi 로 연결되어 있지 않습니다 (블루투스로는 미러링할 수 없습니다)".encode(),
@@ -303,8 +345,11 @@ def _point(p: dict) -> dict:
     return {"x": int(p["x"]), "y": int(p["y"]), "down": bool(p["down"])}
 
 
-def open_window() -> bool:
-    """켜져 있는 도우미의 미러링 창을 연다. 미러링 창(install.sh, install.cmd 가 만든 도우미 앱)이 있으면 그것을, 없으면 브라우저로"""
+def open_window(browser: bool = True) -> str:
+    """켜져 있는 도우미의 미러링 창을 연다. 미러링 창(install.sh, install.cmd 가 만든 도우미 앱)이 있으면 그것을, 없으면 브라우저로
+    (browser=False 면 앱으로만). 연 곳("app", "browser")을 돌려주고, 열지 않았으면 "" """
+    import os
+    import signal
     import subprocess
     import sys
     import webbrowser
@@ -315,22 +360,30 @@ def open_window() -> bool:
         urllib.request.urlopen(URL, timeout=3).close()
     except OSError:
         print("[mirror] 도우미가 켜져 있지 않거나 미러링이 꺼져 있습니다.")
-        return False
+        return ""
     try:
+        # 도우미 앱이 띄운 도우미면 그 앱에 바로 알린다. open 으로 부르면 앱이 막 켜진 참에는 놓치고 브라우저로 넘어간다
+        app_pid = int(os.environ.get("LLM_DECK_APP_PID") or 0)
+        if sys.platform == "darwin" and app_pid:
+            os.kill(app_pid, signal.SIGUSR1)
+            return "app"
         # 앱이 떠 있지 않으면 (터미널에서 도우미를 띄웠으면) 열지 않는다. 열면 도우미를 하나 더 띄우려 한다
         mac_app_up = sys.platform == "darwin" and subprocess.run(
             ["pgrep", "-f", "LLM Deck.app/Contents/MacOS/llm-deck"], capture_output=True).returncode == 0
         if mac_app_up:
             subprocess.run(["open", str(MAC_APP)], check=True, timeout=10)
-            return True
+            return "app"
         if sys.platform == "win32" and WIN_APP.exists():
             # uv 가 이 파이썬을 작업 묶음(job)에 넣어 두면 파이썬이 끝날 때 앱도 같이 꺼진다. 묶음 밖으로 띄우고, 막혀 있으면 그냥 띄운다
             try:
                 subprocess.Popen([str(WIN_APP), "--mirror"], creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.DETACHED_PROCESS)
             except OSError:
                 subprocess.Popen([str(WIN_APP), "--mirror"], creationflags=subprocess.DETACHED_PROCESS)
-            return True
+            return "app"
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"[mirror] 미러링 앱을 열지 못해 브라우저로 엽니다: {e}")
+        print(f"[mirror] 미러링 앱을 열지 못했습니다: {e}")
+    if not browser:
+        return ""
+    print("[mirror] 브라우저로 엽니다.")
     webbrowser.open(URL)
-    return True
+    return "browser"

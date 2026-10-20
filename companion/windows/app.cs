@@ -186,7 +186,7 @@ class MirrorForm : Form
         base.WndProc(ref m);
     }
 
-    void SetTopMost(bool on)
+    public void SetTopMost(bool on)
     {
         TopMost = on;
         Save("TopMost", on ? 1 : 0);
@@ -510,7 +510,7 @@ class MirrorForm : Form
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
-    static int ReadSetting(string name, int fallback)
+    public static int ReadSetting(string name, int fallback)
     {
         try
         {
@@ -527,7 +527,7 @@ class MirrorForm : Form
         return fallback;
     }
 
-    static void Save(string name, int value)
+    public static void Save(string name, int value)
     {
         try
         {
@@ -643,6 +643,10 @@ class DeckApp : ApplicationContext
         ToolStripMenuItem openItem = new ToolStripMenuItem("미러링 열기", null, (s, e) => OpenMirror());
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);  // 아이콘을 두 번 누르면 하는 일
         menu.Items.Add(openItem);
+        // 미러링 창의 오른쪽 클릭 메뉴와 같은 설정 (창이 닫혀 있으면 다음에 열 때 쓴다)
+        ToolStripMenuItem topItem = new ToolStripMenuItem("항상 위", null, (s, e) => ToggleTopMost());
+        menu.Items.Add(topItem);
+        menu.Opening += (s, e) => topItem.Checked = MirrorForm.ReadSetting("TopMost", 1) != 0;
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("도우미 다시 시작", null, (s, e) => Restart()));
         menu.Items.Add(new ToolStripMenuItem("기록 보기", null, (s, e) => ShowLog()));
@@ -728,6 +732,13 @@ class DeckApp : ApplicationContext
         if (helper == null || helper.HasExited) return;
         restarting = true;
         StopHelper();  // Exited 가 오면 새로 띄운다
+    }
+
+    void ToggleTopMost()
+    {
+        bool on = MirrorForm.ReadSetting("TopMost", 1) == 0;
+        if (mirror != null && !mirror.IsDisposed) mirror.SetTopMost(on);
+        else MirrorForm.Save("TopMost", on ? 1 : 0);
     }
 
     public void OpenMirror()
