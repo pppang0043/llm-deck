@@ -48,9 +48,14 @@ static void wifi_task(void *) {
     }
     xSemaphoreGive(lock);
     // Wi-Fi 를 찾는 동안에는 같은 안테나를 쓰는 블루투스가 끊길 수 있다.
-    // 블루투스로 PC 와 연결되어 있으면 찾지 않고, 못 찾았을 때는 한동안 쉬었다가 다시 찾는다.
+    // 못 찾았을 때는 한동안 쉬었다가 다시 찾는다. 블루투스로 PC 와 연결되어 있으면 더 드물게 찾는다
+    // (Wi-Fi 가 우선이라 돌아오면 바꿔 타야 하지만, Wi-Fi 를 막아 둔 곳에서는 블루투스가 자꾸 끊기면 안 된다)
+    static uint32_t ble_tried_ms = 0;
     bool searched = false;
-    if (radio_on && station && WiFi.status() != WL_CONNECTED && link_active() != LINK_BLE) {
+    bool on_ble = link_active() == LINK_BLE;
+    if (radio_on && station && WiFi.status() != WL_CONNECTED &&
+        (!on_ble || !ble_tried_ms || millis() - ble_tried_ms > 300000)) {
+      if (on_ble) ble_tried_ms = millis();
       searched = multi.run(8000) != WL_CONNECTED;
     }
     vTaskDelay(pdMS_TO_TICKS(searched ? 30000 : 3000));
@@ -262,6 +267,7 @@ static void send_state() {
   JsonDocument doc(PSRAM_JSON);
   doc["ok"] = true;
   doc["mic"] = mic_is_on();
+  doc["link"] = settings_link_allowed(LINK_WIFI);  // 꺼져 있으면 방금 보낸 것은 버렸다
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
@@ -277,6 +283,8 @@ static void send_status() {
   doc["id"] = device_id();
   doc["auth"] = 1;
   doc["proto"] = FW_PROTO;  // 도우미와 주고받는 내용의 버전 (link.h)
+  // 설정에서 Wi-Fi 연결을 껐으면(클라우드만 켜 둔 경우) 보내도 버리므로, 도우미가 다른 방식(블루투스)으로 넘어가게 알린다
+  doc["link"] = settings_link_allowed(LINK_WIFI);
   doc["nonce"] = nonce;
   String out;
   serializeJson(doc, out);

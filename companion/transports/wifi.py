@@ -90,6 +90,9 @@ class WifiTransport:
 
     def _use_status(self, info: dict) -> bool:
         """/status 응답에서 이 기기의 키와 새 nonce 를 고른다. 키가 없으면 False."""
+        if info.get("link") is False:
+            _notice("[Wi-Fi] 기기 설정에서 Wi-Fi 연결이 꺼져 있어 Wi-Fi 를 쓰지 않습니다 (기기의 설정 > Wi-Fi).")
+            return False
         if info.get("auth") != 1:
             _notice("[Wi-Fi] 기기 펌웨어가 Wi-Fi 인증을 모르는 옛 버전이라 Wi-Fi 를 쓰지 않습니다. 펌웨어를 업데이트하세요.")
             return False
@@ -293,7 +296,15 @@ class WifiTransport:
         raise OSError("Wi-Fi 인증 실패")
 
     def send(self, message: dict) -> None:
-        self._request("/usage", json.dumps(message).encode())
+        reply = self._request("/usage", json.dumps(message).encode())
+        try:
+            off = json.loads(reply).get("link") is False
+        except (ValueError, AttributeError):
+            off = False
+        if off:
+            # 기기 설정에서 Wi-Fi 연결을 껐다. 끊긴 것으로 보고 다른 방식(블루투스)으로 다시 연결하게 한다
+            _notice("[Wi-Fi] 기기 설정에서 Wi-Fi 연결이 꺼져 있어 Wi-Fi 를 쓰지 않습니다 (기기의 설정 > Wi-Fi).")
+            raise OSError("기기에서 Wi-Fi 연결이 꺼져 있습니다")
 
     def close(self) -> None:
         if self.server:

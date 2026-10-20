@@ -1,4 +1,4 @@
-"""기기와 통신하는 세 가지 방법 (USB / 블루투스 / Wi-Fi).
+"""기기와 통신하는 세 가지 방법 (USB / Wi-Fi / 블루투스).
 
 모두 같은 모양을 가진다:
     t = Transport(cfg, on_audio, on_event, on_photo, on_video)
@@ -15,5 +15,5 @@ from .ble import BleTransport
 from .usb import UsbTransport
 from .wifi import WifiTransport
 
-# 자동 선택(auto)일 때 시도하는 순서
-TRANSPORTS = {"usb": UsbTransport, "ble": BleTransport, "wifi": WifiTransport}
+# 자동 선택(auto)일 때 시도하는 순서. 기기의 우선순위(link.cpp)와 같다. 블루투스는 Wi-Fi 를 쓸 수 없는 곳(회사 WIPS 등)을 위한 마지막 방법
+TRANSPORTS = {"usb": UsbTransport, "wifi": WifiTransport, "ble": BleTransport}

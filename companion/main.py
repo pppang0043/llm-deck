@@ -57,6 +57,8 @@ from collectors.fmt import limits_page
 from transports import TRANSPORTS, frames
 
 INTERVAL = 30
+# 블루투스로 붙어 있을 때 Wi-Fi 를 다시 찾아보는 간격 (초)
+WIFI_RETRY = 300
 INSTANCE_PORT = 4012  # 도우미가 하나만 돌게 하려고 잡는 PC 안쪽 포트
 RECORD_SECONDS = 10
 # 기기와 주고받는 바퀴가 이만큼 돌아오지 않으면 멈춘 것으로 보고 도우미를 다시 띄운다.
@@ -447,6 +449,7 @@ def main() -> None:
     frames.mirror_sink = view.on_frame
     first = True
     sent_mic = True
+    wifi_tried = time.time()
     collector = Collector(cfg)
     watchdog = Watchdog()
     while True:
@@ -514,6 +517,19 @@ def main() -> None:
                     transport.close()
                     transport = None
                     continue
+                # 블루투스로 붙어 있으면 가끔 Wi-Fi 를 찾아, 되면 갈아탄다 (Wi-Fi 가 더 빠르고 인증도 되며, 기기도 Wi-Fi 를 우선한다)
+                if transport and link == "auto" and transport.name == "Bluetooth" and time.time() - wifi_tried > WIFI_RETRY:
+                    wifi_tried = time.time()
+                    faster = TRANSPORTS["wifi"](cfg.get("device", {}), sink.push, on_event, receiver.on_chunk, movies.on_chunk)
+                    if not faster.open():
+                        faster.close()
+                    else:
+                        print("[device] Wi-Fi 로 기기를 찾아 블루투스에서 Wi-Fi 로 바꿉니다.")
+                        transport.close()
+                        transport = faster
+                        sessions.resend()
+                        peer.reset()
+                        continue
             else:
                 # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
                 collector.start(limits_only=True)

@@ -2,7 +2,7 @@
 # 키를 비워 둔 서비스는 화면에 나타나지 않습니다.
 
 [device]
-# 연결 방식: "auto"(USB -> 블루투스 -> Wi-Fi 순으로 되는 것), "usb", "ble", "wifi"
+# 연결 방식: "auto"(USB -> Wi-Fi -> 블루투스 순으로 되는 것), "usb", "ble", "wifi"
 link = "auto"
 # Wi-Fi: 비워 두면 기기를 자동으로 찾습니다. 못 찾을 때만 기기 화면에 보이는 IP 를 적으세요.
 host = ""

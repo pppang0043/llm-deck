@@ -16,6 +16,7 @@ from . import adpcm
 DEVICE_NAME = "LLM-Deck"
 NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # PC -> 기기
 NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # 기기 -> PC
+NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 AUDIO_HEADER = struct.Struct("<HhB")
 AUDIO_SIZE = AUDIO_HEADER.size + 160  # 20ms = 320샘플 x 4비트
 # 찾으면 바로 끝나므로 넉넉히 둔다. Windows 는 블루투스 장치가 많이 붙어 있으면 광고를 자주 놓친다.
@@ -23,6 +24,11 @@ SCAN_SECONDS = 20
 # 한 번 연결한 기기의 주소. Windows 는 주소만 알면 찾기(스캔) 없이 바로 연결할 수 있다.
 ADDRESS_FILE = Path.home() / ".llm-deck" / "ble_address"
 DIRECT_SECONDS = 10
+
+
+def _is_deck(device, adv) -> bool:
+    return (adv.local_name == DEVICE_NAME or device.name == DEVICE_NAME
+            or NUS_SERVICE in (u.lower() for u in adv.service_uuids))
 
 
 class BleTransport:
@@ -63,7 +69,8 @@ class BleTransport:
     async def _connect(self) -> bool:
         client = await self._connect_known() if sys.platform == "win32" else None
         if client is None:
-            device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_SECONDS)
+            # 기기가 이미 다른 PC 와 연결되어 있으면 광고에 이름이 빠지기도 한다. 서비스 번호나 운영체제가 기억한 이름으로도 찾는다
+            device = await BleakScanner.find_device_by_filter(_is_deck, timeout=SCAN_SECONDS)
             if device is None:
                 return False
             client = BleakClient(device)
@@ -92,7 +99,7 @@ class BleTransport:
         except (BleakError, OSError, asyncio.TimeoutError):
             return None
         # 같은 주소의 다른 기기일 수 있으니 LLM Deck 서비스가 있는지 확인한다
-        if not any(s.uuid.lower() == "6e400001-b5a3-f393-e0a9-e50e24dcca9e" for s in client.services):
+        if not any(s.uuid.lower() == NUS_SERVICE for s in client.services):
             await client.disconnect()
             return None
         print("[Bluetooth] 지난번 주소로 바로 연결했습니다.")

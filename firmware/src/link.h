@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 // PC 와 연결하는 세 가지 방법. 셋 다 항상 켜져 있고,
-// 데이터를 보내오는 쪽 중 우선순위가 가장 높은 쪽(USB > 블루투스 > Wi-Fi)이 "현재 연결"이 되어
+// 데이터를 보내오는 쪽 중 우선순위가 가장 높은 쪽(USB > Wi-Fi > 블루투스)이 "현재 연결"이 되어
 // 마이크 소리·사진·알림도 그쪽으로 나간다.
 // LINK_CLOUD 는 PC 없이 기기가 직접 공유 저장소에서 읽어 온 경우다 (cloud.h).
 enum Link { LINK_NONE, LINK_USB, LINK_BLE, LINK_WIFI, LINK_CLOUD };

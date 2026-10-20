@@ -134,7 +134,7 @@ static const char *link_tag(Link link) {
 }
 
 // 여러 PC 가 동시에 보내면 "현재 연결"이 30초마다 바뀌어 마이크 소리·사진이 오락가락한다.
-// 그래서 우선순위를 둔다: USB > 블루투스 > Wi-Fi > 클라우드. 높은 쪽이 살아 있으면 낮은 쪽은
+// 그래서 우선순위를 둔다: USB > Wi-Fi > 블루투스 > 클라우드. 높은 쪽이 살아 있으면 낮은 쪽은
 // 현재 연결을 가져가지 못하고, 그 쪽이 보낸 사용량도 화면에 쓰지 않는다 (명령은 그대로 따른다).
 #define LINK_FRESH_MS 75000
 static uint32_t heard_ms[5] = {0};
@@ -142,8 +142,8 @@ static uint32_t heard_ms[5] = {0};
 static int priority(Link link) {
   switch (link) {
     case LINK_USB: return 4;
-    case LINK_BLE: return 3;
-    case LINK_WIFI: return 2;
+    case LINK_WIFI: return 3;  // 블루투스보다 빠르고 인증도 된다. 블루투스는 Wi-Fi 를 막아 둔 곳(회사 WIPS 등)에서 쓴다
+    case LINK_BLE: return 2;
     case LINK_CLOUD: return 1;
     default: return 0;
   }
@@ -160,7 +160,7 @@ static bool alive(Link link) {
 
 static Link best_link() {
   Link best = LINK_NONE;
-  for (Link l : {LINK_USB, LINK_BLE, LINK_WIFI, LINK_CLOUD}) {
+  for (Link l : {LINK_USB, LINK_WIFI, LINK_BLE, LINK_CLOUD}) {
     if (alive(l) && priority(l) > priority(best)) best = l;
   }
   return best;
