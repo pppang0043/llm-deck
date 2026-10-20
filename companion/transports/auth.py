@@ -1,10 +1,11 @@
-"""Wi-Fi 인증. 형식은 펌웨어의 net.h 와 맞춘다.
+"""Wi-Fi·블루투스 인증. 형식은 펌웨어의 net.h, ble_link.h 와 맞춘다.
 
 같은 네트워크의 누구나 기기에 명령을 보내거나 기기인 척 PC 로 보낼 수 없게, USB 로 한 번 받아 간 비밀 키로 서명한다.
     PC -> 기기 HTTP: 머리글 X-Deck-Auth: <nonce 32자>.<순번>.<서명 64자>
         서명 = HMAC-SHA256(키, b"http" + nonce 16바이트 + 순번 4바이트(LE) + 경로 + b"\\n" + 내용)
     기기 -> PC UDP: [내용][순번 4바이트(LE)][HMAC-SHA256(키, b"udp" + nonce + 순번 + 내용) 앞 16바이트]
     기기 -> PC TCP: PC 가 16바이트 도전값을 보내면 기기가 첫 묶음(종류 6)으로 HMAC(키, b"tcp" + 도전값) 을 보낸다
+    블루투스: 도전값을 주고받아 서로 확인한 뒤 줄·알림마다 서명한다 (ble_link.h, 아래 ble_* 함수)
 키는 기기별(MAC)로 ~/.llm-deck/wifi-keys.json 에 이 사용자만 읽을 수 있게 둔다.
 """
 
@@ -85,6 +86,38 @@ def udp_open(key: bytes, nonce: bytes, packet: bytes) -> tuple[int, bytes] | Non
     if not hmac.compare_digest(tag, want):
         return None
     return _CTR.unpack(ctr_bytes)[0], body
+
+
+BLE_TAG = 16
+
+
+def ble_hello_ok(key: bytes, pc_nonce: bytes, dev_nonce: bytes, tag: bytes) -> bool:
+    """기기가 도전값에 답한 서명이 맞는지 (진짜 기기인지)."""
+    return hmac.compare_digest(tag, _mac(key, b"ble-dev", pc_nonce, dev_nonce)[:BLE_TAG])
+
+
+def ble_line(key: bytes, dev_nonce: bytes, ctr: int, body: bytes) -> bytes:
+    """PC -> 기기 한 줄: #<순번>.<서명>.<JSON>"""
+    tag = _mac(key, b"ble", dev_nonce, _CTR.pack(ctr), body)[:BLE_TAG]
+    return f"#{ctr}.{tag.hex()}.".encode() + body + b"\n"
+
+
+def ble_event_open(key: bytes, pc_nonce: bytes, data: bytes) -> tuple[int, bytes] | None:
+    """기기 알림 <JSON>|<순번>.<서명> 의 서명이 맞으면 (순번, JSON), 아니면 None."""
+    body, sep, trailer = data.rpartition(b"|")
+    ctr_text, dot, tag_hex = trailer.partition(b".")
+    if not sep or not dot or not ctr_text.isdigit() or len(tag_hex) != BLE_TAG * 2:
+        return None
+    try:
+        tag = bytes.fromhex(tag_hex.decode())
+        ctr = int(ctr_text)
+    except ValueError:
+        return None
+    if not 0 < ctr <= 0xFFFFFFFF:
+        return None
+    if not hmac.compare_digest(tag, _mac(key, b"ble-evt", pc_nonce, _CTR.pack(ctr), body)[:BLE_TAG]):
+        return None
+    return ctr, body
 
 
 class Window:

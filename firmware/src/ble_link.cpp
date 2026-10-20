@@ -5,10 +5,13 @@
 #include <esp_chip_info.h>
 #include <nimble/porting/nimble/include/os/os_mbuf.h>
 #include <Preferences.h>
+#include <esp_random.h>
 #include <string>
 
 #include "link.h"
+#include "net.h"
 #include "settings.h"
+#include "ui.h"
 
 #define NUS_SERVICE "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define NUS_RX "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  // PC -> 기기
@@ -16,6 +19,10 @@
 
 #define MAX_MESSAGE 16384
 #define AUDIO_HEADER 5
+// 인증 (ble_link.h)
+#define TAG_LEN 16
+#define AUTH_TIMEOUT_MS 20000
+#define HELLO "{\"ble_hello\":\""
 
 static NimBLEServer *server;
 static NimBLECharacteristic *tx;
@@ -48,6 +55,14 @@ struct Peer {
   char addr[20];
   char host[32];
   PsramString message;
+  // 인증 (ble_link.h)
+  bool hello;       // 도전값을 받아 기기 nonce 를 줬는지
+  bool authed;      // 서명이 맞는 줄을 한 번이라도 보냈는지
+  uint8_t pc_nonce[16];
+  uint8_t dev_nonce[16];
+  uint32_t rx_last;  // 받은 가장 큰 순번
+  uint32_t tx_ctr;   // 보낸 알림 순번
+  uint32_t since_ms;
 };
 static Peer peers[BLE_MAX_PEERS];
 static portMUX_TYPE peers_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -58,6 +73,8 @@ static volatile uint16_t mtu = 23;      // 사용 중인 PC 와의 MTU
 static volatile uint16_t primary_handle = BLE_HS_CONN_HANDLE_NONE;
 static Preferences prefs;
 static char preferred[20] = "";
+// 서명이 없거나 틀린 줄을 받았다 (메인 루프에서 알림을 띄운다. 블루투스 태스크에서는 화면을 만지지 않는다)
+static volatile bool refused = false;
 
 // IMA ADPCM: 16비트 샘플을 "이전 값과의 차이" 4비트로 줄이는 표준 방식
 static const int8_t INDEX_TABLE[8] = {-1, -1, -1, -1, 2, 4, 6, 8};
@@ -145,13 +162,14 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       p.mtu = info.getMTU();
       strlcpy(p.addr, addr.c_str(), sizeof(p.addr));
       p.host[0] = 0;
-      // 사용 중인 PC 가 없거나, 설정에서 골라 둔 PC 가 다시 붙었으면 이 PC 를 쓴다
-      if (primary < 0 || strcmp(p.addr, preferred) == 0) set_primary_locked(slot);
+      // 사용 중으로 고르는 것은 인증한 뒤에 (handle_line)
+      p.hello = p.authed = false;
+      p.rx_last = p.tx_ctr = 0;
+      p.since_ms = millis();
     }
     portEXIT_CRITICAL(&peers_mux);
     if (slot >= 0) peers[slot].message.clear();
-    Serial.printf("[ble] connected %s (slot %d, %u PCs)%s\n", addr.c_str(), slot, srv->getConnectedCount(),
-                  slot >= 0 && primary == slot ? " - in use" : "");
+    Serial.printf("[ble] connected %s (slot %d, %u PCs)\n", addr.c_str(), slot, srv->getConnectedCount());
     restart_advertising();
   }
   void onDisconnect(NimBLEServer *srv, NimBLEConnInfo &info, int reason) override {
@@ -164,7 +182,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         // 기다리던 PC 가 있으면 이어받는다 (골라 둔 PC 가 있으면 그쪽)
         int next = -1;
         for (int i = 0; i < BLE_MAX_PEERS; i++) {
-          if (!peers[i].used) continue;
+          if (!peers[i].used || !peers[i].authed) continue;
           if (next < 0 || strcmp(peers[i].addr, preferred) == 0) next = i;
         }
         set_primary_locked(next);
@@ -203,6 +221,99 @@ static void remember_host(Peer &p) {
   portEXIT_CRITICAL(&peers_mux);
 }
 
+static void to_hex(const uint8_t *data, size_t len, char *out) {
+  for (size_t i = 0; i < len; i++) sprintf(out + i * 2, "%02x", data[i]);
+}
+
+static bool from_hex(const char *text, size_t len, uint8_t *out) {
+  for (size_t i = 0; i < len; i++) {
+    unsigned v;
+    if (!isxdigit((unsigned char)text[i * 2]) || !isxdigit((unsigned char)text[i * 2 + 1])) return false;
+    sscanf(text + i * 2, "%2x", &v);
+    out[i] = v;
+  }
+  return true;
+}
+
+// {"ble_hello":"<도전값>"} 에 답한다 (ble_link.h 의 2)
+static void answer_hello(int slot) {
+  Peer &p = peers[slot];
+  const char *m = p.message.c_str();
+  size_t pre = strlen(HELLO);
+  if (p.message.size() < pre + 32 || !from_hex(m + pre, 16, p.pc_nonce)) return;
+  esp_fill_random(p.dev_nonce, sizeof(p.dev_nonce));
+  uint8_t tag[32];
+  char reply[128];
+  if (!net_ble_mac("ble-dev", p.pc_nonce, 16, p.dev_nonce, 16, "", 0, tag)) {
+    snprintf(reply, sizeof(reply), "{\"ble_auth\":{\"err\":\"unpaired\"}}");
+    refused = true;
+  } else {
+    char n[33], t[TAG_LEN * 2 + 1];
+    to_hex(p.dev_nonce, 16, n);
+    to_hex(tag, TAG_LEN, t);
+    snprintf(reply, sizeof(reply), "{\"ble_auth\":{\"id\":\"%s\",\"n\":\"%s\",\"t\":\"%s\"}}",
+             net_device_id().c_str(), n, t);
+  }
+  portENTER_CRITICAL(&peers_mux);
+  p.hello = true;
+  p.authed = false;
+  p.rx_last = p.tx_ctr = 0;
+  p.since_ms = millis();
+  uint16_t peer_mtu = p.mtu;
+  portEXIT_CRITICAL(&peers_mux);
+  tx->notify((const uint8_t *)reply, strlen(reply), p.handle);
+  Serial.printf("[ble] hello from slot %d (mtu %u)\n", slot, (unsigned)peer_mtu);
+}
+
+// "#<순번>.<서명>.<JSON>" 을 확인하고 JSON 만 남긴다. 틀리면 false (ble_link.h 의 3)
+static bool open_line(Peer &p) {
+  const char *m = p.message.c_str();
+  if (!p.hello || m[0] != '#') return false;
+  char *end;
+  unsigned long ctr = strtoul(m + 1, &end, 10);
+  if (*end != '.' || ctr == 0 || ctr > 0xFFFFFFFFUL || ctr <= p.rx_last) return false;
+  const char *tag_hex = end + 1;
+  size_t head = tag_hex + TAG_LEN * 2 + 1 - m;
+  uint8_t tag[TAG_LEN], want[32];
+  if (p.message.size() < head || m[head - 1] != '.' || !from_hex(tag_hex, TAG_LEN, tag)) return false;
+  uint32_t c = ctr;
+  if (!net_ble_mac("ble", p.dev_nonce, 16, &c, 4, m + head, p.message.size() - head, want)) return false;
+  uint8_t diff = 0;
+  for (int k = 0; k < TAG_LEN; k++) diff |= tag[k] ^ want[k];
+  if (diff) return false;
+  p.rx_last = c;
+  p.message.erase(0, head);
+  return true;
+}
+
+static void handle_line(int slot) {
+  Peer &p = peers[slot];
+  if (p.message.compare(0, strlen(HELLO), HELLO) == 0) {
+    answer_hello(slot);
+    return;
+  }
+  if (!open_line(p)) {
+    static uint32_t warned_ms = 0;
+    refused = true;
+    if (!warned_ms || millis() - warned_ms > 60000) {
+      warned_ms = millis();
+      Serial.printf("[ble] refused unsigned/bad message from slot %d (%s)\n", slot, p.addr);
+    }
+    return;
+  }
+  if (!p.authed) {
+    // 처음 인증된 PC: 사용 중인 PC 가 없거나, 설정에서 골라 둔 PC 면 이 PC 를 쓴다
+    portENTER_CRITICAL(&peers_mux);
+    p.authed = true;
+    if (primary < 0 || strcmp(p.addr, preferred) == 0) set_primary_locked(slot);
+    portEXIT_CRITICAL(&peers_mux);
+    Serial.printf("[ble] slot %d authenticated%s\n", slot, primary == slot ? " - in use" : "");
+  }
+  remember_host(p);
+  // 기다리는 PC 가 보낸 것은 명령만 따르고 사용량은 쓰지 않는다
+  link_submit(LINK_BLE, p.message.data(), p.message.size(), slot == primary);
+}
+
 class RxCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *chr, NimBLEConnInfo &info) override {
     int slot = find_peer(info.getConnHandle());
@@ -212,11 +323,7 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     for (size_t i = 0; i < value.size(); i++) {
       char c = value.data()[i];
       if (c == '\n') {
-        if (!p.message.empty()) {
-          remember_host(p);
-          // 기다리는 PC 가 보낸 것은 명령만 따르고 사용량은 쓰지 않는다
-          link_submit(LINK_BLE, p.message.data(), p.message.size(), slot == primary);
-        }
+        if (!p.message.empty()) handle_line(slot);
         p.message.clear();
       } else if (p.message.size() < MAX_MESSAGE) {
         p.message += c;
@@ -224,6 +331,29 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     }
   }
 };
+
+void ble_link_loop() {
+  // 인증하지 않고 자리만 차지하는 연결은 끊는다 (자리가 3개뿐이라 근처의 누가 다 채우면 내 PC 가 못 붙는다)
+  for (int i = 0; i < BLE_MAX_PEERS; i++) {
+    portENTER_CRITICAL(&peers_mux);
+    bool stale = peers[i].used && !peers[i].authed && millis() - peers[i].since_ms > AUTH_TIMEOUT_MS;
+    uint16_t handle = peers[i].handle;
+    if (stale) peers[i].since_ms = millis();  // 끊기를 기다리는 동안 다시 부르지 않게
+    portEXIT_CRITICAL(&peers_mux);
+    if (stale && server) {
+      Serial.printf("[ble] slot %d did not authenticate, disconnecting\n", i);
+      server->disconnect(handle);
+    }
+  }
+  if (refused) {
+    refused = false;
+    static uint32_t toast_ms = 0;
+    if (!toast_ms || millis() - toast_ms > 600000) {
+      toast_ms = millis();
+      ui_toast("블루투스 연결을 거절했습니다\nPC 도우미를 업데이트하고\nUSB로 한 번 연결하세요", 6000);
+    }
+  }
+}
 
 void ble_link_init() {
   prefs.begin("llm-deck");
@@ -282,11 +412,35 @@ void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
 }
 
 void ble_send_event(const char *json) {
-  size_t size = strlen(json);
-  if (!connected || size > (size_t)mtu - 3) return;
+  // 서명을 붙인다 (ble_link.h 의 4)
+  uint8_t nonce[16];
+  uint32_t ctr = 0;
+  uint16_t handle = BLE_HS_CONN_HANDLE_NONE;
+  portENTER_CRITICAL(&peers_mux);
+  if (primary >= 0) {
+    memcpy(nonce, peers[primary].pc_nonce, 16);
+    ctr = ++peers[primary].tx_ctr;
+    handle = peers[primary].handle;
+  }
+  portEXIT_CRITICAL(&peers_mux);
+  if (!connected || handle == BLE_HS_CONN_HANDLE_NONE) return;
+  char packet[256];
+  size_t len = strlen(json);
+  if (len + 46 > sizeof(packet)) return;
+  memcpy(packet, json, len);
+  // 소리 묶음과 길이가 같으면 PC 가 소리로 착각하므로 JSON 끝에 빈칸을 하나 더한다 (서명은 빈칸까지 포함)
+  char trailer[48];
+  snprintf(trailer, sizeof(trailer), "|%u.", (unsigned)ctr);
+  if (len + strlen(trailer) + TAG_LEN * 2 == AUDIO_HEADER + 160) packet[len++] = ' ';
+  uint8_t tag[32];
+  if (!net_ble_mac("ble-evt", nonce, 16, &ctr, 4, packet, len, tag)) return;
+  size_t size = len + snprintf(packet + len, sizeof(packet) - len, "%s", trailer);
+  to_hex(tag, TAG_LEN, packet + size);
+  size += TAG_LEN * 2;
+  if (size > (size_t)mtu - 3) return;
   // 알림은 짧고 드물지만 꼭 가야 하므로 칸이 빌 때까지 잠깐 기다린다
   for (int i = 0; i < 50 && os_msys_num_free() < 2; i++) vTaskDelay(pdMS_TO_TICKS(4));
-  tx->notify((const uint8_t *)json, size, primary_handle);
+  tx->notify((const uint8_t *)packet, size, handle);
 }
 
 size_t ble_photo_chunk_max() {
@@ -357,7 +511,7 @@ int ble_peer_count() {
 void ble_peer_select(int slot) {
   if (slot < 0 || slot >= BLE_MAX_PEERS) return;
   portENTER_CRITICAL(&peers_mux);
-  bool ok = peers[slot].used;
+  bool ok = peers[slot].used && peers[slot].authed;  // 인증한 PC 만 고를 수 있다
   if (ok) {
     set_primary_locked(slot);
     strlcpy(preferred, peers[slot].addr, sizeof(preferred));

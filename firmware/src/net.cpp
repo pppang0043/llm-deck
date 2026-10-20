@@ -125,6 +125,17 @@ static String device_id() {
   return hex;
 }
 
+bool net_ble_mac(const char *label, const void *a, size_t an, const void *b, size_t bn, const void *c, size_t cn,
+                 uint8_t out[32]) {
+  if (!have_key) return false;
+  sign({{label, strlen(label)}, {a, an}, {b, bn}, {c, cn}}, out);
+  return true;
+}
+
+String net_device_id() {
+  return device_id();
+}
+
 String net_pair_json() {
   if (!have_key) {
     // 무선이 켜진 뒤라 하드웨어 난수가 진짜 난수다

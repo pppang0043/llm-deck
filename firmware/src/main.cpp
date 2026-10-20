@@ -337,6 +337,7 @@ void loop() {
   display_loop();
   usb_link_loop();
   net_loop();
+  ble_link_loop();
   link_loop();
   if (boot_button_pressed()) {
     display_poke();

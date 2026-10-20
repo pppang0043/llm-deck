@@ -34,6 +34,11 @@ int net_added_count();
 #define NET_UDP_TRAILER 20
 // USB 로 연결한 PC 에 줄 {"pair": {"id": 기기 MAC, "key": 키 64자}} (키가 없으면 만든다). 블루투스는 암호화가 없어 주지 않는다
 String net_pair_json();
+// 블루투스 인증 (ble_link.h) 에 같은 키로 서명한다: HMAC-SHA256(키, label + a + b + c). 키가 없으면 false
+bool net_ble_mac(const char *label, const void *a, size_t an, const void *b, size_t bn, const void *c, size_t cn,
+                 uint8_t out[32]);
+// PC 가 기기별 키를 고르는 이름표 (Wi-Fi MAC 12자)
+String net_device_id();
 // UDP 로 보낼 내용 뒤에 붙일 순번·서명 (NET_UDP_TRAILER 바이트). Wi-Fi 로 인증된 PC 가 없으면 false. 어느 태스크에서 불러도 된다
 bool net_udp_trailer(const uint8_t *data, size_t len, uint8_t *trailer);
 // TCP 로 PC 에 접속한 직후 부른다 (위 TCP 인증). 실패하면 false (끊고 다시 시도)

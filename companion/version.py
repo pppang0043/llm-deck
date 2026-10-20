@@ -3,14 +3,15 @@
 PROTO 는 서로 주고받는 내용(메시지 칸, 인증 방식)이 바뀔 때 하나씩 올린다. 펌웨어 link.h 의 FW_PROTO 와 같아야 한다.
     1: 이 번호를 주고받기 전 (보내지 않으면 0 으로 본다)
     2: Wi-Fi 인증, 키워드 버튼, ORCA 답장, 도우미 상태("helper")
+    3: 블루투스 인증
 """
 
 import subprocess
 from pathlib import Path
 
-PROTO = 2
+PROTO = 3
 # git 이 없거나 저장소 밖에서 돌 때 보여줄 버전
-VERSION = "proto2"
+VERSION = "proto3"
 # 기기가 버전을 알려 주지 않은 채 사용량을 이만큼 보내면 오래된 펌웨어로 본다
 SILENT_SENDS = 3
 
