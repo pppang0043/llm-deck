@@ -185,6 +185,8 @@ static void note_helper(JsonDocument &doc) {
   strlcpy(helper.ver, h["ver"] | "", sizeof(helper.ver));
   helper.at = h["at"] | (int64_t)0;
   strlcpy(helper.err, h["err"] | "", sizeof(helper.err));
+  // 도우미가 다시 켜져 버전을 모르면 다시 묻는다
+  if (doc["ask_fw"] == true) told_proto = false;
   if (!told_proto) {
     told_proto = true;
     char json[80];

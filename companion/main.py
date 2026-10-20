@@ -472,6 +472,9 @@ def main() -> None:
                 message["ask_mic"] = ask.mic
                 # 키워드 버튼 이름 (기기가 바뀐 것만 저장하고 단축키 화면·ORCA 팝업을 다시 만든다)
                 message["keywords"] = typer.ITEMS
+                # 기기 버전을 아직 모르면 다시 알려 달라고 한다 (도우미만 다시 켜면 기기는 같은 연결로 보고 알려 주지 않는다)
+                if peer.proto is None:
+                    message["ask_fw"] = True
                 sent_mic = ask.mic
                 if first and args.mic:
                     message["mic"] = args.mic == "on"

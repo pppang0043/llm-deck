@@ -29,6 +29,7 @@ void link_init(void (*set_mic)(bool on));
 //   {"ask_mic": false}                       PC 에 쓸 수 있는 마이크가 없음 (말하기 버튼을 끈다)
 //   {"host": "PC 이름"}                      보낸 PC 의 이름 (블루투스 설정 화면에 보여준다)
 //   {"helper": {"proto", "ver", "at", "err"}} 도우미 버전과 마지막 사용량 수집 시각·오류 (설정 > 정보)
+//   {"ask_fw": true}                        펌웨어 버전({"fw_proto"})을 다시 알려 달라 (사용량과 함께, 도우미가 모를 때)
 // usage 가 false 면 사용량("services")은 쓰지 않는다 (블루투스로 붙어 기다리는 중인 PC)
 void link_submit(Link from, const char *data, size_t len, bool usage = true);
 
