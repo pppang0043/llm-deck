@@ -11,10 +11,15 @@
 1. 준비
 -------
 - Windows 10 / 11 (64비트)
-- 처음 설치할 때 인터넷 연결 (Python 과 부품을 받습니다)
+- Python 3.11 ~ 3.14 (64비트). 이 PC 에 깔린 것을 그대로 씁니다. 버전이 여럿이면 가장 새 것을 고릅니다.
+    없으면 먼저 설치합니다.
+      회사 PC: 회사 소프트웨어 센터(포털)에서 Python 3.12 또는 3.13
+      개인 PC: https://www.python.org/downloads/windows/ 의 "Windows installer (64-bit)"
+               설치 화면의 "tcl/tk and IDLE" 와 "py launcher" 는 켜 둡니다 (기본값. 미러링 창에 필요합니다)
+    uv 나 다른 설치 도구는 쓰지 않습니다. Python 에 들어 있는 pip 로 부품을 받습니다.
+- 처음 설치할 때 인터넷 연결 (부품을 받습니다)
 - 빈 공간 (모두 C: 에 둘 때)
     도우미 부품    약 300MB
-    Python        약 100MB
     설치 부품 보관함 수백 MB (설치가 끝나면 비울 수 있습니다)
     음성 인식 모델  75MB ~ 1.5GB (말로 질문할 때만. 아래 5 참고)
   C: 가 모자라면 "4. 저장 위치 바꾸기" 로 D: 등에 둡니다.
@@ -43,12 +48,12 @@
    처음 한 번은 USB 케이블로 연결하세요. 그때 받은 인증 키가 있어야 Wi-Fi·블루투스로 연결됩니다.
 
 설치 단계
-  [1/7] Python 도구(uv) 확인       없으면 인터넷에서 설치합니다
-  [2/7] 설정 파일과 저장 위치        app\config.toml 을 만들고 [storage] 를 읽습니다
-  [3/7] 도우미 준비                Python 과 부품을 받습니다
+  [1/7] 설정 파일과 저장 위치        app\config.toml 을 만들고 [storage] [network] 를 읽습니다
+  [2/7] Python 찾기                이 PC 에 깔린 Python 3.11 ~ 3.14 중 가장 새 것
+  [3/7] 도우미 준비                app\.venv 를 만들고 pip 로 부품을 받습니다
   [4/7] Claude Code 한도 사용률     Claude Code 가 있는 PC 만
   [5/7] Windows 방화벽             Wi-Fi 연결용
-  [6/7] 도우미 앱                  트레이 아이콘과 미러링 창 (시작 메뉴 "LLM Deck")
+  [6/7] 도우미 앱                  트레이 아이콘과 미러링 창 (시작 메뉴 "LLM Deck", pythonw.exe 로 돕니다)
   [7/7] 로그인할 때 자동 실행
 
 
@@ -60,16 +65,17 @@ config.cmd 로 설정(app\config.toml)을 열고 [storage] 칸에 폴더를 적�
 
   [storage]
   model_dir = 'D:\LLM Deck\models'        음성 인식 모델     (비우면 C:\Users\내이름\.cache\huggingface)
-  uv_cache_dir = 'D:\LLM Deck\uv-cache'   설치 부품 보관함   (비우면 %LOCALAPPDATA%\uv\cache)
-  python_dir = 'D:\LLM Deck\python'       Python            (비우면 %APPDATA%\uv\python)
+  cache_dir = 'D:\LLM Deck\pip-cache'     설치 부품 보관함   (비우면 %LOCALAPPDATA%\pip\cache)
+  python = 'C:\경로\python.exe'           쓸 Python         (비우면 깔린 것 중 가장 새 것. 보통 비워 둡니다)
   clean_cache = true                      설치가 끝나면 보관함을 비웁니다 (다음 설치가 조금 느려집니다)
 
 - 경로는 꼭 작은따옴표(' ')로 감쌉니다. 큰따옴표로 쓰면 \ 를 \\ 처럼 두 번 적어야 합니다.
   틀리게 적으면 install.cmd 가 어디가 틀렸는지 알려 주고 멈춥니다.
 - 폴더가 없으면 install.cmd 가 만듭니다.
 - 사진·동영상 폴더는 같은 파일의 [photos] dir, [videos] dir 에 적습니다.
-- 옮긴 뒤 예전 자리(%APPDATA%\uv\python, %LOCALAPPDATA%\uv\cache, C:\Users\내이름\.cache\huggingface)는
+- 옮긴 뒤 예전 자리(%LOCALAPPDATA%\pip\cache, C:\Users\내이름\.cache\huggingface)는
   다른 프로그램이 쓰지 않으면 지워도 됩니다.
+- 예전 버전이 쓰던 %APPDATA%\uv, %LOCALAPPDATA%\uv 폴더는 이제 쓰지 않습니다. 지워도 됩니다.
 
 
 5. 음성 인식 모델 설치
@@ -118,7 +124,7 @@ config.cmd 로 설정(app\config.toml)을 열고 [storage] 칸에 폴더를 적�
 7. 제거
 -------
 uninstall.cmd 를 누릅니다. 자동 실행, 방화벽 규칙, 도우미 앱과 시작 메뉴, Claude Code 상태줄 설정을 되돌립니다.
-그 뒤 이 폴더를 지웁니다. [storage] 로 다른 곳에 둔 모델·Python·보관함 폴더도 필요 없으면 지웁니다.
+그 뒤 이 폴더를 지웁니다. [storage] 로 다른 곳에 둔 모델·보관함 폴더도 필요 없으면 지웁니다.
 
 
 8. 기록과 도움
@@ -138,7 +144,6 @@ install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니�
   system_certs = true                                   인증서 오류가 날 때
   proxy = 'http://proxy.example.com:8080'                회사 프록시를 거쳐야 할 때
   index_url = 'https://nexus.example.com/repository/pypi/simple'   pypi.org 가 막혀 사내 저장소를 쓸 때
-  python_mirror = ''                                    github.com 이 막혀 사내 Python 복사본을 쓸 때
   (프록시·사내 저장소 주소는 IT 부서에 묻습니다)
 
 문구별로
@@ -146,19 +151,18 @@ install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니�
     보안 프로그램이 연결을 검사하는 회사입니다. system_certs = true
 - "connection", "timed out", "연결" (집에서는 되는데 회사에서만)
     프록시가 필요할 수 있습니다. proxy 를 적습니다.
-- [1/7] 에서 "uv 를 설치하지 못했습니다"
-    uv 를 직접 받아 둡니다.
-    1) 브라우저로 https://github.com/astral-sh/uv/releases/latest 를 열고
-       uv-x86_64-pc-windows-msvc.zip 을 받습니다.
-    2) 압축을 풀어 uv.exe 와 uvw.exe 를 install.cmd 가 있는 폴더(맨 위)에 넣습니다.
-    3) install.cmd 를 다시 실행하면 [1/7] 아래에 그 uv.exe 경로가 나옵니다.
+- [2/7] 에서 "Python 이 필요합니다"
+    64비트 Python 3.11 ~ 3.14 가 없는 것입니다. 찾은 Python 과 버전이 함께 나옵니다.
+    "1. 준비" 대로 Python 을 설치하고 install.cmd 를 다시 실행합니다.
+    깔려 있는데 못 찾으면 [storage] 에 python = 'C:\경로\python.exe' 로 적습니다.
 - [3/7] 에서 "도우미 준비에 실패했습니다"
-    pypi.org (부품) 나 github.com (Python) 이 막힌 것입니다. 위 오류 문구에 나온 주소를 보고
-    인증서면 system_certs, 프록시면 proxy, 아예 막혔으면 IT 부서에 사내 저장소 주소를 물어 index_url / python_mirror 에 적습니다.
+    pypi.org (부품) 가 막힌 것입니다. 위 오류 문구를 보고
+    인증서면 system_certs, 프록시면 proxy, 아예 막혔으면 IT 부서에 사내 저장소 주소를 물어 index_url 에 적습니다.
+    "hash" 가 맞지 않는다고 나오면 사내 저장소가 다른 파일을 준 것입니다. IT 부서에 알립니다.
 - [6/7] 도우미 앱 "건너뜁니다"
-    보안 프로그램이 C# 컴파일러(csc.exe)나 새로 만든 exe 를 막은 것입니다. 도우미는 트레이 아이콘 없이 뒤에서 돌고,
+    Python 에 창을 그리는 부품(tcl/tk)이 없는 것입니다. Python 설치 프로그램을 다시 열어 [Modify] 에서
+    "tcl/tk and IDLE" 를 켜고 install.cmd 를 다시 실행합니다. 그 전까지 도우미는 트레이 아이콘 없이 뒤에서 돌고,
     mirror.cmd 가 대신 브라우저로 엽니다.
-    앱이 꼭 필요하면 IT 부서에 app\windows 폴더 예외를 부탁합니다.
 - 음성 인식 모델을 받지 못할 때 (huggingface.co 가 막힘)
     "5. 음성 인식 모델 설치" 의 방법 B (집 PC 에서 받아 USB 로 옮기기) 를 씁니다.
 - PowerShell 이 막혀 install.cmd 가 바로 끝날 때 ("스크립트를 실행할 수 없습니다", "실행 정책")
@@ -166,4 +170,5 @@ install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니�
 - 로그인해도 도우미가 켜지지 않을 때
     자동 실행이 막혔을 수 있습니다. 기록 파일에 오늘 줄이 없으면 install.cmd 를 다시 실행하면 지금 켜집니다.
 - 보안 프로그램이 파일을 지우거나 격리할 때
-    IT 부서에 이 폴더(llm-deck-companion)와 %APPDATA%\uv, %LOCALAPPDATA%\uv 예외를 부탁합니다.
+    이 도우미는 새 exe 를 만들지 않고 Python 재단이 서명한 python.exe·pythonw.exe 로만 돕니다.
+    그래도 막히면 IT 부서에 이 폴더(llm-deck-companion) 예외를 부탁합니다.

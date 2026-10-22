@@ -21,7 +21,8 @@ URL = f"http://127.0.0.1:{PORT}/"
 OLD_URL_FILE = Path.home() / ".llm-deck" / "mirror_url.txt"  # 예전에 주소가 바뀌던 때 쓰던 파일
 # 브라우저 대신 쓰는 미러링 창 (항상 위). Mac 은 도우미 앱(macos/app.swift)을 한 번 더 열면 창이 뜬다
 MAC_APP = Path.home() / "Applications" / "LLM Deck.app"
-WIN_APP = Path(__file__).resolve().parent / "windows" / "LLM Deck.exe"  # windows/app.cs. --mirror 로 창만 연다
+WIN_APP = Path(__file__).resolve().parent / "windows" / "app.pyw"  # Windows 도우미 앱. --mirror 로 창만 연다
+WIN_OPEN_SIGNAL = "LLMDeckOpenMirror"  # 떠 있는 Windows 도우미 앱에 창을 열라고 알리는 신호 (app.pyw)
 HEAD = struct.Struct("<IIIHH")  # 장 번호, 위치, 장 크기, 폭, 높이
 # 페이지가 이만큼 화면을 받아 가지 않으면 창이 닫힌 것으로 본다
 VIEWER_SECONDS = 3
@@ -38,23 +39,38 @@ PAGE = """<!doctype html>
          display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; }
   /* 그림(img)은 끌면 브라우저가 그림을 옮기려 하므로 캔버스에 그린다 */
   #screen { image-rendering: pixelated; border-radius: 10px; box-shadow: 0 0 0 1px #2a323b; cursor: pointer;
-            touch-action: none; user-select: none; -webkit-user-drag: none; max-width: calc(100vw - 32px); }
+            touch-action: none; user-select: none; -webkit-user-drag: none; }
+  .on { background: #3a4654; }
   #state { min-height: 1.4em; }
   button { background: #1c232b; color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
 </style></head>
 <body>
   <canvas id="screen" width="320" height="240"></canvas>
   <div id="state">기기 화면을 기다리는 중...</div>
-  <div><button data-zoom="1">1배</button> <button data-zoom="2">2배</button> <button data-zoom="3">3배</button></div>
-  <div>휠·↑↓ 위아래로 밀기 · ←→ 좌우로 밀기 · Esc 홈</div>
+  <div id="zooms"><button data-zoom="0">맞춤</button> <button data-zoom="1">1배</button> <button data-zoom="2">2배</button> <button data-zoom="3">3배</button></div>
+  <div id="help">휠·↑↓ 위아래로 밀기 · ←→ 좌우로 밀기 · Esc 홈</div>
 <script>
 const img = document.getElementById("screen"), ctx = img.getContext("2d"), state = document.getElementById("state");
-let zoom = 2, seq = 0, w = 0, h = 0, down = false, lastMove = 0;
-try { zoom = +localStorage.getItem("zoom") || 2; } catch (e) {}
-function size() { if (w) img.style.width = (w * zoom) + "px"; }
+// 0 = 맞춤: 화면 전체가 창 안에 들어오게 키우거나 줄인다 (창 크기를 바꾸면 따라간다). 1~3 = 배율
+let zoom = 0, seq = 0, w = 0, h = 0, down = false, lastMove = 0;
+// 예전("zoom")에는 맞춤이 없어 2배가 기본이었다. 새 이름으로 저장해 처음에는 맞춤으로 연다
+try { const saved = localStorage.getItem("mirrorZoom"); if (saved !== null) zoom = +saved || 0; } catch (e) {}
+function size() {
+  const sw = w || 320, sh = h || 240;
+  let scale = zoom;
+  if (!zoom) {
+    // 창 높이에서 아래 글자·단추 줄과 여백(위아래 16, 줄 사이 10)을 뺀 만큼
+    const rest = ["state", "zooms", "help"].reduce((sum, id) => sum + document.getElementById(id).offsetHeight + 10, 32);
+    scale = Math.max(0.25, Math.min((innerWidth - 32) / sw, (innerHeight - rest) / sh));
+  }
+  img.style.width = Math.floor(sw * scale) + "px";
+  document.querySelectorAll("[data-zoom]").forEach(b => b.classList.toggle("on", +b.dataset.zoom === zoom));
+}
 document.querySelectorAll("[data-zoom]").forEach(b => b.onclick = () => {
-  zoom = +b.dataset.zoom; size(); try { localStorage.setItem("zoom", zoom); } catch (e) {}
+  zoom = +b.dataset.zoom; size(); try { localStorage.setItem("mirrorZoom", zoom); } catch (e) {}
 });
+addEventListener("resize", size);
+size();
 // 기기가 줄인 화면을 푼다 (펌웨어 mirror.cpp 의 pack): 머리 h < 128 이면 h+1 점 그대로, 아니면 한 점을 h-126 번
 const R = new Uint8Array(32), G = new Uint8Array(64);
 for (let i = 0; i < 32; i++) R[i] = Math.round(i * 255 / 31);
@@ -294,7 +310,7 @@ class Mirror:
                 except ValueError:
                     after = 0
                 mirror.last_poll = time.time()
-                # 미러링 앱(Mac URLSession, Windows HttpWebRequest)은 브라우저처럼 Mozilla 를 붙이지 않는다
+                # 미러링 앱(Mac URLSession, Windows app.pyw 의 urllib)은 브라우저처럼 Mozilla 를 붙이지 않는다
                 if "Mozilla" not in self.headers.get("User-Agent", ""):
                     mirror.app_poll = mirror.last_poll
                 if not mirror._link():
@@ -345,8 +361,24 @@ def _point(p: dict) -> dict:
     return {"x": int(p["x"]), "y": int(p["y"]), "down": bool(p["down"])}
 
 
+def _signal_windows_app() -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    event = kernel32.OpenEventW(0x0002, False, WIN_OPEN_SIGNAL)  # EVENT_MODIFY_STATE
+    if not event:
+        return False
+    try:
+        return bool(kernel32.SetEvent(wintypes.HANDLE(event)))
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(event))
+
+
 def open_window(browser: bool = True) -> str:
-    """켜져 있는 도우미의 미러링 창을 연다. 미러링 창(install.sh, install.cmd 가 만든 도우미 앱)이 있으면 그것을, 없으면 브라우저로
+    """켜져 있는 도우미의 미러링 창을 연다. 미러링 창(Mac 의 LLM Deck.app, Windows 의 windows/app.pyw)이 있으면 그것을, 없으면 브라우저로
     (browser=False 면 앱으로만). 연 곳("app", "browser")을 돌려주고, 열지 않았으면 "" """
     import os
     import signal
@@ -373,13 +405,19 @@ def open_window(browser: bool = True) -> str:
         if mac_app_up:
             subprocess.run(["open", str(MAC_APP)], check=True, timeout=10)
             return "app"
-        if sys.platform == "win32" and WIN_APP.exists():
-            # uv 가 이 파이썬을 작업 묶음(job)에 넣어 두면 파이썬이 끝날 때 앱도 같이 꺼진다. 묶음 밖으로 띄우고, 막혀 있으면 그냥 띄운다
-            try:
-                subprocess.Popen([str(WIN_APP), "--mirror"], creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.DETACHED_PROCESS)
-            except OSError:
-                subprocess.Popen([str(WIN_APP), "--mirror"], creationflags=subprocess.DETACHED_PROCESS)
-            return "app"
+        if sys.platform == "win32":
+            # 도우미 앱(트레이 아이콘)이 떠 있으면 그 앱에 알린다
+            if _signal_windows_app():
+                return "app"
+            # 앱이 없으면 (터미널에서 도우미를 띄웠으면) 미러링 창만 띄운다. 이 파이썬이 끝나도 창은 남게 묶음 밖으로
+            pythonw = Path(sys.executable).with_name("pythonw.exe")
+            if WIN_APP.exists() and pythonw.exists():
+                flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                try:
+                    subprocess.Popen([str(pythonw), str(WIN_APP), "--mirror"], creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
+                except OSError:
+                    subprocess.Popen([str(pythonw), str(WIN_APP), "--mirror"], creationflags=flags)
+                return "app"
     except (OSError, subprocess.SubprocessError) as e:
         print(f"[mirror] 미러링 앱을 열지 못했습니다: {e}")
     if not browser:

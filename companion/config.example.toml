@@ -120,10 +120,10 @@ dir = ""
 # 음성 인식 모델 (small 약 480MB, 처음 말로 질문할 때 받는다). 비우면 C:\Users\내이름\.cache\huggingface
 # 다른 PC 에서 받아 온 모델 폴더(faster-whisper-small)도 이 폴더 바로 아래에 넣는다 (비우면 .llm-deck\models 아래)
 model_dir = ""
-# Windows 설치용: 설치할 때 받은 부품 보관함 (수백 MB). 비우면 %LOCALAPPDATA%\uv\cache
-uv_cache_dir = ""
-# Windows 설치용: 도우미가 쓰는 Python (약 100MB). 비우면 %APPDATA%\uv\python. 바꾸면 install.cmd 가 새로 받는다
-python_dir = ""
+# Windows 설치용: 설치할 때 받은 부품 보관함 (수백 MB). 비우면 %LOCALAPPDATA%\pip\cache
+cache_dir = ""
+# Windows 설치용: 도우미가 쓸 Python (python.exe 경로나 그 폴더). 비우면 이 PC 에 깔린 64비트 3.11~3.14 중 가장 새 것
+python = ""
 # Windows 설치용: true 면 설치가 끝난 뒤 부품 보관함을 비워 자리를 돌려받는다 (다음 설치 때 다시 받아 조금 느려진다)
 clean_cache = false
 
@@ -136,5 +136,3 @@ system_certs = false
 proxy = ""
 # PyPI(pypi.org)가 막혀 회사 안 부품 저장소를 쓸 때. 예: index_url = 'https://nexus.example.com/repository/pypi/simple'
 index_url = ""
-# Python 을 받는 곳(github.com)이 막혀 회사 안 복사본을 쓸 때. 보통 비워 둡니다
-python_mirror = ""

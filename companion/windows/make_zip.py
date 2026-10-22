@@ -8,6 +8,7 @@ git 이 아는 companion 파일(커밋 전 새 파일 포함, .gitignore 에 든
 풀었을 때 맨 위에는 누를 파일과 README 만 두고, 도우미 코드는 app 폴더에 넣는다.
     llm-deck-companion/  install.cmd  uninstall.cmd  mirror.cmd  config.cmd  README.txt  INSTALL.txt  app/
 음성 인식(Whisper) 모델은 넣지 않는다. 받는 방법은 INSTALL.txt 에 적어 두었다.
+Windows 설치(install.ps1)는 uv 없이 pip 로 부품을 까므로, 먼저 uv.lock 으로 requirements.txt 를 새로 만든다.
 """
 
 import subprocess
@@ -22,12 +23,19 @@ TOP = ("install.cmd", "uninstall.cmd", "mirror.cmd", "config.cmd", "README.txt",
 SKIP = ("companion/macos/", "companion/windows/make_zip.py", "companion/windows/pack_model.py")
 
 
+def export_requirements() -> None:
+    """uv.lock 과 같은 버전·파일 지문으로 requirements.txt 를 만든다 (install.ps1 이 pip 로 깐다)"""
+    subprocess.run(["uv", "export", "--no-dev", "--no-emit-project", "--no-annotate", "--format", "requirements-txt",
+                    "--quiet", "-o", "requirements.txt"], cwd=ROOT / "companion", check=True)
+
+
 def main() -> None:
+    export_requirements()
     files = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "companion"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
     files = [f for f in files if (ROOT / f).is_file() and not f.startswith(SKIP)]  # 지웠지만 아직 커밋하지 않은 파일도 뺀다
-    # 도우미 앱(LLM Deck.exe)은 설치할 때 app.cs 를 컴파일해 만드므로 넣지 않는다
+    # 예전 설치가 만들던 exe 가 남아 있어도 넣지 않는다 (회사 보안 프로그램이 처음 보는 exe 를 막는다)
     files = [f for f in files if not f.endswith(".exe")]
     # 음성 인식 모델(model.bin 등 큰 파일)이 섞여 들어가지 않게 막는다
     big = [f for f in files if f.endswith((".bin", ".zip", ".safetensors")) or (ROOT / f).stat().st_size > 2_000_000]

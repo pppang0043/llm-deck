@@ -72,10 +72,11 @@ sh macos/install.sh uninstall  # 제거
 ### Windows
 
 `dist/llm-deck-companion-windows.zip` 을 풀고 맨 위의 `install.cmd` 를 더블클릭한다 (도우미 코드는 `app` 폴더). 자세한 내용은 압축 안의 `README.txt`.
-설치는 uv(파이썬 도구) 설치, 방화벽 허용(같은 공유기 안에서만), Claude Code 상태줄 연결, 자동 실행 등록을 한다.
+PC 에 깔린 64비트 Python 3.11~3.14 가 있어야 한다 (회사 보안이 막는 uv 는 쓰지 않는다). 설치는 그 Python 으로 `app\.venv` 를 만들어 `requirements.txt`(uv.lock 과 같은 버전·파일 지문)대로 pip 로 깔고, 방화벽 허용(같은 공유기 안에서만), Claude Code 상태줄 연결, 자동 실행 등록을 한다.
+트레이 아이콘·미러링 창은 `windows/app.pyw` 를 `pythonw.exe` 로 돌린다 (설치 때 exe 를 만들지 않아 보안 프로그램에 걸리지 않는다).
 기록: `C:\Users\<이름>\.llm-deck\companion.log`.
 
-압축 파일 다시 만들기 (gist 주소만 넣고 토큰은 넣지 않는다): 이 저장소에서 `companion/.venv/bin/python companion/windows/make_zip.py`.
+압축 파일 다시 만들기 (gist 주소만 넣고 토큰은 넣지 않는다. `requirements.txt` 도 uv.lock 으로 새로 만든다): 이 저장소에서 `companion/.venv/bin/python companion/windows/make_zip.py`.
 
 ### 저장 위치
 
