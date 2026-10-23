@@ -18,8 +18,6 @@
 #define MIN_GAP_MS 40
 #define CHUNK 2000
 #define MAX_PIXELS (320 * 240)
-// 미러링 중 기기 LCD 에는 사용량을 보여 준다. 기기를 만지면 원래 화면으로 돌아오고, 이만큼 안 만지면 다시 사용량.
-#define DEVICE_IDLE_MS 30000
 #define DEVICE_STATUS_H 32
 
 LV_FONT_DECLARE(font_ko_14);
@@ -34,6 +32,9 @@ static uint8_t *packed = nullptr;  // 줄인 화면 (PSRAM)
 static int grab_w, grab_h;
 static volatile bool busy = false;  // 줄이기·보내는 중
 static uint32_t until_ms = 0;
+// 미러링이 시작된 때. 그 뒤로 기기를 한 번도 안 만졌으면 기기 LCD 에 사용량을 보여 준다.
+// 한 번 만지면 그 뒤로는 기기와 PC 창을 따로 쓴다 (다음 연결 때까지 사용량으로 돌아가지 않음).
+static uint32_t started_ms = 0;
 static uint32_t last_ms = 0;
 static uint32_t frame_no = 0;
 static TaskHandle_t task = nullptr;
@@ -192,7 +193,10 @@ void mirror_init() {
 
 void mirror_keep(bool on) {
   if (!task) return;
-  if (on && !until_ms) Serial.println("[mirror] on");
+  if (on && !until_ms) {
+    Serial.println("[mirror] on");
+    started_ms = millis();
+  }
   if (!on && until_ms) Serial.println("[mirror] off");
   until_ms = on ? millis() + KEEP_MS : 0;
   display_mirror(on);
@@ -207,7 +211,7 @@ void mirror_loop() {
     return;
   }
   uint32_t finger = display_last_finger_ms();
-  bool device = !finger || millis() - finger > DEVICE_IDLE_MS;
+  bool device = !finger || (int32_t)(finger - started_ms) < 0;
   if (device) device_refresh();
   display_split(device);
   if (busy || millis() - last_ms < MIN_GAP_MS) return;
