@@ -120,6 +120,19 @@ _NO_AUDIO_REASON = (
     "PC 마이크 소리가 오지 않습니다\n시스템 설정 > 개인정보 보호 > 마이크\n에서 LLM Deck 을 켜 주세요"
     if sys.platform == "darwin" else
     "PC 마이크 소리가 오지 않습니다\n설정 > 개인 정보 > 마이크를\n확인해 주세요")
+_LID_CLOSED_REASON = "맥북 덮개가 닫혀\n내장 마이크가 꺼져 있습니다\n덮개를 열거나 다른 마이크를 쓰세요"
+
+
+def _lid_closed() -> bool:
+    """Mac 덮개가 닫혀 있는지. 닫히면 내장 마이크는 장치 목록에 그대로 있지만 소리가 0 으로만 들어온다."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        out = subprocess.run(["ioreg", "-r", "-k", "AppleClamshellState", "-d", "1"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return '"AppleClamshellState" = Yes' in out
 
 # Windows 에서 CLI 를 띄울 때 검은 창이 뜨지 않게 한다
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -473,7 +486,12 @@ class Assistant:
                         heard = heard or bool(np.any(data))
                         # 진짜 마이크는 조용해도 잡음이 있다. 1.5초 동안 완전히 0 이면 음소거됐거나 막힌 것이다
                         if not heard and time.monotonic() - start > 1.5:
-                            fail("마이크 소리가 들어오지 않습니다\n음소거나 마이크 권한을\n확인해 주세요", False)
+                            # 외장 마이크라면 덮개와 상관없다
+                            builtin = "macbook" in str(sd.query_devices(stream.device, "input")["name"]).lower()
+                            if builtin and _lid_closed():
+                                fail(_LID_CLOSED_REASON, False)
+                            else:
+                                fail("마이크 소리가 들어오지 않습니다\n음소거나 마이크 권한을\n확인해 주세요", False)
                             return
                     if self.recording.is_set():
                         # 끝 버튼을 잊었다: 60초에서 스스로 끝내고 받아 적는다
