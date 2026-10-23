@@ -41,20 +41,21 @@
    - "Windows의 PC 보호" 창이 뜨면 [추가 정보] > [실행]
    - 관리자 확인 창이 뜨면 [예] (Wi-Fi 연결용 방화벽 허용. [아니요] 여도 USB·블루투스는 됩니다)
    - 처음에는 부품을 받느라 몇 분 걸립니다.
-3) 단계가 [1/7] 부터 [7/7] 까지 지나가고 "설치했습니다" 가 나오면 끝입니다.
+3) 단계가 [1/8] 부터 [8/8] 까지 지나가고 "설치했습니다" 가 나오면 끝입니다.
    도우미는 로그인할 때마다 저절로 켜지고, 작업 표시줄 오른쪽 아래(트레이)에 LLM Deck 아이콘이 생깁니다.
 4) 기기를 USB 케이블로 꽂거나, PC 블루투스를 켜 두거나, 같은 Wi-Fi 에 두면 알아서 연결합니다.
    (블루투스는 Windows 에서 따로 페어링하지 않습니다)
    처음 한 번은 USB 케이블로 연결하세요. 그때 받은 인증 키가 있어야 Wi-Fi·블루투스로 연결됩니다.
 
 설치 단계
-  [1/7] 설정 파일과 저장 위치        app\config.toml 을 만들고 [storage] [network] 를 읽습니다
-  [2/7] Python 찾기                이 PC 에 깔린 Python 3.11 ~ 3.14 중 가장 새 것
-  [3/7] 도우미 준비                app\.venv 를 만들고 pip 로 부품을 받습니다
-  [4/7] Claude Code 한도 사용률     Claude Code 가 있는 PC 만
-  [5/7] Windows 방화벽             Wi-Fi 연결용
-  [6/7] 도우미 앱                  트레이 아이콘과 미러링 창 (시작 메뉴 "LLM Deck", pythonw.exe 로 돕니다)
-  [7/7] 로그인할 때 자동 실행
+  [1/8] 설정 파일과 저장 위치        app\config.toml 을 만들고 [storage] [network] 를 읽습니다
+  [2/8] Python 찾기                이 PC 에 깔린 Python 3.11 ~ 3.14 중 가장 새 것
+  [3/8] 도우미 준비                app\.venv 를 만들고 pip 로 부품을 받습니다
+  [4/8] Claude Code 한도 사용률     Claude Code 가 있는 PC 만
+  [5/8] Windows 방화벽             Wi-Fi 연결용
+  [6/8] 도우미 앱                  트레이 아이콘과 미러링 창 (시작 메뉴 "LLM Deck", pythonw.exe 로 돕니다)
+  [7/8] 터미널의 orca 명령         %USERPROFILE%\.local\bin\orca.cmd (ORCA 를 다시 깔거나 옮겨도 찾아 갑니다)
+  [8/8] 로그인할 때 자동 실행
 
 
 4. 저장 위치 바꾸기 (C: 용량이 적을 때)
@@ -102,7 +103,7 @@ config.cmd 로 설정(app\config.toml)을 열고 [storage] 칸에 폴더를 적�
        [storage] model_dir 를 정했으면   D:\LLM Deck\models\faster-whisper-small\model.bin
        비워 두었으면                    C:\Users\내이름\.llm-deck\models\faster-whisper-small\model.bin
      (폴더 안에 model.bin 이 바로 보여야 합니다. 폴더 이름의 끝은 whisper_model 과 같아야 합니다)
-  4) install.cmd 를 다시 실행하면 "[3/7]" 단계에 "음성 인식 모델: 복사해 둔 폴더를 씁니다" 가 나옵니다.
+  4) install.cmd 를 다시 실행하면 "[3/8]" 단계에 "음성 인식 모델: 복사해 둔 폴더를 씁니다" 가 나옵니다.
 
 방법 C. Mac 에서 만든 묶음 쓰기
   Mac 의 저장소에서 companion/.venv/bin/python companion/windows/pack_model.py 로 만든
@@ -151,15 +152,15 @@ install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니�
     보안 프로그램이 연결을 검사하는 회사입니다. system_certs = true
 - "connection", "timed out", "연결" (집에서는 되는데 회사에서만)
     프록시가 필요할 수 있습니다. proxy 를 적습니다.
-- [2/7] 에서 "Python 이 필요합니다"
+- [2/8] 에서 "Python 이 필요합니다"
     64비트 Python 3.11 ~ 3.14 가 없는 것입니다. 찾은 Python 과 버전이 함께 나옵니다.
     "1. 준비" 대로 Python 을 설치하고 install.cmd 를 다시 실행합니다.
     깔려 있는데 못 찾으면 [storage] 에 python = 'C:\경로\python.exe' 로 적습니다.
-- [3/7] 에서 "도우미 준비에 실패했습니다"
+- [3/8] 에서 "도우미 준비에 실패했습니다"
     pypi.org (부품) 가 막힌 것입니다. 위 오류 문구를 보고
     인증서면 system_certs, 프록시면 proxy, 아예 막혔으면 IT 부서에 사내 저장소 주소를 물어 index_url 에 적습니다.
     "hash" 가 맞지 않는다고 나오면 사내 저장소가 다른 파일을 준 것입니다. IT 부서에 알립니다.
-- [6/7] 도우미 앱 "건너뜁니다"
+- [6/8] 도우미 앱 "건너뜁니다"
     Python 에 창을 그리는 부품(tcl/tk)이 없는 것입니다. Python 설치 프로그램을 다시 열어 [Modify] 에서
     "tcl/tk and IDLE" 를 켜고 install.cmd 를 다시 실행합니다. 그 전까지 도우미는 트레이 아이콘 없이 뒤에서 돌고,
     mirror.cmd 가 대신 브라우저로 엽니다.

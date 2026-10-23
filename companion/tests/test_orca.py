@@ -119,3 +119,37 @@ def test_fix_slash():
     assert orca.fix_slash("슬래시 커밋", cmds, aliases) == "/commit"
     assert orca.fix_slash("/ clear.", cmds, aliases) == "/clear"
     assert orca.fix_slash("그냥 문장", cmds, aliases) == "그냥 문장"
+
+
+@pytest.fixture
+def no_orca(monkeypatch):
+    """PATH·설치 자리·실행 중인 ORCA 어디에도 orca 가 없는 PC."""
+    monkeypatch.delenv("ORCA_CLI_BIN_DIR", raising=False)
+    monkeypatch.setattr(orca.shutil, "which", lambda name: None)
+    monkeypatch.setattr(orca, "EXTRA_PATHS", [])
+    monkeypatch.setattr(orca.sys, "platform", "linux")
+
+
+def test_find_orca_prefers_orca_bin_dir(tmp_path, monkeypatch, no_orca):
+    (tmp_path / "orca").write_text("")
+    monkeypatch.setenv("ORCA_CLI_BIN_DIR", str(tmp_path))
+    monkeypatch.setattr(orca.shutil, "which", lambda name: "/elsewhere/orca")
+    assert orca.find_orca() == str(tmp_path / "orca")
+
+
+def test_find_orca_uses_shim_only_as_last_resort(tmp_path, monkeypatch, no_orca):
+    shim = tmp_path / "shim" / "orca.cmd"  # install.ps1 이 까는 것. 옆에 orca.exe 가 없다
+    shim.parent.mkdir()
+    shim.write_text("")
+    real = tmp_path / "Orca" / "orca.exe"
+    real.parent.mkdir()
+    real.write_text("")
+    monkeypatch.setattr(orca.shutil, "which", lambda name: str(shim))
+    monkeypatch.setattr(orca, "EXTRA_PATHS", [str(real)])
+    assert orca.find_orca() == str(real)
+    real.unlink()
+    assert orca.find_orca() == str(shim)
+
+
+def test_find_orca_missing(no_orca):
+    assert orca.find_orca() is None

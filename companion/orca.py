@@ -47,6 +47,7 @@ EXTRA_PATHS = [
     "/Applications/Orca.app/Contents/Resources/bin/orca",
     "~/Applications/Orca.app/Contents/Resources/bin/orca",
     r"%LOCALAPPDATA%\Programs\orca\resources\bin\orca.exe",
+    r"%ProgramFiles%\Orca\resources\bin\orca.exe",
 ]
 
 
@@ -61,25 +62,45 @@ def _native(path: str) -> str:
 
 
 def find_orca() -> str | None:
+    # ORCA 안에서 켠 도우미는 ORCA 가 알려 준 자리가 가장 정확하다
+    bin_dir = os.environ.get("ORCA_CLI_BIN_DIR")
+    if bin_dir:
+        for name in ("orca.exe", "orca"):
+            path = os.path.join(bin_dir, name)
+            if os.path.isfile(path):
+                return path
     path = shutil.which("orca")
-    if path:
+    # 끊어진 링크는 which 가 건너뛴다. Windows 에서 orca.exe 가 옆에 없는 .cmd(install.ps1 이 까는 orca.cmd)는
+    # cmd.exe 를 거쳐 글이 망가질 수 있어 (_native) 진짜 orca.exe 를 못 찾을 때만 쓴다
+    if path and not _native(path).lower().endswith((".cmd", ".bat")):
         return _native(path)
+    shim = path
     for candidate in EXTRA_PATHS:
         path = os.path.expanduser(os.path.expandvars(candidate))
         if os.path.exists(path):
             return path
     if sys.platform == "darwin":
+        # /Applications 밖으로 옮긴 ORCA. 임시 경로(AppTranslocation)는 재부팅하면 사라져 뺀다
+        try:
+            out = subprocess.run(["mdfind", f"kMDItemCFBundleIdentifier == '{BUNDLE_ID}'"],
+                                 capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        for app in out.splitlines():
+            path = os.path.join(app, "Contents", "Resources", "bin", "orca")
+            if "/AppTranslocation/" not in app and os.path.exists(path):
+                return path
         # 다운로드한 자리에서 바로 연 ORCA 는 macOS 가 임시 경로로 옮겨 실행한다. 지금 떠 있는 ORCA 에서 찾는다
         try:
             out = subprocess.run(["ps", "-axo", "comm="], capture_output=True, text=True, timeout=5).stdout
         except (OSError, subprocess.TimeoutExpired):
-            return None
+            out = ""
         for line in out.splitlines():
             if line.endswith("/Orca.app/Contents/MacOS/Orca"):
                 path = line[: -len("MacOS/Orca")] + "Resources/bin/orca"
                 if os.path.exists(path):
                     return path
-    return None
+    return shim
 
 
 # --- "슬래시" 를 / 명령으로 ---

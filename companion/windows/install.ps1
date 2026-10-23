@@ -27,6 +27,10 @@ $OldAppExe = Join-Path $PSScriptRoot 'LLM Deck.exe'
 $OldMirrorExe = Join-Path $PSScriptRoot 'LLM Deck Mirror.exe'
 $OldMirrorLink = Join-Path $Programs 'LLM Deck 미러링.lnk'
 $OldHelperKey = 'HKCU:\Software\LLMDeck\Helper'
+# 터미널의 orca 명령 (orca.cmd). 부를 때마다 ORCA 가 깔린 곳을 찾아, ORCA 를 다시 깔거나 옮겨도 된다
+$ShimDir = Join-Path $env:USERPROFILE '.local\bin'
+$OrcaShim = Join-Path $ShimDir 'orca.cmd'
+$ShimMark = 'LLM Deck orca shim'
 
 # Wi-Fi 로 연결했을 때 기기가 PC 로 보내는 것(알림·사진 알림·마이크 소리는 UDP 4010, 동영상은 TCP 4011)을
 # Windows 방화벽이 막지 않도록, 같은 공유기 안에서 오는 것만 허용하는 규칙을 둔다. 관리자 권한이 필요하다.
@@ -232,6 +236,32 @@ function Remove-Old {
     Remove-Item $OldHelperKey -Recurse -ErrorAction SilentlyContinue
 }
 
+function Install-OrcaShim {
+    # 사용자가 따로 둔 orca.cmd 는 건드리지 않는다
+    if ((Test-Path $OrcaShim) -and -not (Select-String -LiteralPath $OrcaShim -Pattern $ShimMark -SimpleMatch -Quiet)) {
+        Write-Host "      건너뜁니다: $OrcaShim 이 이미 있습니다."
+        return
+    }
+    New-Item -ItemType Directory -Force $ShimDir | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot 'orca.cmd') $OrcaShim -Force
+    # 사용자 PATH 에 더한다. %USERPROFILE% 처럼 적힌 칸이 풀리지 않게 레지스트리 값을 그대로 읽는다
+    $raw = (Get-Item 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+    $parts = @("$raw" -split ';' | Where-Object { $_ })
+    $has = $parts | Where-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $ShimDir }
+    if (-not $has) {
+        $new = (@($parts) + $ShimDir) -join ';'
+        if ($raw -match '%') {
+            Set-ItemProperty 'HKCU:\Environment' -Name 'Path' -Value $new -Type ExpandString
+            Write-Host "      PATH 에 $ShimDir 를 더했습니다 (다시 로그인하면 적용됩니다)."
+        } else {
+            # 이렇게 바꾸면 새로 여는 터미널부터 바로 적용된다
+            [Environment]::SetEnvironmentVariable('Path', $new, 'User')
+            Write-Host "      PATH 에 $ShimDir 를 더했습니다 (새로 연 터미널부터)."
+        }
+    }
+    Write-Host "      orca 명령: $OrcaShim"
+}
+
 # 도우미 폴더에서 Python 으로 main.py 를 돌린다 (설정을 고치는 일들)
 function Invoke-Main([string[]]$arguments) {
     Push-Location $Dir
@@ -252,6 +282,9 @@ if ($Uninstall) {
     Stop-Companion
     Remove-Old
     Remove-Item $AppLink, $AppIcon -Force -ErrorAction SilentlyContinue
+    if ((Test-Path $OrcaShim) -and (Select-String -LiteralPath $OrcaShim -Pattern $ShimMark -SimpleMatch -Quiet)) {
+        Remove-Item $OrcaShim -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item 'HKCU:\Software\LLMDeck' -Recurse -ErrorAction SilentlyContinue  # 미러링 창의 항상 위·배율·위치
     Remove-ItemProperty -Path $RunKey -Name $Name -ErrorAction SilentlyContinue
     Set-Firewall 'remove' | Out-Null
@@ -262,7 +295,7 @@ if ($Uninstall) {
     return
 }
 
-Write-Host '[1/7] 설정 파일과 저장 위치'
+Write-Host '[1/8] 설정 파일과 저장 위치'
 $config = Join-Path $Dir 'config.toml'
 if (-not (Test-Path $config)) {
     Copy-Item (Join-Path $Dir 'config.example.toml') $config
@@ -303,11 +336,11 @@ if ($modelDir) {
     New-Item -ItemType Directory -Force $modelDir | Out-Null
 }
 
-Write-Host '[2/7] Python 찾기'
+Write-Host '[2/8] Python 찾기'
 $python = Select-Python $storage
 Write-Host "      Python $($python.Version)  $($python.Exe)"
 
-Write-Host '[3/7] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
+Write-Host '[3/8] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
 # 예전에 uv 로 만든 .venv(pip 가 없다)나 다른 Python 으로 만든 것은 새로 만든다
 $venvCfg = Join-Path $Venv 'pyvenv.cfg'
 $remake = $false
@@ -358,14 +391,14 @@ if (Test-Path $model) {
     Write-Host "      음성 인식 모델($whisper): 처음 말로 질문할 때 인터넷으로 받습니다 ($where). 회사망에서 막히면 INSTALL.txt 의 5 참고"
 }
 
-Write-Host '[4/7] Claude Code 한도 사용률 읽기'
+Write-Host '[4/8] Claude Code 한도 사용률 읽기'
 if (Test-Path (Join-Path $env:USERPROFILE '.claude')) {
     Invoke-Main @('--install-statusline')
 } else {
     Write-Host '      이 PC 에는 Claude Code 가 없어 건너뜁니다. (다른 PC 값은 gist 로 받아 옵니다)'
 }
 
-Write-Host '[5/7] Windows 방화벽 (Wi-Fi 연결용, 관리자 확인 창이 뜨면 [예])'
+Write-Host '[5/8] Windows 방화벽 (Wi-Fi 연결용, 관리자 확인 창이 뜨면 [예])'
 if (Set-Firewall 'add') {
     $rules = @(Get-NetFirewallRule -DisplayName 'LLM Deck *' -ErrorAction SilentlyContinue)
     Write-Host "      허용 규칙 $($rules.Count)개를 두었습니다."
@@ -380,7 +413,7 @@ if ($blocked) {
     Write-Host '            Windows 보안 > 방화벽 및 네트워크 보호 > 고급 설정 > 인바운드 규칙에서 지우세요.'
 }
 
-Write-Host '[6/7] 도우미 앱 (트레이 아이콘, 미러링 창)'
+Write-Host '[6/8] 도우미 앱 (트레이 아이콘, 미러링 창)'
 Stop-Companion
 Remove-Old
 $appOk = $false
@@ -404,7 +437,10 @@ if (-not (Invoke-Quiet $VenvPy @('-c', 'import tkinter; tkinter.Tcl()')).Ok) {
     Write-Host '      작업 표시줄 오른쪽 아래의 LLM Deck 아이콘이나 시작 메뉴의 "LLM Deck" 으로 미러링 창을 엽니다.'
 }
 
-Write-Host '[7/7] 로그인할 때 자동 실행'
+Write-Host '[7/8] 터미널의 orca 명령'
+Install-OrcaShim
+
+Write-Host '[8/8] 로그인할 때 자동 실행'
 # 도우미를 끈 뒤에 비운다 (켜져 있으면 쓰는 중인 파일이 있어 지우지 못할 수 있다)
 if ($storage['clean_cache'] -eq $true) {
     Invoke-Quiet $VenvPy @('-m', 'pip', 'cache', 'purge') | Out-Null

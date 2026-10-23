@@ -21,6 +21,9 @@ LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"  # 예전에는 여�
 # (창이 안 보이는 곳에서 설치하면 멈추거나 실패한다) 따로 만든다. 암호는 이 키 하나만 지키는 것이라 고정값을 쓴다
 SIGN_KEYCHAIN="$HOME/.llm-deck/signing.keychain-db"
 SIGN_PASS=llmdeck
+# 터미널의 orca 명령 (macos/orca.sh). ORCA 가 거는 링크는 끊어질 수 있어 부를 때마다 앱을 찾는 이것으로 바꾼다
+ORCA_SHIM="$HOME/.local/bin/orca"
+SHIM_MARK="LLM Deck orca shim"
 
 # 서명용 인증서의 SHA-1. 그냥(ad-hoc) 서명하면 빌드할 때마다 앱 지문이 바뀌어 macOS 가 마이크·블루투스 허용을 잊는다.
 # 이 Mac 에서만 쓰는 자체 서명 인증서로 서명하면 다시 빌드해도 허용이 남는다. 없으면 한 번 만든다
@@ -69,6 +72,28 @@ sign_app() {
   return "$rc"
 }
 
+# 바꿔도 되는 orca: 없음, 끊어진 링크, ORCA 가 건 링크, 예전에 깐 것. 사용자가 따로 둔 것은 건드리지 않는다
+orca_shim_replaceable() {
+  [ ! -e "$ORCA_SHIM" ] && return 0
+  case "$(readlink "$ORCA_SHIM")" in *Orca.app/*) return 0 ;; esac
+  grep -q "$SHIM_MARK" "$ORCA_SHIM" 2>/dev/null
+}
+
+install_orca_shim() {
+  if ! orca_shim_replaceable; then
+    echo "orca 명령: $ORCA_SHIM 이 이미 있어 그대로 둡니다."
+    return
+  fi
+  mkdir -p "$(dirname "$ORCA_SHIM")"
+  rm -f "$ORCA_SHIM"  # 링크면 cp 가 링크가 가리키는 파일에 덮어쓴다
+  cp "$COMPANION/macos/orca.sh" "$ORCA_SHIM"
+  chmod +x "$ORCA_SHIM"
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) echo "orca 명령: ~/.zprofile 에 export PATH=\"\$HOME/.local/bin:\$PATH\" 를 더해야 터미널에서 쓸 수 있습니다." ;;
+  esac
+}
+
 # 끝날 때까지 기다린다 (아직 등록돼 있으면 bootstrap 이 "Bootstrap failed: 5" 로 실패한다)
 stop() {
   launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
@@ -88,6 +113,7 @@ if [ "$1" = "uninstall" ]; then
   rm -rf "$APP" "$NEW_APP"
   security delete-keychain "$SIGN_KEYCHAIN" >/dev/null 2>&1 || true
   security delete-identity -c "$SIGN_NAME" "$LOGIN_KEYCHAIN" >/dev/null 2>&1 || true
+  grep -q "$SHIM_MARK" "$ORCA_SHIM" 2>/dev/null && rm -f "$ORCA_SHIM"
   echo "제거했습니다."
   exit 0
 fi
@@ -165,6 +191,7 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 launchctl bootstrap "$DOMAIN" "$PLIST"
+install_orca_shim
 
 echo "설치했습니다. 기록: $LOG"
 echo "미러링: 메뉴 막대의 LLM Deck 아이콘 > 미러링 열기 (또는 open -a 'LLM Deck')"
