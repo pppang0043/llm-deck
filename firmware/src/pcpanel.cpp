@@ -552,6 +552,7 @@ static void copy_meter(Meter &to, const Meter &from) {
 
 void pcpanel_device_status(lv_obj_t *tile, int w, int h) {
   build_status(device_stat, tile);
+  lv_obj_clear_flag(device_stat.panel, LV_OBJ_FLAG_HIDDEN);  // 판은 숨긴 채 만들어진다 (add_panel)
   lv_obj_add_event_cb(device_stat.panel, device_status_deleted, LV_EVENT_DELETE, NULL);
   layout_status(device_stat, w, h);
   // 지금까지 받은 값은 원래 화면의 것을 그대로 옮긴다

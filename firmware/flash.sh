@@ -124,7 +124,8 @@ rm -f "$FLAG"
 if [ -f "$PLIST" ]; then
   launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null
   helper_stopped=0
-  for _ in $(seq 1 30); do
+  # 기기가 다시 켜져 Wi-Fi 등을 찾느라 30초 넘게 걸리기도 한다
+  for _ in $(seq 1 60); do
     sleep 1
     line=$(tail -c +"$((log_start + 1))" "$LOG" 2>/dev/null | grep -a "\[version\] 기기 펌웨어" | tail -1)
     if [ -n "$line" ]; then
@@ -132,7 +133,7 @@ if [ -f "$PLIST" ]; then
       exit 0
     fi
   done
-  echo "[flash] 올렸지만 30초 안에 기기가 버전을 알려 오지 않았습니다. 도우미 기록($LOG)을 확인하세요."
+  echo "[flash] 올렸지만 60초 안에 기기가 버전을 알려 오지 않았습니다. 도우미 기록($LOG)을 확인하세요."
   exit 1
 fi
 echo "[flash] 완료 (도우미는 켜지 않았습니다)"
