@@ -89,7 +89,7 @@ dir = ""
 # beam_size = 1             # CPU 로 받아 적을 때. 5 면 30%쯤 느리고 조금 더 정확하다
 # language = "ko"           # 받아 적을 말 (en, ja ...). "auto" 면 저절로 알아본다 (짧은 말은 틀리기 쉽다)
 # prompt = "받아쓰기, 펌웨어, 빌드, 커밋, 깃, 세션, 오르카, 클로드, 기기, 배터리, 코드, 스킬."  # 자주 쓰는 말 (잘 알아듣게)
-# input = ""                # 마이크 이름 일부 (비워 두면 PC 기본 마이크)
+# input = ""                # 마이크 이름 일부 (비워 두면 PC 기본 마이크. 블루투스 이어폰 마이크는 쓰지 않는다)
 # voice = "Yuna"            # 답 읽어 주기 목소리 (Mac 만. say -v '?' 로 목록). Windows 는 한국어 목소리를 저절로 고른다
 # speak_powershell = false  # Windows: 읽어 주기는 Windows 음성(SAPI)을 바로 부른다. 그게 안 될 때만 true 면 PowerShell 로 읽는다
 #                           # (도우미가 PowerShell 을 띄우는 것을 회사 보안 프로그램이 의심할 수 있어 꺼 둔다)
@@ -104,7 +104,7 @@ dir = ""
 #   { name = "배포", text = "배포해줘" },
 #   { name = "푸쉬", text = "푸쉬해줘" },
 #   { name = "에러 확인", text = "에러 확인" },
-#   { name = "/orchestration", text = "/orchestration " },
+#   { name = "/orch", text = "/orchestration " },
 #   { name = "/clear", text = "/clear" },
 #   { name = "/compact", text = "/compact" },
 # ]

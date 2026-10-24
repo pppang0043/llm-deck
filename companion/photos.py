@@ -15,6 +15,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+import scanner
+
 DEFAULT_DIR = Path.home() / "Pictures" / "LLM Deck"
 # 원래 폴더에 쓸 수 없을 때 대신 쓰는 곳. Windows 보안의 "제어된 폴더 액세스"가 켜져 있으면
 # 처음 보는 프로그램이 사진·비디오 폴더에 쓰지 못하게 막는다.
@@ -91,6 +93,8 @@ class PhotoReceiver:
         self.tmp = None  # 동영상: 받는 중인 임시 파일 (열린 파일)
         self.got = 0
         self.pending_toast: str | None = None  # main.py 가 기기 알림으로 보낸다
+        self.pending_scan: str | None = None  # 연속 스캔 결과 {"scan": 글}: 기기가 보이고 스캔을 멈춘다
+        self.pending_roi: list[int] | None = None  # 스캔 1단계 장의 바코드 자리 {"scan_roi": [...]} ([] 면 못 찾음)
 
     def _folders(self, name: str) -> tuple[Path, str, str]:
         if name.lower().endswith(".mov"):
@@ -181,6 +185,12 @@ class PhotoReceiver:
         self.pending_toast = f"PC에 이미 있습니다\n{same.name}"
 
     def save(self, name: str, data: bytes) -> Path | None:
+        if name.startswith("SCAN_"):  # 기기 카메라의 연속 스캔 사진: 저장하지 않고 읽기만 한다
+            self._scan_frame(name, data)
+            return None
+        if name.startswith("LOC_"):  # 스캔 1단계(넓은 장): 읽히면 끝, 아니면 바코드 자리를 알려 준다
+            self._scan_frame(name, data, locate=True)
+            return None
         same = self._same(name, len(data), lambda: hashlib.sha256(data).digest())
         if same:
             self._skip(name, same)
@@ -195,7 +205,64 @@ class PhotoReceiver:
             print(f"[photo] 저장하지 못했습니다: {e}")
             return None
         print(f"[photo] 저장했습니다: {path} ({len(data) // 1024}KB)")
+        self._scan(path)
         return path
+
+    def _scan_frame(self, name: str, data: bytes, locate: bool = False) -> None:
+        if not scanner.available:
+            self.pending_scan = "PC 도우미에 판독기가 없습니다\n(opencv, zxing-cpp)"
+            return
+
+        keep = os.environ.get("LLMDECK_SCAN_DIR")  # 진단용: 연속 스캔 사진을 이 폴더에 남긴다
+        if keep:
+            try:
+                Path(keep).mkdir(parents=True, exist_ok=True)
+                (Path(keep) / name).write_bytes(data)
+            except OSError:
+                pass
+
+        def run():
+            try:
+                found = scanner.scan_bytes(data)
+            except Exception as e:
+                print(f"[scan] {name} 읽지 못했습니다: {e}")
+                return
+            if not found:
+                if locate:
+                    roi = scanner.locate_bytes(data)
+                    print(f"[scan] {name}: 자리 {roi}")
+                    self.pending_roi = roi or []
+                else:
+                    print(f"[scan] {name}: 못 찾음")
+                return
+            from orca import _copy
+
+            copied = _copy("\n".join(text for _, text in found))
+            print(f"[scan] {name}: {found}{' (클립보드에 넣음)' if copied else ''}")
+            self.pending_scan = scanner.describe(found) + ("\n클립보드에 넣었습니다" if copied else "")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _scan(self, path: Path) -> None:
+        """찍은 사진에 QR·바코드가 있으면 기기에 알리고 클립보드에 넣는다 (받는 쪽이 멈추지 않게 따로)"""
+        if not scanner.available or path.suffix.lower() == ".mov":
+            return
+
+        def run():
+            try:
+                found = scanner.scan(path)
+            except Exception as e:  # 판독이 실패해도 사진 받기에는 영향이 없게
+                print(f"[scan] {path.name} 읽지 못했습니다: {e}")
+                return
+            if not found:
+                return
+            from orca import _copy  # 받아쓰기와 같은 클립보드 넣기 (Mac pbcopy, Windows clip)
+
+            copied = _copy("\n".join(text for _, text in found))
+            print(f"[scan] {path.name}: {found}{' (클립보드에 넣음)' if copied else ''}")
+            self.pending_toast = scanner.describe(found) + ("\n클립보드에 넣었습니다" if copied else "")
+
+        threading.Thread(target=run, daemon=True).start()
 
     def save_file(self, name: str, tmp) -> Path | None:
         """다 받은 임시 파일을 이름을 붙여 옮긴다. 같은 파일이 이미 있으면 지운다."""

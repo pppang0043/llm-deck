@@ -16,6 +16,9 @@ dependencies = [
     # Windows 도우미 앱(windows/app.pyw)의 트레이 아이콘
     "pystray>=0.19; sys_platform == 'win32'",
     "pillow>=10; sys_platform == 'win32'",
+    # 찍은 사진의 QR·바코드 읽기 (scanner.py). 없으면 읽지 않고 사진만 받는다
+    "opencv-python-headless>=4.10",
+    "zxing-cpp>=2.3",
 ]
 
 [dependency-groups]

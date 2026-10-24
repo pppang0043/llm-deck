@@ -60,6 +60,7 @@ import version
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
 from transports import TRANSPORTS, frames
+from transports.commands import CommandTransport, CommandError
 
 INTERVAL = 30
 # 블루투스로 붙어 있을 때 Wi-Fi 를 다시 찾아보는 간격 (초)
@@ -320,7 +321,7 @@ def connect(names: list[str], cfg: dict, on_audio, on_event, on_photo, on_video)
         transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event, on_photo, on_video)
         if transport.open():
             print(f"[device] {transport.name} 로 연결했습니다.")
-            return transport
+            return CommandTransport(transport)
         transport.close()
     print(f"[device] 기기를 찾지 못했습니다 ({', '.join(names)}). 다시 시도합니다.")
     return None
@@ -340,9 +341,11 @@ def wifi_setup(cfg: dict, add: bool) -> None:
     if not transport.open():
         print("[device] USB 로 연결된 기기를 찾지 못했습니다.")
         return
-    transport.send(message)
-    time.sleep(1)
-    transport.close()
+    transport = CommandTransport(transport)
+    try:
+        transport.send(message)
+    finally:
+        transport.close()
     print("[device] 등록했습니다. 최대 5개까지 기억합니다." if add else "[device] 지웠습니다. 기기를 다시 켜면 적용됩니다.")
 
 
@@ -356,10 +359,14 @@ def main() -> None:
     parser.add_argument("--uninstall-statusline", action="store_true", help="위 설정을 원래대로 되돌린다")
     parser.add_argument("--add-wifi", action="store_true", help="기기가 접속할 Wi-Fi 를 추가로 등록 (USB)")
     parser.add_argument("--clear-wifi", action="store_true", help="추가로 등록한 Wi-Fi 를 모두 지운다 (USB)")
+    parser.add_argument("--command-status", action="store_true", help="마지막 미확정 명령의 기기 처리 상태 조회")
+    parser.add_argument("--acknowledge-command", action="store_true", help="미확정 명령의 실제 결과를 확인한 뒤 PC 대기 기록만 해제 (재실행하지 않음)")
     parser.add_argument("--battery", type=float, metavar="V", help="멀티미터로 잰 배터리 전압(V)으로 기기를 보정한다")
-    parser.add_argument("--camera", choices=["open", "shoot", "record", "close", "dump", "gallery"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기 / 갤러리")
+    parser.add_argument("--camera", choices=["open", "shoot", "record", "close", "dump", "gallery", "scan"], help="기기의 카메라 화면을 열기 / 찍기 / 닫기 / 갤러리 / QR·바코드 연속 스캔")
     parser.add_argument("--camera-mount", choices=["0", "1", "2", "3", "0m", "1m", "2m", "3m"],
                         help="사진이 돌아가 보일 때: 센서 방향(시계 방향 90도 횟수), 좌우가 뒤집히면 m 을 붙인다")
+    parser.add_argument("--camera-ctl", metavar="sharp=2,special=2",
+                        help="카메라 화질 조절 (이름은 firmware/src/camera.cpp 의 CTLS, reset=1 이면 모두 기본값). 기기에 저장된다")
     parser.add_argument("--test-video", type=int, metavar="초", help="기기 카메라로 정한 초만큼 녹화해 저장한다")
     parser.add_argument("--links", metavar="usb=on,ble=off", help="기기의 연결 방식 켜고 끄기 (USB 로 연결했을 때만)")
     parser.add_argument("--view", metavar="화면",
@@ -412,6 +419,8 @@ def main() -> None:
             time.sleep(1)
         return
     if args.add_wifi or args.clear_wifi:
+        if not claim_device():
+            raise SystemExit("이미 실행 중인 PC 도우미를 먼저 종료하세요.")
         return wifi_setup(cfg, add=args.add_wifi)
     if args.setup_sync:
         return sync.create(cfg.get("sync", {}))
@@ -439,6 +448,16 @@ def main() -> None:
         return
     link = args.link or cfg.get("device", {}).get("link", "auto")
     names = list(TRANSPORTS) if link == "auto" else [link]
+    if args.command_status or args.acknowledge_command:
+        transport = connect(names, cfg, lambda *a: None, lambda *a: None, lambda *a: None, lambda *a: None)
+        if not transport:
+            raise SystemExit(1)
+        try:
+            print(json.dumps(transport.command_status(acknowledge=args.acknowledge_command), ensure_ascii=False))
+        finally:
+            transport.close()
+        return
+
     sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
     speaker = sounds.Sounds(cfg.get("sounds", {}))
     movies = videos.VideoReceiver(cfg.get("videos", {}))
@@ -458,6 +477,10 @@ def main() -> None:
     print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
 
     def on_event(event: dict) -> None:
+        if isinstance(event, dict) and event.get("link_error") == "not_queued":
+            print("[device] 기기가 요청을 받지 못했습니다 (큐/메모리 제한 또는 잘못된 메시지). 잠시 뒤 다시 시도하세요.")
+        if isinstance(event, dict) and event.get("link_error") == "not_owner":
+            print("[device] 다른 PC 가 기기를 사용 중이라 제어 명령을 거절했습니다.")
         # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
         for handler in (speaker, receiver, movies, apps, keys, pc, ask, sessions, peer):
             try:
@@ -533,6 +556,8 @@ def main() -> None:
                 if first and args.camera_mount:
                     rot = int(args.camera_mount[0])
                     message["camera_mount"] = {"rot": rot, "mirror": args.camera_mount.endswith("m")}
+                if first and args.camera_ctl:
+                    message["camera_ctl"] = {k: int(v) for k, v in (item.split("=") for item in args.camera_ctl.split(","))}
                 if first and args.battery is not None:
                     message["battery_mv"] = round(args.battery * 1000)
                 try:
@@ -541,6 +566,8 @@ def main() -> None:
                     print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
                     first = False
                     peer.sent()
+                except CommandError:
+                    raise
                 except OSError as e:
                     print(f"[device] 전송 실패: {e}")
                     usb_health(transport, False)
@@ -561,7 +588,7 @@ def main() -> None:
                     else:
                         print("[device] Wi-Fi 로 기기를 찾아 블루투스에서 Wi-Fi 로 바꿉니다.")
                         transport.close()
-                        transport = faster
+                        transport = CommandTransport(faster)
                         sessions.resend()
                         peer.reset()
                         view.link_up(transport.name)
@@ -581,7 +608,7 @@ def main() -> None:
                 time.sleep(1)
                 transport.close()
                 return
-            if (args.camera in ("open", "close", "gallery") or args.camera_mount or args.links) and transport and not first:
+            if (args.camera in ("open", "close", "gallery") or args.camera_mount or args.camera_ctl or args.links) and transport and not first:
                 time.sleep(2)
                 transport.close()
                 return
@@ -634,6 +661,10 @@ def main() -> None:
                     for source in (apps, keys, ask, sessions, receiver):
                         if source.pending_toast:
                             extra["toast"], source.pending_toast = source.pending_toast, None
+                    if receiver.pending_scan:  # 기기 카메라의 연속 스캔 결과 (photos.py)
+                        extra["scan"], receiver.pending_scan = receiver.pending_scan, None
+                    if receiver.pending_roi is not None:  # 스캔 1단계 장의 바코드 자리 ([] 면 못 찾음)
+                        extra["scan_roi"], receiver.pending_roi = receiver.pending_roi, None
                     # 말로 묻기: 상태(듣는 중·생각 중)와 나오는 중인 답
                     orca_state = sessions.pending()
                     if orca_state:
@@ -647,6 +678,8 @@ def main() -> None:
                     if extra:
                         try:
                             transport.send({**extra, "host": _host_name()})
+                        except CommandError:
+                            raise
                         except OSError as e:
                             print(f"[device] 전송 실패: {e}")
                             usb_health(transport, False)
@@ -656,6 +689,11 @@ def main() -> None:
                     time.sleep(0.5)
             else:
                 time.sleep(2)
+        except CommandError as exc:
+            if transport:
+                transport.close()
+            # 명령이 실행됐을 수 있으므로 first=True 인 채 재연결해 새 ID 로 반복하지 않는다.
+            raise SystemExit(f"[device] {exc}") from exc
         except Exception:
             # 예상하지 못한 오류로 도우미가 꺼지지 않게 한다. Windows 의 자동 시작은 꺼지면 다음 로그인까지 다시 켜지지 않는다.
             print("[device] 오류가 나서 10초 뒤 다시 시작합니다:")

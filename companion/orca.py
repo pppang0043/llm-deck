@@ -7,6 +7,7 @@
     받아 적은 글은 커서 자리가 아니라 그 세션 터미널에 직접 넣는다 (orca terminal send). Enter 는 누르지 않는다.
   - 기기에서 세션을 길게 누르면 빠른 답: {"orca": "reply", "id": id, "reply": "allow" | "deny" | "continue"}.
     정해 둔 답(REPLIES)만 보내고, 보내기 직전에 상태를 다시 읽어 그 답이 맞는 상태일 때만 보낸다.
+  - 빠른 답 창의 숨기기: {"orca": "hide", "id": id}. 그 터미널을 목록에서 뺀다 (HIDDEN_FILE 에 적어 도우미를 다시 켜도 빠진다).
   - 받아쓰기에서 "슬래시 커밋" 처럼 말하면 "/commit" 으로 바꾼다 (Claude Code 의 / 명령·스킬). slash_words 참고.
 ORCA 가 꺼져 있거나 orca 명령을 못 찾으면 {"ok": false} 를 보낸다.
 """
@@ -31,6 +32,9 @@ ACTIVE_TAB_LAG_SECONDS = 2.0
 MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
+HIDDEN_FILE = Path.home() / ".llm-deck" / "orca_hidden.json"  # 기기에서 숨긴 터미널 handle 들
+# /orchestration 이 워커에게 주는 첫 글. 일을 끝낸 워커는 ORCA 가 parentPaneKey 를 지워서 이것으로도 알아본다
+WORKER_PROMPT = "You are working inside Orca, a multi-agent IDE."
 # ORCA 화면 세션 팝업의 키 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter). 나머지 이름은 typer.KEYWORDS 의 글 + Enter
 # (글이 띄어쓰기로 끝나면 Enter 없이, typer.wants_enter).
 # Tab + Enter 는 Claude Code 가 흐리게 보여준 추천 문장을 받아서 바로 보낸다.
@@ -42,6 +46,9 @@ KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": 
         "erase": ("지우기", None, False),
         # Esc 한 번: 일하는 Claude 를 멈추거나 열린 고르기 창을 닫는다 (사용자가 Esc 버튼을 직접 누를 때만)
         "esc": ("Esc", "\x1b", False)}
+# 팝업 /스킬 의 스킬 ("skill:" + 이름). "/이름 " 만 넣고 Enter 는 치지 않는다 (뒤에 할 일을 이어 적는다).
+# 여기 있는 것만 입력한다. 기기 orcapanel.cpp 의 SKILLS 와 같게
+SKILLS = ("proto-design", "minipc")
 # Claude Code 는 키를 한 번에 많이 받으면 일부만 처리한다 (10줄 치를 몰아 보내면 글자가 섞였다). 5줄씩 나눠 보낸다
 ERASE_CHUNK = 5
 ERASE_BELOW = 20  # 커서 아래로 지우는 줄 수 (보통 커서는 맨 끝이라 0)
@@ -381,6 +388,10 @@ class Orca:
         self.state: dict | None = None
         self.sent: dict | None = None
         self.pending_toast: str | None = None
+        try:
+            self.hidden: set[str] = set(json.loads(HIDDEN_FILE.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            self.hidden = set()
         # 두 낱말로 적은 것("깃 푸시")은 붙여서 찾는다
         words = {k.replace(" ", ""): v.lstrip("/") for k, v in cfg.get("slash_words", {}).items()}
         self.aliases = {**SLASH_ALIASES, **words}
@@ -434,8 +445,10 @@ class Orca:
             handle = term["handle"]
             short = handle.removeprefix("term_")[:8]
             agent = agents.get(f"{term.get('tabId')}:{term.get('leafId')}")
-            if agent and agent.get("parentPaneKey"):
+            if agent and (agent.get("parentPaneKey") or (agent.get("prompt") or "").startswith(WORKER_PROMPT)):
                 continue  # /orchestration 이 띄운 워커는 그 세션 안의 일이라 목록에 넣지 않는다
+            if handle in self.hidden:
+                continue
             if agent:
                 # state 는 안에서 돌린 하위 작업까지 섞인 값이라, 세션 자체의 상태(mainAgent)를 먼저 본다
                 state = (agent.get("mainAgent") or {}).get("state") or agent.get("state") or "idle"
@@ -459,6 +472,10 @@ class Orca:
                         tab_order.get(tab, len(tab_order)), i)
                 for i, (wt, tab, short) in enumerate(order_keys)}
         rows.sort(key=lambda r: rank[r["id"]])
+        live = {t["handle"] for t in terms.get("terminals", [])}
+        if self.hidden - live:  # 닫힌 터미널은 숨긴 목록에서도 지운다
+            self.hidden &= live
+            self._save_hidden()
         self.handles = handles
         self.tabs = tabs
         self.workdirs = sorted({t.get("worktreePath") for t in terms.get("terminals", []) if t.get("worktreePath")})
@@ -480,7 +497,7 @@ class Orca:
 
     def on_event(self, event: dict) -> None:
         """기기에서 세션 줄을 눌렀을 때: {"orca": "activate", "id": 짧은 id}. 받아쓰기({"ask": ...})는 assistant.py 가 맡는다.
-        세션 팝업을 눌렀을 때: {"orca": "send", "id": 짧은 id, "key": "tab" | "enter" | "tab_enter" | 키워드 이름}."""
+        세션 팝업을 눌렀을 때: {"orca": "send", "id": 짧은 id, "key": "tab" | "enter" | "tab_enter" | "skill:" 스킬 | 키워드 이름}."""
         if "ask" in event or not isinstance(event.get("id"), str):
             return
         if event.get("orca") == "activate":
@@ -489,6 +506,27 @@ class Orca:
             threading.Thread(target=self.send_key, args=(event["id"], event["key"]), daemon=True).start()
         elif event.get("orca") == "reply" and isinstance(event.get("reply"), str):
             threading.Thread(target=self.reply, args=(event["id"], event["reply"]), daemon=True).start()
+        elif event.get("orca") == "hide":
+            self.hide(event["id"])
+
+    def hide(self, short: str) -> None:
+        """기기에서 숨긴 세션을 목록에서 뺀다. 그 터미널을 닫을 때까지."""
+        handle = self.handles.get(short)
+        if not handle:
+            self.pending_toast = "ORCA 세션을 찾지 못했습니다\n목록을 새로 읽습니다"
+            self._wake.set()
+            return
+        self.hidden.add(handle)
+        self._save_hidden()
+        print(f"[orca] {short} 를 숨겼습니다")
+        self._wake.set()
+
+    def _save_hidden(self) -> None:
+        try:
+            HIDDEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+            HIDDEN_FILE.write_text(json.dumps(sorted(self.hidden)), encoding="utf-8")
+        except OSError as e:
+            print(f"[orca] 숨긴 목록을 적지 못했습니다: {e}")
 
     def activate(self, short: str) -> str | None:
         """세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다. 잘 되면 terminal handle."""
@@ -518,6 +556,8 @@ class Orca:
         """세션 터미널에 키워드(글 + Enter)나 Tab / Enter 를 보낸다. 앞에 있는 창과 상관없이 그 세션에만 간다."""
         if name in KEYS:
             shown, text, enter = KEYS[name]
+        elif name.startswith("skill:") and name[6:] in SKILLS:
+            shown, text, enter = "/" + name[6:], f"/{name[6:]} ", False
         elif typer.KEYWORDS.get(name):
             text = typer.KEYWORDS[name]
             shown, enter = text.strip(), typer.wants_enter(text)

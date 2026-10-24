@@ -388,7 +388,7 @@ void ui_history_close() {
 
 // ---- 소진 예상: 최근 사용률 기록으로 지금 속도면 언제 100% 가 되는지 ----
 
-// 초기화 전에 한도가 찰 것 같으면 "16:40 소진" (오늘이 아니면 "23일 16시 소진") 을 out 에 넣고 true.
+// 초기화 전에 한도가 찰 것 같으면 "16:40 소진 예상" (오늘이 아니면 "23일 16시 소진 예상") 을 out 에 넣고 true.
 // 계산은 history_forecast (한도 알림의 미리 알림도 같은 값을 쓴다).
 static bool forecast(const char *service, JsonObjectConst bar, char *out, size_t size) {
   time_t full = history_forecast(service, bar["label"] | "", bar["pct"] | 0, bar["resets"] | 0u);
@@ -398,11 +398,28 @@ static bool forecast(const char *service, JsonObjectConst bar, char *out, size_t
   localtime_r(&full, &t);
   localtime_r(&now, &today);
   if (t.tm_yday == today.tm_yday && t.tm_year == today.tm_year) {
-    snprintf(out, size, "%02d:%02d 소진", t.tm_hour, t.tm_min);
+    snprintf(out, size, "%02d:%02d 소진 예상", t.tm_hour, t.tm_min);
   } else {
-    snprintf(out, size, "%d일 %d시 소진", t.tm_mday, t.tm_hour);
+    snprintf(out, size, "%d일 %d시 소진 예상", t.tm_mday, t.tm_hour);
   }
   return true;
+}
+
+// 소진 예상 글이 칸에 다 들어가지 않으면 끝의 " 예상" 을 뺀다
+static void fit_forecast(lv_obj_t *lbl) {
+  static const char TAIL[] = " 예상";
+  const size_t tail = sizeof(TAIL) - 1;
+  lv_obj_t *parent = lv_obj_get_parent(lbl);
+  lv_obj_update_layout(parent);
+  lv_coord_t room = lv_obj_get_content_width(parent);
+  const char *text = lv_label_get_text(lbl);
+  size_t len = strlen(text);
+  lv_point_t size;
+  lv_txt_get_size(&size, text, lv_obj_get_style_text_font(lbl, LV_PART_MAIN), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  if (room <= 0 || size.x <= room || len <= tail || strcmp(text + len - tail, TAIL) != 0) return;
+  char shorter[32];
+  strlcpy(shorter, text, LV_MIN(sizeof(shorter), len - tail + 1));
+  lv_label_set_text(lbl, shorter);
 }
 
 // ---- 리셋까지 남은 시간: 페이지를 다시 만들지 않고 30초마다 글자만 바꾼다 ----
@@ -415,22 +432,47 @@ struct Remain {
 static Remain remains[MAX_REMAINS];
 static lv_timer_t *remain_timer;
 
-// "리셋 0일 02:13 (15:00)": 남은 날, 시:분, 괄호 안은 리셋 시각 (오늘이 아니면 "(23일 15:00)")
+// 한 줄로 "2:13 (15:00)" (하루가 넘으면 "6일 2:13 (30일(금) 15:00)").
+// 칸에 다 들어가지 않으면 시:분, 괄호 순으로 덜어 낸다 (줄을 바꾸거나 "..." 로 자르지 않는다).
 static void remain_update(Remain &r) {
-  char text[48];
   time_t now = time(nullptr);
   long left = (long)(r.resets - now);
+  if (left < 0) left = 0;
+  long days = left / 86400, hours = left % 86400 / 3600, mins = left % 3600 / 60;
   struct tm t, today;
   localtime_r(&r.resets, &t);
   localtime_r(&now, &today);
-  char when[16];
+  char when[32], clock[16], day[16];
   if (t.tm_yday == today.tm_yday && t.tm_year == today.tm_year) {
     snprintf(when, sizeof(when), "%02d:%02d", t.tm_hour, t.tm_min);
   } else {
-    snprintf(when, sizeof(when), "%d일 %02d:%02d", t.tm_mday, t.tm_hour, t.tm_min);
+    snprintf(when, sizeof(when), "%d일(%s) %02d:%02d", t.tm_mday, WDAY_NAMES[t.tm_wday], t.tm_hour, t.tm_min);
   }
-  if (left < 0) left = 0;
-  snprintf(text, sizeof(text), "리셋 %ld일 %02ld:%02ld (%s)", left / 86400, left % 86400 / 3600, left % 3600 / 60, when);
+  snprintf(clock, sizeof(clock), "%ld:%02ld", hours, mins);
+  snprintf(day, sizeof(day), "%ld일", days);
+  char forms[3][48];
+  int n = 0;
+  if (days) {
+    snprintf(forms[n++], 48, "%s %s (%s)", day, clock, when);
+    snprintf(forms[n++], 48, "%s (%s)", day, when);
+    snprintf(forms[n++], 48, "%s %s", day, clock);
+  } else {
+    snprintf(forms[n++], 48, "%s (%s)", clock, when);
+    snprintf(forms[n++], 48, "%s", clock);
+  }
+  lv_obj_t *parent = lv_obj_get_parent(r.label);
+  lv_obj_update_layout(parent);
+  lv_coord_t room = lv_obj_get_content_width(parent);
+  const lv_font_t *font = lv_obj_get_style_text_font(r.label, LV_PART_MAIN);
+  const char *text = forms[n - 1];
+  for (int i = 0; i < n; i++) {
+    lv_point_t size;
+    lv_txt_get_size(&size, forms[i], font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if (room <= 0 || size.x <= room) {
+      text = forms[i];
+      break;
+    }
+  }
   if (strcmp(lv_label_get_text(r.label), text) != 0) lv_label_set_text(r.label, text);
 }
 
@@ -447,6 +489,7 @@ static void remain_deleted(lv_event_t *e) {
 }
 
 // label 에 남은 시간을 쓰고 계속 고쳐 나간다. 초기화 시각을 모르면 아무것도 하지 않는다.
+// 처음 글자는 페이지 배치가 끝난 뒤(칸 폭을 알 때) 정한다.
 static void add_remain(lv_obj_t *label, uint32_t resets) {
   if (!resets) return;
   for (Remain &r : remains) {
@@ -454,8 +497,8 @@ static void add_remain(lv_obj_t *label, uint32_t resets) {
     r.label = label;
     r.resets = (time_t)resets;
     lv_obj_add_event_cb(label, remain_deleted, LV_EVENT_DELETE, NULL);
-    remain_update(r);
     if (!remain_timer) remain_timer = lv_timer_create(remain_tick, 30000, NULL);
+    lv_async_call([](void *) { remain_tick(nullptr); }, nullptr);
     return;
   }
 }
@@ -469,7 +512,7 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
   lv_obj_align(add_label(row, bar["label"] | "", &font_ko_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
-  // 리셋 시각을 알면 남은 시간과 함께 밝게 ("리셋 0일 02:13 (15:00)")
+  // 리셋 시각을 알면 남은 시간과 함께 밝게 ("0일 02:13 (15:00)")
   bool known = bar["resets"] | 0u;
   lv_obj_t *note = add_label(row, bar["note"] | "", known ? &font_ko_20 : &font_ko_14,
                              known ? lv_color_white() : COLOR_DIM);
@@ -500,12 +543,17 @@ static bool is_limits_page(JsonObjectConst svc) {
          !svc["table"].is<JsonArrayConst>() && !svc["rows"].is<JsonArrayConst>();
 }
 
+// 표의 소진 예상 글. 칸 폭은 같은 줄의 칸이 다 생겨야 정해지므로 표를 다 만든 뒤 fit_forecast 로 맞춘다
+static lv_obj_t *table_forecasts[8];
+static int table_forecast_count;
+
 // 구독 한도 표의 한 칸: 큰 숫자, 막대, 초기화 시각. 누르면 기록 그래프.
 static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst bar, int width_pct) {
   lv_obj_t *cell = lv_obj_create(row);
   lv_obj_remove_style_all(cell);
   lv_obj_set_size(cell, lv_pct(width_pct), LV_SIZE_CONTENT);
-  lv_obj_set_style_pad_left(cell, 8, 0);
+  lv_obj_set_flex_grow(cell, 1);  // 이름 칸을 뺀 나머지를 서비스가 나눠 쓴다
+  lv_obj_set_style_pad_left(cell, 6, 0);
   lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
   lv_obj_set_style_pad_row(cell, 3, 0);
@@ -519,18 +567,19 @@ static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst b
   lv_bar_set_range(b, 0, 100);
   lv_bar_set_value(b, pct, LV_ANIM_OFF);
   if (pct >= 70) lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
-  // 리셋 시각을 알면 남은 시간과 함께 밝게 ("리셋 0일 02:13 (15:00)"), 모르면 받은 글자를 흐리게
+  // 리셋 시각을 알면 남은 시간과 함께 밝게 ("0일 02:13 (15:00)"), 모르면 받은 글자를 흐리게
   const char *when = bar["note"] | "";
   bool known = bar["resets"] | 0u;
   lv_obj_t *note = add_label(cell, when[0] ? when : "-", &font_ko_14, known ? lv_color_white() : COLOR_DIM);
   lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
   lv_obj_set_style_max_width(note, lv_pct(100), 0);
-  add_remain(note, bar["resets"] | 0u);
+  add_remain(note, bar["resets"] | 0u);  // 칸 폭에 맞는 한 줄을 고른다
   char soon[32];
   if (forecast(service, bar, soon, sizeof(soon))) {
     lv_obj_t *lbl = add_label(cell, soon, &font_ko_14, COLOR_WARN);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_max_width(lbl, lv_pct(100), 0);
+    if (table_forecast_count < 8) table_forecasts[table_forecast_count++] = lbl;
   }
   if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
@@ -542,22 +591,43 @@ static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst b
   }
 }
 
-// 구독 한도 페이지 여럿을 한 페이지에 표로: 열은 서비스, 줄은 구간(5시간, 주간)
-static void add_limits_table(lv_obj_t *page, JsonArrayConst services) {
+// 구독 한도 페이지 여럿을 한 페이지에 표로: 열은 서비스, 줄은 구간(5시간, 주간).
+// 제목 줄은 두지 않고(스크롤 없이 한 화면에 들어가게) 받아 온 시각(note)을 서비스 이름 줄 왼쪽 빈칸에 둔다.
+// split 이면 미러링 나눠 쓰기 버튼을 그 칸에 겹쳐 둔다 (미러링 중에만 보이고 그동안 시각은 가린다).
+static void add_limits_table(lv_obj_t *page, JsonArrayConst services, const char *note, bool split) {
+  table_forecast_count = 0;
   JsonObjectConst list[4];
   int n = 0;
   for (JsonObjectConst svc : services) {
     if (is_limits_page(svc) && n < 4) list[n++] = svc;
   }
-  // 이름 칸 24% ("5시간" 이 한 줄에 들어가게), 나머지를 서비스가 나눠 쓴다
-  int other = 76 / n;
+  int other = 76 / n;  // flex_grow 로 늘어나기 전의 칸 폭
   lv_obj_t *head = lv_obj_create(page);
   lv_obj_remove_style_all(head);
   lv_obj_set_size(head, lv_pct(100), LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
   // 서비스 이름은 오른쪽 끝을 아래 칸에 맞추고 왼쪽으로 조금 더 써서 세로 화면에서도 한 줄에 ("Claude Code")
   int head_w = 80 / n;
-  lv_obj_set_width(add_label(head, "", &font_ko_14, COLOR_DIM), lv_pct(100 - head_w * n));
+  lv_obj_t *when = add_label(head, note, &font_ko_14, COLOR_DIM);
+  lv_obj_set_width(when, lv_pct(100 - head_w * n));
+  lv_label_set_long_mode(when, LV_LABEL_LONG_CLIP);
+  // 오늘이 아니면 "10월 23일 15:18" 로 와서 칸에 다 들어가지 않는다: 그때는 날짜("23일")만
+  lv_obj_update_layout(head);
+  lv_point_t size;
+  lv_txt_get_size(&size, note, &font_ko_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  const char *day = strchr(note, ' ');
+  if (size.x > lv_obj_get_content_width(when) && day) {
+    char shorter[16];
+    strlcpy(shorter, day + 1, sizeof(shorter));
+    if (char *end = strchr(shorter, ' ')) *end = '\0';
+    lv_label_set_text(when, shorter);
+  }
+  if (split) {
+    lv_obj_add_flag(head, LV_OBJ_FLAG_OVERFLOW_VISIBLE);  // 버튼(24px)이 이름 줄보다 높다
+    lv_obj_t *btn = ui_split_button(head);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_FLOATING);  // 이름 줄 높이에 넣지 않는다
+    lv_obj_align(btn, LV_ALIGN_LEFT_MID, 0, 0);
+  }
   for (int i = 0; i < n; i++) {
     lv_obj_t *name = add_label(head, list[i]["name"] | "?", &font_ko_14, COLOR_ACCENT);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
@@ -575,6 +645,13 @@ static void add_limits_table(lv_obj_t *page, JsonArrayConst services) {
       if (!seen && nl < 6) labels[nl++] = label;
     }
   }
+  // 이름 칸은 가장 긴 구간 이름("5시간")만큼만: 남는 폭은 리셋 글자가 한 줄에 들어가도록 칸에 준다
+  lv_coord_t name_w = 0;
+  for (int j = 0; j < nl; j++) {
+    lv_point_t size;
+    lv_txt_get_size(&size, labels[j], &font_ko_20, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    name_w = LV_MAX(name_w, size.x + 2);
+  }
   for (int j = 0; j < nl; j++) {
     lv_obj_t *row = lv_obj_create(page);
     lv_obj_remove_style_all(row);
@@ -582,7 +659,7 @@ static void add_limits_table(lv_obj_t *page, JsonArrayConst services) {
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_t *name = add_label(row, labels[j], &font_ko_20, COLOR_DIM);
-    lv_obj_set_width(name, lv_pct(24));
+    lv_obj_set_width(name, name_w);
     lv_obj_set_style_pad_top(name, 6, 0);
     for (int i = 0; i < n; i++) {
       JsonObjectConst found;
@@ -592,6 +669,7 @@ static void add_limits_table(lv_obj_t *page, JsonArrayConst services) {
       add_limit_cell(row, list[i]["name"] | "?", found, other);
     }
   }
+  for (int i = 0; i < table_forecast_count; i++) fit_forecast(table_forecasts[i]);
 }
 
 static lv_obj_t *add_page(lv_obj_t *tv, uint8_t index, uint8_t col = 0) {
@@ -684,6 +762,30 @@ static void go_back() {
   if (view == VIEW_HOME) return;
   if (view == VIEW_SETTINGS && settings_back()) return;
   ui_show_home();
+}
+
+// 사용량 페이지는 화면의 1/5 만 끌어도 넘어간다 (tileview 는 절반을 넘겨야 넘어가 손을 많이 움직여야 했다).
+// 손을 떼면 tileview 가 가까운 페이지로 되돌아가는 움직임을 시작하는데, 그때 목적지를 끌던 쪽 옆 페이지로 바꾼다.
+static void easy_paging(lv_event_t *e) {
+  lv_anim_t *a = (lv_anim_t *)lv_event_get_param(e);  // 손으로 끄는 중이면 NULL
+  lv_obj_t *tv = lv_event_get_target(e);
+  lv_obj_t *active = lv_tileview_get_tile_act(tv);
+  if (!a || !active) return;
+  lv_coord_t w = lv_obj_get_content_width(tv), h = lv_obj_get_content_height(tv);
+  lv_coord_t tx = lv_obj_get_x(active), ty = lv_obj_get_y(active);
+  lv_coord_t dx = lv_obj_get_scroll_x(tv) - tx, dy = lv_obj_get_scroll_y(tv) - ty;
+  bool vertical = dy != 0;
+  lv_coord_t moved = vertical ? dy : dx, size = vertical ? h : w;
+  // 지금 페이지로 되돌아가려는 것만 바꾼다 (이미 옆 페이지로 가는 중이면 그대로)
+  if (-a->end_value != (vertical ? ty : tx) || moved == 0 || LV_ABS(moved) * 5 < size) return;
+  lv_coord_t nx = vertical ? tx : tx + (moved > 0 ? w : -w), ny = vertical ? ty + (moved > 0 ? h : -h) : ty;
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(tv); i++) {
+    lv_obj_t *tile = lv_obj_get_child(tv, i);
+    if (lv_obj_get_x(tile) == nx && lv_obj_get_y(tile) == ny) {
+      a->end_value = -(vertical ? ny : nx);
+      return;
+    }
+  }
 }
 
 static void screen_gesture(lv_event_t *e) {
@@ -935,6 +1037,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 
   tiles = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
+  lv_obj_add_event_cb(tiles, easy_paging, LV_EVENT_SCROLL_BEGIN, NULL);
   lv_obj_add_event_cb(tiles, [](lv_event_t *e) { update_pc_watch(); }, LV_EVENT_VALUE_CHANGED, NULL);
 
   level_bar = lv_bar_create(scr);
@@ -1084,7 +1187,7 @@ static void usage_retry(lv_timer_t *t) {
 void ui_set_usage(JsonArrayConst services) {
   history_record(services);
   // PC 도우미는 30초마다 같은 내용을 다시 보낸다. 바뀐 것이 없으면 그대로 둔다 (새로 만드는 데 0.1초쯤 멈춘다).
-  // 다만 "16:40 소진" 예상과 오늘/날짜 표시는 시간이 지나면 바뀌므로 기록 한 칸(10분)마다 다시 그린다.
+  // 다만 "16:40 소진 예상" 과 오늘/날짜 표시는 시간이 지나면 바뀌므로 기록 한 칸(10분)마다 다시 그린다.
   static long drawn_slot = -1;
   long slot = (long)(time(nullptr) / HISTORY_SLOT_S);
   if (!waiting && last_usage.as<JsonVariantConst>() == services && slot == drawn_slot) return;
@@ -1116,9 +1219,7 @@ static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool mai
       limits_done = true;
       bool first = index == 0;
       lv_obj_t *page = prev = add_page(tv, index++);
-      lv_obj_t *title = add_row(page, "구독제", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14, COLOR_DIM);
-      if (first && main_screen) add_title_split_btn(title);
-      add_limits_table(page, services);
+      add_limits_table(page, services, svc["note"] | "", first && main_screen);
       continue;
     }
     // 옆 페이지: 앞 페이지 오른쪽에 둔다

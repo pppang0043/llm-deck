@@ -61,11 +61,12 @@ class FakeSd:
 
 @pytest.fixture
 def fake(monkeypatch):
-    sd = FakeSd(["AirPods Pro", "MacBook Pro 마이크", "BlackHole 2ch"], default=0, loud=["MacBook Pro 마이크"])
+    sd = FakeSd(["USB 마이크", "MacBook Pro 마이크", "BlackHole 2ch"], default=0, loud=["MacBook Pro 마이크"])
     monkeypatch.setitem(sys.modules, "sounddevice", sd)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(assistant, "_system_default_input", lambda: "AirPods Pro")
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: "USB 마이크")
     monkeypatch.setattr(assistant, "_lid_closed", lambda: False)
+    monkeypatch.setattr(assistant, "_mac_use_builtin_input", lambda: None)  # 시험이 이 Mac 의 기본 입력을 바꾸지 않게
     monkeypatch.delenv(assistant._RESTARTED_ENV, raising=False)
     a = assistant.Assistant({})
     a.restarts = []
@@ -86,41 +87,94 @@ def record(a, seconds=2.6):
 
 def test_order_starts_with_system_default_and_skips_virtual(fake):
     sd, a = fake
-    assert a._mic_order(sd) == ["AirPods Pro", "MacBook Pro 마이크"]
+    assert a._mic_order(sd) == ["USB 마이크", "MacBook Pro 마이크"]
 
 
 def test_silent_default_moves_to_next_mic(fake):
     sd, a = fake
     take = record(a, 3.0)
-    assert take.chunks, "AirPods 가 조용하면 MacBook 마이크로 녹음해야 한다"
+    assert take.chunks, "USB 마이크가 조용하면 MacBook 마이크로 녹음해야 한다"
     assert a._stream_name == "MacBook Pro 마이크"
-    assert "AirPods" in a.pending_toast
+    assert "USB" in a.pending_toast
 
 
-def test_next_recording_starts_from_system_default_again(fake, monkeypatch):
+def test_quiet_mic_goes_last_for_a_while(fake, monkeypatch):
     sd, a = fake
     record(a, 3.0)
+    assert a.restart_for == "'USB 마이크' 마이크가 조용함"
     opened = []
     real = a._open_stream
     monkeypatch.setattr(a, "_open_stream", lambda sd_, name: opened.append(name) or real(sd_, name))
+    a._close_stream()
+    a.pending_toast = None
+    take = record(a, 2.0)
+    # 녹음마다 USB 마이크부터 1.5초씩 버리고 "바꿉니다" 알림을 띄우지 않는다
+    assert opened == ["MacBook Pro 마이크"]
+    assert take.chunks
+    assert not a.pending_toast
+
+
+def test_quiet_mic_tried_first_again_later(fake, monkeypatch):
+    sd, a = fake
     record(a, 3.0)
-    assert opened[0] == "AirPods Pro"
+    monkeypatch.setattr(assistant.time, "monotonic", lambda: time.perf_counter() + assistant.QUIET_MIC_SECONDS + 1)
+    assert a._mic_order(sd)[0] == "USB 마이크"
+
+
+def test_bluetooth_default_mic_is_never_used(fake, monkeypatch):
+    sd, a = fake
+    sd.devices[0]["name"] = "AirPods Pro"
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: "AirPods Pro")
+    # 기본 마이크가 AirPods 여도 통화용(HFP) 으로 바뀌지 않게 MacBook 마이크로 녹음한다
+    assert a._mic_order(sd) == ["MacBook Pro 마이크"]
+    take = record(a, 2.0)
+    assert take.chunks
+    assert a._stream_name == "MacBook Pro 마이크"
+    assert not a.pending_toast
+
+
+def test_bluetooth_mic_not_used_even_if_chosen_in_config(fake):
+    sd, a = fake
+    sd.devices[0]["name"] = "AirPods Pro"
+    a.cfg["input"] = "AirPods"
+    assert "AirPods Pro" not in a._mic_order(sd)
+
+
+def test_new_airpods_default_does_not_reread_devices(fake, monkeypatch):
+    sd, a = fake
+    a._opened = True
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: "New AirPods")
+    assert a._mic_order(sd)[0] == "USB 마이크"
+    assert a.restart_for is None
+
+
+def test_airpods_default_input_switched_back_every_2_seconds(fake, monkeypatch):
+    sd, a = fake
+    calls = []
+    monkeypatch.setattr(assistant, "_mac_use_builtin_input", lambda: calls.append(1) and None)
+    a.pending()
+    a.pending()  # 2초 안에는 다시 보지 않는다
+    assert len(calls) == 1
+    a._input_checked -= 2
+    a.pending()
+    assert len(calls) == 2
 
 
 def test_never_reinit_portaudio_after_a_mic_was_opened(fake, monkeypatch):
     sd, a = fake
     record(a, 3.0)
+    a.restart_for = None  # 조용했던 USB 마이크 때문에 잡힌 다시 띄우기는 이 확인과 상관없다
     # 도우미를 켠 뒤 연결된 기본 마이크 (PortAudio 목록에 없다)
-    monkeypatch.setattr(assistant, "_system_default_input", lambda: "New AirPods")
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: "New USB Mic")
     take = record(a, 3.0)
     assert sd.reinit == 0
     assert take.chunks
-    assert a.restart_for == "기본 마이크 'New AirPods'"
+    assert a.restart_for == "기본 마이크 'New USB Mic'"
 
 
 def test_reinit_in_place_before_any_mic_was_opened(fake, monkeypatch):
     sd, a = fake
-    monkeypatch.setattr(assistant, "_system_default_input", lambda: "New AirPods")
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: "New USB Mic")
     a._mic_order(sd)
     assert sd.reinit == 1
     assert a.restart_for is None

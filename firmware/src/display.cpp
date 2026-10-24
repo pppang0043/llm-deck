@@ -294,6 +294,10 @@ void display_init() {
   indev_drv.type = LV_INDEV_TYPE_POINTER;
   indev_drv.read_cb = touch_cb;
   indev_drv.disp = main_disp;
+  // 손을 뗀 뒤 미끄러지는 힘이 한 번에 줄어드는 비율(%). 기본 10 은 사용량 페이지를 넘기려면 화면 절반 넘게 끌거나
+  // 세게 튕겨야 했다. 줄이면 가볍게 튕겨도 다음 페이지로 넘어가고 목록도 더 멀리 미끄러진다.
+  // (lv_conf.h 의 LV_INDEV_DEF_* 는 lv_hal_indev.h 가 다시 정의해 버려 여기서 정한다)
+  indev_drv.scroll_throw = 5;
   lv_indev_drv_register(&indev_drv);
 
   lv_indev_drv_init(&device_indev_drv);

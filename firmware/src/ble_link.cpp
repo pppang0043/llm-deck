@@ -27,7 +27,7 @@
 static NimBLEServer *server;
 static NimBLECharacteristic *tx;
 // 여러 PC 가 동시에 붙을 수 있다 (최대 BLE_MAX_PEERS). 그중 하나만 "사용 중" 이고, 마이크 소리·사진·알림은
-// 그 PC 로만 보내며 화면의 사용량도 그 PC 것을 쓴다. 나머지는 연결만 유지한 채 기다린다(명령은 따른다).
+// 그 PC 로만 보내며 화면의 사용량도 그 PC 것을 쓴다. 나머지는 선택될 때까지 제어 명령도 기다린다.
 // 사용 중인 PC 가 끊기면 기다리던 PC 가 이어받는다. 설정에서 고른 PC 는 기억해 두었다가 다시 붙으면 우선한다.
 // 받는 중인 메시지는 PSRAM 에 둔다. 글자를 붙여 가며 커지는 버퍼를 내부 RAM 에 두면
 // 내부 RAM 이 잘게 쪼개져 HTTPS(클라우드)·카메라가 큰 덩어리를 못 얻는다.
@@ -310,8 +310,16 @@ static void handle_line(int slot) {
     Serial.printf("[ble] slot %d authenticated%s\n", slot, primary == slot ? " - in use" : "");
   }
   remember_host(p);
-  // 기다리는 PC 가 보낸 것은 명령만 따르고 사용량은 쓰지 않는다
-  link_submit(LINK_BLE, p.message.data(), p.message.size(), slot == primary);
+  // 실제 연결 세대를 큐에 남겨, 처리 전에 선택 PC 가 바뀌면 옛 명령을 거절한다
+  uint64_t cookie;
+  memcpy(&cookie, p.pc_nonce, sizeof(cookie));
+  cookie |= 1;
+  String reply;
+  if (!link_submit(LINK_BLE, p.message.data(), p.message.size(), slot == primary, &reply, cookie)) {
+    ble_send_event("{\"link_error\":\"not_queued\"}", slot);
+  } else if (reply.length()) {
+    ble_send_event(reply.c_str(), slot);
+  }
 }
 
 class RxCallbacks : public NimBLECharacteristicCallbacks {
@@ -331,6 +339,17 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     }
   }
 };
+
+uint64_t ble_primary_cookie() {
+  uint64_t cookie = 0;
+  portENTER_CRITICAL(&peers_mux);
+  if (primary >= 0 && peers[primary].authed && peers[primary].used) {
+    memcpy(&cookie, peers[primary].pc_nonce, sizeof(cookie));
+    cookie |= 1;
+  }
+  portEXIT_CRITICAL(&peers_mux);
+  return cookie;
+}
 
 void ble_link_loop() {
   // 인증하지 않고 자리만 차지하는 연결은 끊는다 (자리가 3개뿐이라 근처의 누가 다 채우면 내 PC 가 못 붙는다)
@@ -411,16 +430,19 @@ void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
   tx->notify(packet, size, primary_handle);
 }
 
-void ble_send_event(const char *json) {
+void ble_send_event(const char *json, int slot) {
   // 서명을 붙인다 (ble_link.h 의 4)
   uint8_t nonce[16];
   uint32_t ctr = 0;
+  uint16_t peer_mtu = 23;
   uint16_t handle = BLE_HS_CONN_HANDLE_NONE;
   portENTER_CRITICAL(&peers_mux);
-  if (primary >= 0) {
-    memcpy(nonce, peers[primary].pc_nonce, 16);
-    ctr = ++peers[primary].tx_ctr;
-    handle = peers[primary].handle;
+  if (slot < 0) slot = primary;
+  if (slot >= 0 && slot < BLE_MAX_PEERS && peers[slot].used && peers[slot].authed) {
+    memcpy(nonce, peers[slot].pc_nonce, 16);
+    ctr = ++peers[slot].tx_ctr;
+    handle = peers[slot].handle;
+    peer_mtu = peers[slot].mtu;
   }
   portEXIT_CRITICAL(&peers_mux);
   if (!connected || handle == BLE_HS_CONN_HANDLE_NONE) return;
@@ -437,7 +459,7 @@ void ble_send_event(const char *json) {
   size_t size = len + snprintf(packet + len, sizeof(packet) - len, "%s", trailer);
   to_hex(tag, TAG_LEN, packet + size);
   size += TAG_LEN * 2;
-  if (size > (size_t)mtu - 3) return;
+  if (size > (size_t)peer_mtu - 3) return;
   // 알림은 짧고 드물지만 꼭 가야 하므로 칸이 빌 때까지 잠깐 기다린다
   for (int i = 0; i < 50 && os_msys_num_free() < 2; i++) vTaskDelay(pdMS_TO_TICKS(4));
   tx->notify((const uint8_t *)packet, size, handle);

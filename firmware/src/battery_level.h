@@ -21,12 +21,16 @@ class BatteryLevel {
   int pct() const { return shown_; }
   // 충전 전류 때문에 오른 전압으로 쓰는 값 (mV)
   int charge_offset_mv() const { return offset_mv_; }
+  // 다시 켜기 전에 충전 중이었고 그때 보이던 잔량. 충전 중에 다시 켜졌으면 첫 값을 이것보다 낮추지 않는다
+  // (충전 중 전압으로는 정전압 충전 구간을 가릴 수 없어, 켤 때마다 100% 가 80% 대로 떨어졌다)
+  void resume(int pct) { resume_pct_ = pct; }
 
  private:
   int shown_ = -1;
   bool started_ = false;
   bool was_charging_ = false;
   int offset_mv_ = 100;  // 처음 꽂는 것을 보기 전까지 쓰는 값
+  int resume_pct_ = -1;
   int battery_mv_ = 0;   // 배터리로 쓸 때 마지막 전압 (꽂는 순간 얼마나 오르는지 재는 데 쓴다)
   int before_mv_ = 0;
   bool measuring_ = false;

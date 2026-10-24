@@ -264,12 +264,13 @@ class WifiTransport:
         # Wi-Fi 는 연결을 유지하지 않고 보낼 때마다 요청하므로, 끊김은 보낼 때 알게 된다
         return True
 
-    def _request(self, path: str, body: bytes | None = None, timeout: float = 5) -> bytes:
+    def _request(self, path: str, body: bytes | None = None, timeout: float = 5, *, signed_reply=False) -> bytes:
         """서명을 붙여 요청한다. 기기가 다시 켜져 nonce 가 낡았으면 새로 받아 한 번 더 보낸다."""
         for attempt in range(2):
             with self._auth_lock:
                 self.ctr += 1
-                header = auth.http_header(self.key, self.nonce, self.ctr, path, body or b"")
+                key, nonce, ctr = self.key, self.nonce, self.ctr
+                header = auth.http_header(key, nonce, ctr, path, body or b"")
             req = urllib.request.Request(
                 f"http://{self.address}{path}",
                 data=body,
@@ -278,7 +279,11 @@ class WifiTransport:
             )
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as res:
-                    return res.read()
+                    payload = res.read(4097) if signed_reply else res.read()
+                    if signed_reply and (len(payload) > 4096 or not auth.http_reply_ok(
+                            key, nonce, ctr, payload, res.headers.get("X-Deck-Reply", ""))):
+                        raise OSError("Wi-Fi 명령 응답 서명이 맞지 않습니다")
+                    return payload
             except urllib.error.HTTPError as e:
                 if e.code != 401:
                     raise
@@ -296,9 +301,34 @@ class WifiTransport:
         raise OSError("Wi-Fi 인증 실패")
 
     def send(self, message: dict) -> None:
-        reply = self._request("/usage", json.dumps(message).encode())
+        body = json.dumps(message).encode()
+        if any(k in message for k in ("command", "command_status", "command_protocol", "firmware_info")):
+            reply = self._request("/usage", body, signed_reply=True)
+            try:
+                event = json.loads(reply)
+            except ValueError as exc:
+                raise OSError("Wi-Fi 명령 응답 형식이 잘못되었습니다") from exc
+            self.on_event(event)
+            return
+        for attempt in range(3):
+            try:
+                reply = self._request("/usage", body)
+                break
+            except urllib.error.HTTPError as exc:
+                # 기기가 아직 큐에 넣지 않았다고 명시한 경우만 재전송한다.
+                # 응답 유실/시간 초과 때 촬영·녹화 토글을 다시 실행하면 안 된다.
+                try:
+                    rejected = exc.code == 503 and json.loads(exc.read()).get("error") == "not_queued"
+                except (ValueError, AttributeError, OSError):
+                    rejected = False
+                if not rejected or attempt == 2:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
         try:
-            off = json.loads(reply).get("link") is False
+            info = json.loads(reply)
+            if info.get("link_error") == "not_owner":
+                raise OSError("다른 PC 가 기기를 사용 중입니다")
+            off = info.get("link") is False
         except (ValueError, AttributeError):
             off = False
         if off:

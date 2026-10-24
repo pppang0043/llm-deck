@@ -20,10 +20,10 @@ LV_FONT_DECLARE(font_ko_20);
 #define GAP 6
 // 세션을 띄우면 아래에서 세션 버튼 위에 겹쳐 뜨는 단축키 팝업 (버튼을 여러 칸으로)
 #define POP_BTN_H 32
-#define POP_MAX 13  // 키워드 7개 (pcpanel 의 KW_MAX) + 지우기 + 맨 아래 줄 5개
-#define POP_ROWS 3  // 키워드 두 줄 (둘째 줄 끝에 지우기), 맨 아래 줄: 녹음, Tab, Tab + Enter, Enter, Esc
+#define POP_MAX 14  // 키워드 7개 (pcpanel 의 KW_MAX) + /스킬 + 지우기 + 맨 아래 줄 5개
+#define POP_ROWS 3  // 키워드 두 줄 (둘째 줄 끝에 /스킬, 지우기), 맨 아래 줄: 녹음, Tab, Tab + Enter, Enter, Esc
 #define POP_BTN_MIN_W 52  // 버튼이 이보다 좁아지지 않는다. 줄에 다 안 들어가면 그 줄을 옆으로 밀어 본다
-#define POP_FIT_MAX 4     // 버튼이 이만큼 이하인 줄은 밀지 않고 한 화면에 다 넣는다 (넘치면 버튼을 줄인다)
+#define POP_FIT_MAX 5     // 버튼이 이만큼 이하인 줄은 밀지 않고 한 화면에 다 넣는다 (넘치면 버튼을 줄인다)
 #define POP_DICTATE_COLOR 0x7A2E2A
 #define POP_DRAG_START 10  // 이만큼 내려야 끌기 (그 전에는 버튼 누르기)
 #define POP_DRAG_CLOSE 40  // 놓을 때 이만큼 내렸으면 닫는다
@@ -63,12 +63,19 @@ static int pop_count = 0;
 static bool pop_open = false;
 static int area_w, area_h;  // 마지막 배치 (팝업 자리를 정한다)
 static void set_pop(bool open);
-// 빠른 답 창: 세션을 길게 누르면 가운데에 뜬다. 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속.
-static lv_obj_t *qr, *qr_title, *qr_btn[2], *qr_lbl[2];
+// /스킬 을 누르면 팝업 바로 위에 뜨는 스킬 고르기. 누르면 "/이름 " 만 넣고 (Enter 없이) 뒤에 할 일을 이어 적는다.
+// 이름은 companion/orca.py 의 SKILLS 에도 있어야 PC 가 입력한다
+static const char *const SKILLS[] = {"proto-design", "minipc"};
+static lv_obj_t *sk, *sk_row;
+static bool sk_open = false;
+static void place_pop();
+// 빠른 답 창: 세션을 길게 누르면 가운데에 뜬다. 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속. 숨기기는 늘.
+static lv_obj_t *qr, *qr_title, *qr_btn[3], *qr_lbl[3];
 static char qr_id[12] = "";  // 빠른 답을 보낼 세션 (비어 있으면 닫혀 있다)
 static bool qr_permission = false;
 static bool long_pressed = false;  // 길게 누른 뒤 손을 떼면 오는 CLICKED 는 무시한다
 static void close_qr();
+static void place_qr();
 
 // 작업 상태는 버튼 색으로 (orca.py 의 s)
 struct StateLook {
@@ -116,7 +123,7 @@ static bool is_waiting(const char *state) {
   return strcmp(state, "waiting") == 0 || strcmp(state, "awaiting-input") == 0 || strcmp(state, "done") == 0;
 }
 
-// 받아쓰기: 그 세션에 받아 적기 시작, 받아쓰는 중이면 끝내고 넣는다 (세션 버튼을 다시 누르기, 팝업의 받아쓰기 버튼)
+// 받아쓰기: 그 세션에 받아 적기 시작, 받아쓰는 중이면 끝내고 넣는다 (세션 버튼을 다시 누르기)
 static void dictate(const char *id) {
   if (askpanel_dictating()) {
     if (strcmp(askpanel_dictate_target(), id) == 0) {
@@ -168,21 +175,18 @@ static void btn_long_event(lv_event_t *e) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
-  if (!is_permission(s.state) && !is_waiting(s.state)) {
-    ui_toast("빠른 답은 권한 요청이나\n입력 기다림일 때만 됩니다", 2500);
-    return;
-  }
   snprintf(qr_id, sizeof(qr_id), "%s", s.id);
   qr_permission = is_permission(s.state);
+  bool answer = qr_permission || is_waiting(s.state);  // 빠른 답은 권한 요청이나 입력 기다림일 때만
   lv_label_set_text(qr_title, s.title);
   lv_label_set_text(qr_lbl[0], qr_permission ? "허용" : "계속");
-  lv_obj_set_style_bg_color(qr_btn[0], lv_color_hex(0x2E8B5E), 0);
-  if (qr_permission) {
-    lv_label_set_text(qr_lbl[1], "거부");
-    lv_obj_clear_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
-  }
+  lv_label_set_text(qr_lbl[1], "거부");
+  lv_label_set_text(qr_lbl[2], "숨기기");
+  if (answer) lv_obj_clear_flag(qr_btn[0], LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(qr_btn[0], LV_OBJ_FLAG_HIDDEN);
+  if (qr_permission) lv_obj_clear_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
+  place_qr();
   lv_obj_clear_flag(qr, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(qr);
 }
@@ -196,9 +200,14 @@ static void qr_event(lv_event_t *e) {
     return;
   }
   touched_at = lv_tick_get();
-  const char *reply = !qr_permission ? "continue" : k == 0 ? "allow" : "deny";
   char json[96];
-  snprintf(json, sizeof(json), "{\"orca\":\"reply\",\"id\":\"%s\",\"reply\":\"%s\"}", qr_id, reply);
+  if (k == 2) {
+    // 숨기기: PC 가 그 터미널을 닫을 때까지 목록에서 뺀다 (orca.py 의 hide)
+    snprintf(json, sizeof(json), "{\"orca\":\"hide\",\"id\":\"%s\"}", qr_id);
+  } else {
+    const char *reply = !qr_permission ? "continue" : k == 0 ? "allow" : "deny";
+    snprintf(json, sizeof(json), "{\"orca\":\"reply\",\"id\":\"%s\",\"reply\":\"%s\"}", qr_id, reply);
+  }
   link_send_event(json);
   close_qr();
 }
@@ -234,28 +243,34 @@ static void build_qr() {
   lv_obj_align(close, LV_ALIGN_TOP_RIGHT, 0, 0);
   lv_obj_add_event_cb(close, [](lv_event_t *e) { close_qr(); }, LV_EVENT_CLICKED, NULL);
   lv_obj_center(add_label(close, LV_SYMBOL_CLOSE, &lv_font_montserrat_14, COLOR_DIM));
-  for (int k = 0; k < 2; k++) {
+  static const uint32_t QR_COLORS[3] = {0x2E8B5E, 0xD8433A, 0x4A5563};
+  for (int k = 0; k < 3; k++) {
     qr_btn[k] = lv_btn_create(qr);
     lv_obj_set_style_radius(qr_btn[k], 8, 0);
     lv_obj_set_style_shadow_width(qr_btn[k], 0, 0);
-    lv_obj_set_style_bg_color(qr_btn[k], lv_color_hex(k == 0 ? 0x2E8B5E : 0xD8433A), 0);
+    lv_obj_set_style_bg_color(qr_btn[k], lv_color_hex(QR_COLORS[k]), 0);
     lv_obj_add_event_cb(qr_btn[k], qr_event, LV_EVENT_CLICKED, (void *)(intptr_t)k);
     qr_lbl[k] = add_label(qr_btn[k], "", &font_ko_20, lv_color_white());
     lv_obj_center(qr_lbl[k]);
   }
 }
 
-// 가운데에 뜬다. 버튼 두 개(거부가 숨으면 계속 하나가 넓게)
+// 가운데에 뜬다. 보이는 버튼들이 폭을 나눠 쓴다
 static void place_qr() {
   int w = LV_MIN(area_w - 24, 320), h = 112;
   lv_obj_set_size(qr, w, h);
   lv_obj_align(qr, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_width(qr_title, w - 16 - 28);
-  int bw = (w - 16 - 8) / 2, bh = h - 16 - 32;
-  lv_obj_set_size(qr_btn[0], bw, bh);
-  lv_obj_set_pos(qr_btn[0], 0, 32);
-  lv_obj_set_size(qr_btn[1], bw, bh);
-  lv_obj_set_pos(qr_btn[1], bw + 8, 32);
+  int shown = 0;
+  for (int k = 0; k < 3; k++)
+    if (!lv_obj_has_flag(qr_btn[k], LV_OBJ_FLAG_HIDDEN)) shown++;
+  int bw = (w - 16 - 8 * (shown - 1)) / shown, bh = h - 16 - 32, x = 0;
+  for (int k = 0; k < 3; k++) {
+    if (lv_obj_has_flag(qr_btn[k], LV_OBJ_FLAG_HIDDEN)) continue;
+    lv_obj_set_size(qr_btn[k], bw, bh);
+    lv_obj_set_pos(qr_btn[k], x, 32);
+    x += bw + 8;
+  }
 }
 
 // 버튼 글자: 버튼에 들어가는 만큼(세 줄까지), 넘치면 ... 으로. 짧으면 버튼 가운데에.
@@ -337,7 +352,7 @@ void orcapanel_refresh() {
   if (pop_open && (problem || active == count)) set_pop(false);
   if (pop_open) lv_label_set_text(pop_title, sessions[active].title);
   if (pop_open && pop_dictate) {
-    bool mine = strcmp(askpanel_dictate_target(), active_id) == 0;
+    bool mine = askpanel_dictate_target()[0] == '\0';  // 세션에 넣는 받아쓰기가 아니다
     int step = askpanel_dictate_step();
     lv_label_set_text(lv_obj_get_child(pop_dictate, 0), !mine || step == DICTATE_IDLE ? "녹음"
                                                         : !askpanel_dictating()     ? "넣는 중..."
@@ -447,6 +462,10 @@ static void pop_drag(lv_event_t *e) {
     if (!dragged && dy < POP_DRAG_START) return;  // 누르다 조금 흔들린 것은 그냥 누르기
     if (!dragged && lv_indev_get_scroll_obj(indev)) return;  // 줄을 옆으로 미는 중 (조금 비스듬해도 닫기가 아니다)
     if (!dragged) lv_obj_clear_state(lv_event_get_target(e), LV_STATE_PRESSED);  // 끌기가 되면 버튼 눌림 표시를 뗀다
+    if (!dragged && sk_open) {  // 스킬 고르기는 따라 내려가지 않으니 먼저 닫는다
+      sk_open = false;
+      lv_obj_add_flag(sk, LV_OBJ_FLAG_HIDDEN);
+    }
     dragged = true;
     drag_dy = dy;
     lv_obj_set_style_translate_y(pop, dy, 0);
@@ -472,23 +491,34 @@ static void add_pop_drag(lv_obj_t *obj) {
 static void pop_event(lv_event_t *e) {
   const char *key = (const char *)lv_event_get_user_data(e);
   if (dragged) return;  // 끌어서 닫는 중이었다
+  if (strcmp(key, "skills") == 0) {  // 스킬 고르기를 열고 닫는다 (PC 로는 보내지 않는다)
+    sk_open = !sk_open;
+    place_pop();
+    return;
+  }
   if (!pc_connected()) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
   touched_at = lv_tick_get();
   if (strcmp(key, "dictate") == 0) {
-    dictate(active_id);  // 팝업은 그대로: 받아 적은 글이 들어가면 이어서 Enter 를 누른다
+    // 녹음 버튼은 세션과 상관없는 그냥 받아쓰기: PC 에서 커서가 있는 곳(미러링 창에서 눌렀으면 그 직전 창)에 넣는다.
+    // 팝업은 그대로: 받아 적은 글이 들어가면 이어서 Enter 를 누른다
+    if (askpanel_dictating()) {
+      askpanel_release();
+    } else {
+      askpanel_press(true);
+    }
+    orcapanel_refresh();
     return;
   }
   char json[96];
   snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"%s\"}", active_id, key);
   link_send_event(json);
   // Tab, 지우기, Esc 만 빼면 모두 끝에 Enter 를 친다 (companion/orca.py 의 KEYS, 키워드): 보냈으니 닫는다.
-  // /orchestration 은 Enter 없이 띄어쓰기만 넣으니 (companion/typer.py) 뒤에 할 일을 이어 넣도록 그대로 둔다
-  if (strcmp(key, "tab") != 0 && strcmp(key, "erase") != 0 && strcmp(key, "esc") != 0 &&
-      strcmp(key, "orchestration") != 0)
-    close_pop();
+  // / 명령 줄 (/orchestration, /clear 처럼 이름이 / 로 시작) 은 이어서 다른 걸 누르도록 그대로 둔다
+  const char *name = (const char *)lv_obj_get_user_data(lv_event_get_target(e));
+  if (strcmp(key, "tab") != 0 && strcmp(key, "esc") != 0 && name[0] != '/') close_pop();
 }
 
 static lv_obj_t *add_pop_btn(int row, const char *key, const char *name, uint32_t color) {
@@ -522,6 +552,7 @@ static void fill_pop() {
     add_pop_btn(n++ < (kw + 1) / 2 ? 0 : 1, id, name, color);
   }
   // 입력칸에 쓴 글을 지운다 (Ctrl+U). / 명령이 아니지만 옆의 /clear 들과 같은 모양으로 (pcpanel 의 KW_SLASH_COLOR)
+  add_pop_btn(1, "skills", "/스킬", 0x16808C);
   add_pop_btn(1, "erase", "/지우기", 0x16808C);
   pop_dictate = add_pop_btn(2, "dictate", "녹음", POP_DICTATE_COLOR);
   add_pop_btn(2, "tab", "Tab", 0x3A4350);
@@ -530,7 +561,66 @@ static void fill_pop() {
   add_pop_btn(2, "esc", "Esc", 0x3A4350);
 }
 
-static void place_pop();
+// 스킬 버튼: "/이름 " 을 넣고 스킬 고르기만 닫는다 (팝업은 그대로, /orchestration 처럼)
+static void sk_event(lv_event_t *e) {
+  const char *skill = (const char *)lv_event_get_user_data(e);
+  if (!pc_connected()) {
+    ui_toast("연결된 PC가 없습니다", 2000);
+    return;
+  }
+  touched_at = lv_tick_get();
+  char json[96];
+  snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"skill:%s\"}", active_id, skill);
+  link_send_event(json);
+  sk_open = false;
+  place_pop();
+}
+
+static void build_sk() {
+  sk = lv_obj_create(panel);
+  lv_obj_remove_style_all(sk);
+  lv_obj_set_style_bg_color(sk, lv_color_hex(0x1C232B), 0);
+  lv_obj_set_style_bg_opa(sk, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(sk, 12, 0);
+  lv_obj_set_style_pad_all(sk, 6, 0);
+  lv_obj_set_style_border_width(sk, 1, 0);
+  lv_obj_set_style_border_color(sk, lv_color_hex(0x3A4350), 0);
+  lv_obj_set_style_shadow_width(sk, 24, 0);
+  lv_obj_set_style_shadow_color(sk, lv_color_black(), 0);
+  lv_obj_set_style_shadow_opa(sk, LV_OPA_80, 0);
+  lv_obj_clear_flag(sk, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(sk, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_align(add_label(sk, "스킬", &font_ko_14, COLOR_ACCENT), LV_ALIGN_TOP_LEFT, 0, 2);
+  lv_obj_t *close = lv_btn_create(sk);
+  lv_obj_set_size(close, 24, 22);
+  lv_obj_set_style_bg_opa(close, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_shadow_width(close, 0, 0);
+  lv_obj_set_style_pad_all(close, 0, 0);
+  lv_obj_set_ext_click_area(close, 8);
+  lv_obj_align(close, LV_ALIGN_TOP_RIGHT, 0, 0);
+  lv_obj_add_event_cb(close, [](lv_event_t *e) { sk_open = false; place_pop(); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_center(add_label(close, LV_SYMBOL_CLOSE, &lv_font_montserrat_14, COLOR_DIM));
+  sk_row = lv_obj_create(sk);
+  lv_obj_remove_style_all(sk_row);
+  lv_obj_set_flex_flow(sk_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_column(sk_row, 4, 0);
+  lv_obj_clear_flag(sk_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_pos(sk_row, 0, 28);
+  for (const char *skill : SKILLS) {
+    lv_obj_t *b = lv_btn_create(sk_row);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_pad_all(b, 2, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x16808C), 0);
+    lv_obj_add_event_cb(b, sk_event, LV_EVENT_CLICKED, (void *)skill);
+    lv_obj_t *lbl = add_label(b, "", &font_ko_14, lv_color_white());
+    lv_label_set_text_fmt(lbl, "/%s", skill);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(lbl, LV_PCT(100), lv_font_get_line_height(&font_ko_14));
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(lbl);
+  }
+}
 
 static void build_pop() {
   pop = lv_obj_create(panel);
@@ -571,6 +661,7 @@ static void build_pop() {
     add_pop_drag(r);  // 버튼 사이 틈
   }
   fill_pop();
+  build_sk();
 }
 
 void orcapanel_keywords_changed() {
@@ -583,7 +674,7 @@ void orcapanel_keywords_changed() {
 
 // 세션 버튼은 그대로 두고 그 위에 겹친다
 static void place_pop() {
-  // 3줄: 키워드 두 줄 (둘째 줄 끝에 지우기), 맨 아래는 녹음 / Tab / Tab + Enter / Enter / Esc (fill_pop)
+  // 3줄: 키워드 두 줄 (둘째 줄 끝에 /스킬, 지우기), 맨 아래는 녹음 / Tab / Tab + Enter / Enter / Esc (fill_pop)
   int rows = 0;
   for (lv_obj_t *r : pop_rows) rows += lv_obj_get_child_cnt(r) > 0;
   int pw = area_w - 8;
@@ -634,6 +725,18 @@ static void place_pop() {
   } else {
     lv_obj_add_flag(pop, LV_OBJ_FLAG_HIDDEN);
   }
+  // 스킬 고르기: 팝업 바로 위에 같은 폭으로, 스킬 버튼은 폭을 똑같이 나눈다
+  int sh = 12 + 28 + POP_BTN_H + 2, sn = sizeof(SKILLS) / sizeof(SKILLS[0]);
+  lv_obj_set_pos(sk, 4, area_h - ph - 4 - sh - 4);
+  lv_obj_set_size(sk, pw, sh);
+  lv_obj_set_size(sk_row, list_w, POP_BTN_H);
+  for (int k = 0; k < sn; k++) lv_obj_set_size(lv_obj_get_child(sk_row, k), (list_w - (sn - 1) * 4) / sn, POP_BTN_H);
+  if (pop_open && sk_open) {
+    lv_obj_clear_flag(sk, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(sk);
+  } else {
+    lv_obj_add_flag(sk, LV_OBJ_FLAG_HIDDEN);
+  }
   // 팝업이 떠 있는 동안은 쪽 아래에 팝업만큼 빈 자리를 두어, 가려진 세션 버튼을 위로 올릴 수 있게 한다
   for (Page &p : pages) {
     lv_obj_set_style_pad_bottom(p.page, pop_open ? ph + 8 : 8, 0);
@@ -664,6 +767,7 @@ static void reveal_active() {
 static void set_pop(bool open) {
   if (open != pop_open) {
     pop_open = open;
+    sk_open = false;  // 다시 열면 스킬 고르기는 닫혀 있다
     // 끌던 중이나 닫히며 내려간 자리에서 다시 열리지 않게
     lv_anim_del(pop, pop_translate);
     lv_obj_set_style_translate_y(pop, 0, 0);

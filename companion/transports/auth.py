@@ -77,6 +77,15 @@ def tcp_tag(key: bytes, challenge: bytes) -> bytes:
     return _mac(key, b"tcp", challenge)
 
 
+def http_reply_ok(key: bytes, nonce: bytes, ctr: int, body: bytes, tag_hex: str) -> bool:
+    """ACK 를 현재 HTTP 요청에 묶는다. 다른 요청/연결에서 받은 응답은 거절한다."""
+    try:
+        tag = bytes.fromhex(tag_hex)
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(tag, _mac(key, b"http-reply", nonce, _CTR.pack(ctr), body))
+
+
 def udp_open(key: bytes, nonce: bytes, packet: bytes) -> tuple[int, bytes] | None:
     """서명이 맞으면 (순번, 내용), 아니면 None."""
     if len(packet) < UDP_TRAILER:

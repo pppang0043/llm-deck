@@ -1,4 +1,6 @@
 #include "link.h"
+#include "build_identity.h"
+#include <esp_app_desc.h>
 
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -7,8 +9,15 @@
 
 #include <SD.h>
 #include <WiFiUdp.h>
+#include <WiFi.h>
 
 #include "psram_json.h"
+#include "message_queue.h"
+#include "command_journal.h"
+#include "command_protocol.h"
+#include "control_policy.h"
+#include <mbedtls/sha256.h>
+#include <memory>
 #include "alerts.h"
 #include "askpanel.h"
 #include "orcapanel.h"
@@ -34,52 +43,40 @@
 #include "net.h"
 #include "ui.h"
 
-// 이 시간 동안 PC 에서 소식이 없으면 연결이 끊긴 것으로 본다
-#define STALE_MS 120000
+static const char *firmware_build_id() {
+  static char id[21] = {};
+  if (!id[0]) {
+    const uint8_t *sha = esp_app_get_description()->app_elf_sha256;
+    for (int i = 0; i < 10; ++i) snprintf(id + i * 2, 3, "%02x", sha[i]);
+  }
+  return id;
+}
+
 // 받은 사용량을 플래시에 저장하는 최소 간격. 플래시는 쓰기 횟수에 수명이 있어 자주 쓰지 않는다.
 #define SAVE_INTERVAL_MS 300000
 // 플래시(NVS)에 저장할 수 있는 글자 수 한계
 #define SAVE_MAX_BYTES 3900
 
-// 받은 줄을 쌓아 두는 칸. 한 칸만 두면 link_loop 가 돌기 전에 두 줄이 오면 앞의 것이 사라진다
-// (사용량 바로 뒤 ORCA, 알림 바로 뒤 질문 등). 줄이 클 수 있어 글자는 PSRAM 에 둔다.
-template <typename T>
-struct PsramStd {
-  using value_type = T;
-  PsramStd() = default;
-  template <typename U>
-  PsramStd(const PsramStd<U> &) {}
-  T *allocate(size_t n) {
-    T *p = (T *)heap_caps_malloc(n * sizeof(T), MALLOC_CAP_SPIRAM);
-    if (!p) p = (T *)malloc(n * sizeof(T));
-    if (!p) abort();
-    return p;
-  }
-  void deallocate(T *p, size_t) { heap_caps_free(p); }
-  template <typename U>
-  bool operator==(const PsramStd<U> &) const { return true; }
-  template <typename U>
-  bool operator!=(const PsramStd<U> &) const { return false; }
-};
-using PsString = std::basic_string<char, std::char_traits<char>, PsramStd<char>>;
-
-#define QUEUE_LEN 6
-struct Pending {
-  PsString message;
-  Link from = LINK_NONE;
-  bool usage = true;
-};
+// 메시지는 PSRAM 에만 둔다. 부족하면 기존 명령을 보존하고 새 요청을 거절한다.
+static void *message_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM); }
 static SemaphoreHandle_t lock;
-static Pending queue[QUEUE_LEN];
-static int queue_head = 0;
-static int queue_count = 0;
+static MessageQueue pending(message_alloc, heap_caps_free);
+static Preferences command_prefs;
+static SemaphoreHandle_t command_lock;
+static bool save_commands(const CommandJournal::Storage &data) {
+  return command_prefs.putBytes("journal", &data, sizeof(data)) == sizeof(data);
+}
+static CommandJournal commands(save_commands);
+
+// 생존 신호는 큐를 차지하지 않는다. loop 에서만 연결/UI 상태를 바꾼다.
+static uint32_t heartbeat_ms[5] = {};
+static uint32_t lease_ms[5] = {};
 
 static volatile Link active = LINK_NONE;
 static HelperInfo helper = {};
 // 이번 연결에서 펌웨어 버전을 알렸는지, 버전이 달라 알림을 띄웠는지
 static bool told_proto = false;
 static bool warned_proto = false;
-static uint32_t last_ms = 0;
 static void (*set_mic_cb)(bool);
 static void (*rotate_cb)() = nullptr;
 
@@ -135,7 +132,7 @@ static const char *link_tag(Link link) {
 
 // 여러 PC 가 동시에 보내면 "현재 연결"이 30초마다 바뀌어 마이크 소리·사진이 오락가락한다.
 // 그래서 우선순위를 둔다: USB > Wi-Fi > 블루투스 > 클라우드. 높은 쪽이 살아 있으면 낮은 쪽은
-// 현재 연결을 가져가지 못하고, 그 쪽이 보낸 사용량도 화면에 쓰지 않는다 (명령은 그대로 따른다).
+// 현재 연결을 가져가지 못한다. 표시와 제어 명령은 선택된 PC 만 사용한다.
 #define LINK_FRESH_MS 75000
 static uint32_t heard_ms[5] = {0};
 
@@ -151,7 +148,8 @@ static int priority(Link link) {
 
 static bool alive(Link link) {
   if (!settings_link_allowed(link)) return false;
-  if (!heard_ms[link] || millis() - heard_ms[link] > LINK_FRESH_MS) return false;
+  if (!heard_ms[link] || millis() - heard_ms[link] > (lease_ms[link] ? lease_ms[link] : LINK_FRESH_MS)) return false;
+  if (link == LINK_WIFI && WiFi.status() != WL_CONNECTED) return false;
   // 케이블을 뽑거나 블루투스가 끊기면 기다리지 않고 바로 내려놓는다
   if (link == LINK_USB && !usb_host_present()) return false;
   if (link == LINK_BLE && !ble_link_connected()) return false;
@@ -189,8 +187,8 @@ static void note_helper(JsonDocument &doc) {
   if (doc["ask_fw"] == true) told_proto = false;
   if (!told_proto) {
     told_proto = true;
-    char json[80];
-    snprintf(json, sizeof(json), "{\"fw_proto\":%d,\"fw\":\"%s\"}", FW_PROTO, __DATE__ " " __TIME__);
+    char json[128];
+    snprintf(json, sizeof(json), "{\"fw_proto\":%d,\"fw\":\"%s\",\"build\":\"%s\"}", FW_PROTO, __DATE__ " " __TIME__, firmware_build_id());
     link_send_event(json);
   }
   if (helper.proto != FW_PROTO && !warned_proto) {
@@ -203,8 +201,21 @@ static void note_helper(JsonDocument &doc) {
 }
 
 void link_init(void (*set_mic)(bool on)) {
+  (void)firmware_build_id();
   set_mic_cb = set_mic;
   lock = xSemaphoreCreateMutex();
+  command_lock = xSemaphoreCreateMutex();
+  CommandJournal::Storage journal;
+  if (!command_prefs.begin("cmd-journal")) {
+    commands.load(nullptr, 1); // 저장소가 없으면 보호 명령은 거절한다
+  } else if (!command_prefs.isKey("journal")) {
+    commands.load(nullptr, 0);
+  } else if (command_prefs.getBytesLength("journal") == sizeof(journal) &&
+             command_prefs.getBytes("journal", &journal, sizeof(journal)) == sizeof(journal)) {
+    commands.load(&journal, sizeof(journal));
+  } else {
+    commands.load(nullptr, 1);
+  }
   ui_set_status(link_name(LINK_NONE));
 
   prefs.begin("llm-deck");
@@ -217,44 +228,173 @@ void link_init(void (*set_mic)(bool on)) {
   }
 }
 
-void link_submit(Link from, const char *data, size_t len, bool usage) {
-  xSemaphoreTake(lock, portMAX_DELAY);
-  // 가득 차면 가장 오래된 줄을 버린다
-  if (queue_count == QUEUE_LEN) {
-    queue_head = (queue_head + 1) % QUEUE_LEN;
-    queue_count--;
-    Serial.println("[link] queue full, dropped oldest message");
+// 상태만 들어 있는 메시지는 같은 필드 집합끼리 최신 것으로 합친다.
+// 명령이 하나라도 섞였으면 전체를 FIFO 에 보존한다 (촬영 직전 화면 갱신 등).
+static uint32_t snapshot_key(JsonObjectConst doc) {
+  static const char *const fields[] = {"services", "updated", "host", "now", "utc_offset", "helper",
+                                      "ask_mic", "keywords", "os", "pc", "orca", "sync_url"};
+  uint32_t mask = 0;
+  for (JsonPairConst item : doc) {
+    bool known = false;
+    for (unsigned i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+      if (strcmp(item.key().c_str(), fields[i]) == 0) { mask |= 1U << i; known = true; break; }
+    }
+    if (!known) return 0;
   }
-  Pending &p = queue[(queue_head + queue_count) % QUEUE_LEN];
-  p.message.assign(data, len);
-  p.from = from;
-  p.usage = usage;
-  queue_count++;
+  return mask;
+}
+
+static void command_reply(String *reply, const char *client, uint32_t seq, const char *state) {
+  if (!reply) return;
+  char text[128];
+  snprintf(text, sizeof(text), "{\"ack\":[\"%s\",%lu,\"%s\"]}", client, (unsigned long)seq, state);
+  *reply = text;
+}
+
+bool link_submit(Link from, const char *data, size_t len, bool usage, String *reply, uint64_t peer) {
+  if (from <= LINK_NONE || from > LINK_CLOUD || !len || len > MessageQueue::MAX_MESSAGE) return false;
+  JsonDocument doc(PSRAM_JSON);
+  if (deserializeJson(doc, data, len) || !doc.is<JsonObjectConst>()) return false;
+  // 업로더의 무작위 도전값을 그대로 돌려준다. 오래된 로그를 새 부팅 확인으로 착각하지 않는다.
+  if (doc["firmware_info"].is<const char *>() && doc.size() == 1 && from != LINK_CLOUD) {
+    const char *probe = doc["firmware_info"];
+    if (strlen(probe) != 32) return false;
+    for (int i = 0; i < 32; ++i) if (!isxdigit((unsigned char)probe[i])) return false;
+    if (reply) *reply = String("{\"fw_proto\":") + FW_PROTO + ",\"build\":\"" + firmware_build_id() +
+                        "\",\"id\":\"" + net_device_id() + "\",\"probe\":\"" + probe + "\"}";
+    return true;
+  }
+  // 명령/조회는 보낸 통신 경로로 직접 답한다. 활성 PC 로 보내면 다른 PC 가 ACK 를 받게 된다.
+  if (doc["command_protocol"] == true && doc.size() == 1 && from != LINK_CLOUD) {
+    if (reply) *reply = String("{\"command_proto\":1,\"id\":\"") + net_device_id() + "\"}";
+    return true;
+  }
+  bool query = doc["command_status"].is<JsonObjectConst>();
+  bool control = doc["command"].is<JsonObjectConst>();
+  if (query || control) {
+    if (doc.size() != 1 || from == LINK_CLOUD) return false;
+    JsonObjectConst request = doc[query ? "command_status" : "command"];
+    const char *client = request["client"] | "";
+    if (!CommandJournal::valid_client(client) || !request["seq"].is<uint32_t>() || request["seq"].as<uint32_t>() == 0) return false;
+    uint32_t seq = request["seq"];
+    if (query) {
+      xSemaphoreTake(command_lock, portMAX_DELAY);
+      command_reply(reply, client, seq, commands.status(client, seq));
+      xSemaphoreGive(command_lock);
+      return true;
+    }
+    const char *payload = request["json"] | "";
+    JsonDocument body(PSRAM_JSON);
+    if (!payload[0] || deserializeJson(body, payload) || !valid_command(body.as<JsonObjectConst>())) {
+      command_reply(reply, client, seq, "invalid");
+      return true;
+    }
+    if (from != LINK_USB) {
+      for (const char *key : {"links", "sd_pull", "sd_clear", "health_clear", "hang_test", "crash_test", "wifi_add", "wifi_clear"}) {
+        if (!body[key].isNull()) { command_reply(reply, client, seq, "forbidden"); return true; }
+      }
+    }
+    if (!control_allowed(from, active, usage, body.as<JsonObjectConst>())) {
+      command_reply(reply, client, seq, "forbidden");
+      return true;
+    }
+    CommandJournal::Request req;
+    strlcpy(req.client, client, sizeof(req.client));
+    req.seq = seq;
+    if (mbedtls_sha256((const unsigned char *)payload, strlen(payload), req.digest, 0) != 0) return false;
+    xSemaphoreTake(command_lock, portMAX_DELAY);
+    int ticket;
+    const char *state = commands.reserve(req, ticket);
+    if (strcmp(state, "new") == 0) {
+      xSemaphoreTake(lock, portMAX_DELAY);
+      bool ok = pending.push(from, usage, 0, data, len, ticket, peer);
+      xSemaphoreGive(lock);
+      if (!ok) commands.cancel(ticket);
+      state = ok ? "queued" : "rejected";
+    }
+    command_reply(reply, client, seq, state);
+    xSemaphoreGive(command_lock);
+    return true;
+  }
+  // 순수 생존 신호만 바로 받는다. 제어 명령이 함께 있으면 생략하지 않는다.
+  if (doc["heartbeat"] == true && doc.size() == 1 && from != LINK_CLOUD) {
+    if (!usage) return true;  // 대기 BLE PC 는 사용 중인 PC 의 생존 시간을 늘리지 않는다
+    xSemaphoreTake(lock, portMAX_DELAY);
+    heartbeat_ms[from] = millis() ? millis() : 1;
+    xSemaphoreGive(lock);
+    return true;
+  }
+  if (has_control(doc.as<JsonObjectConst>()) && !control_allowed(from, active, usage, doc.as<JsonObjectConst>())) {
+    if (reply) *reply = "{\"link_error\":\"not_owner\"}";
+    return true;
+  }
+  if (!usage && !has_control(doc.as<JsonObjectConst>())) return true; // 대기 PC 의 상태는 큐도 차지하지 않는다
+  uint32_t snapshot = usage ? snapshot_key(doc.as<JsonObjectConst>()) : 0;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = pending.push(from, usage, snapshot, data, len, -1, peer);
   xSemaphoreGive(lock);
+  if (!ok) Serial.printf("[link] rejected message from %s: queue/memory limit\n", link_tag(from));
+  return ok;
 }
 
 void link_loop() {
-  // 한 번에 한 줄씩 꺼낸다. 버퍼를 맞바꿔 칸의 메모리를 다시 쓴다.
-  static PsString message;
-  Link from = LINK_NONE;
-  bool usage = true;
-  message.clear();
+  MessageQueue::Item item;
   xSemaphoreTake(lock, portMAX_DELAY);
-  if (queue_count) {
-    Pending &p = queue[queue_head];
-    message.swap(p.message);
-    from = p.from;
-    usage = p.usage;
-    queue_head = (queue_head + 1) % QUEUE_LEN;
-    queue_count--;
+  pending.pop(item);
+  for (int i = LINK_USB; i <= LINK_WIFI; ++i) {
+    if (heartbeat_ms[i]) {
+      heard_ms[i] = heartbeat_ms[i];
+      lease_ms[i] = 15000;
+      heartbeat_ms[i] = 0;
+    }
   }
   xSemaphoreGive(lock);
+  // 큐가 비어 있어도 생존 신호로 활성 연결을 고른다.
+  set_active(best_link());
+  std::unique_ptr<char, decltype(&heap_caps_free)> owned(item.data, heap_caps_free);
+  const char *message = item.data;
+  Link from = static_cast<Link>(item.from);
+  bool usage = item.usage;
+  // 보호 명령은 실행하기 전에 NVS 에 ID/내용 해시를 남긴다. 재부팅 후에도 같은 ID 는 재실행하지 않는다.
+  JsonDocument envelope(PSRAM_JSON);
+  CommandJournal::Request executed;
+  bool durable = false, command_ok = true, links_handled = false;
+  if (item.command_ticket >= 0) {
+    if (deserializeJson(envelope, message, item.len)) {
+      xSemaphoreTake(command_lock, portMAX_DELAY);
+      commands.cancel(item.command_ticket);
+      xSemaphoreGive(command_lock);
+      message = nullptr;
+    } else {
+      xSemaphoreTake(command_lock, portMAX_DELAY);
+      durable = commands.start(item.command_ticket, executed);
+      xSemaphoreGive(command_lock);
+      message = durable ? envelope["command"]["json"].as<const char *>() : nullptr;
+      if (message) item.len = strlen(message);
+    }
+  }
+
+
+  // 수신 당시 허용됐어도 큐에 있는 동안 다른 PC 로 전환됐을 수 있다.
+  if (message) {
+    JsonDocument policy(PSRAM_JSON);
+    bool selected = usage;
+    if (from == LINK_BLE) selected = item.peer && item.peer == ble_primary_cookie();
+    if (from == LINK_WIFI) selected = net_peer_is_owner((uint32_t)item.peer);
+    usage = selected;
+    if (deserializeJson(policy, message, item.len) || (!selected && !has_control(policy.as<JsonObjectConst>())) ||
+        (has_control(policy.as<JsonObjectConst>()) && !control_allowed(from, active, selected, policy.as<JsonObjectConst>()))) {
+      command_ok = false;
+      message = nullptr;
+    }
+  }
 
   // USB 로 온 {"links": {"usb": true, "ble": false, ...}} 는 연결 방식 설정을 바꾼다. USB 를 꺼 둔 상태에서도
   // 받는다 (케이블을 직접 꽂은 PC 이므로 믿고, USB 를 실수로 꺼도 PC 에서 되살릴 수 있게).
-  if (!message.empty() && from == LINK_USB && message.find("\"links\"") != std::string::npos) {
+  if (message != nullptr && from == LINK_USB && strstr(message, "\"links\"") != nullptr) {
     JsonDocument doc(PSRAM_JSON);
-    if (!deserializeJson(doc, message.data(), message.size()) && doc["links"].is<JsonObjectConst>()) {
+    if (!deserializeJson(doc, message, item.len) && doc["links"].is<JsonObjectConst>()) {
+      links_handled = true;
       JsonObjectConst links = doc["links"];
       if (links["usb"].is<bool>()) settings_set_link_allowed(LINK_USB, links["usb"]);
       if (links["ble"].is<bool>()) settings_set_link_allowed(LINK_BLE, links["ble"]);
@@ -264,38 +404,41 @@ void link_loop() {
   }
   // USB 로 온 {"pair": true} 에는 Wi-Fi 인증 키로 답한다 (net.h). 케이블을 직접 꽂은 PC 만 믿고, 블루투스는
   // 암호화 없이 연결되어 엿들을 수 있으므로 주지 않는다. 키가 로그에 남지 않게 알림 기록 없이 바로 보낸다
-  if (!message.empty() && from == LINK_USB && message.find("\"pair\"") != std::string::npos) {
+  if (message != nullptr && from == LINK_USB && strstr(message, "\"pair\"") != nullptr) {
     JsonDocument doc(PSRAM_JSON);
-    if (!deserializeJson(doc, message.data(), message.size()) && doc["pair"] == true) {
+    if (!deserializeJson(doc, message, item.len) && doc["pair"] == true) {
       usb_send_event(net_pair_json().c_str());
       Serial.println("[link] wifi key given to the USB PC");
     }
   }
   // 설정에서 끈 연결 방식으로 온 것은 버린다
-  if (!message.empty() && !settings_link_allowed(from)) {
+  if (message != nullptr && !settings_link_allowed(from)) {
     static uint32_t warned_ms = 0;
     if (millis() - warned_ms > 60000) {
       warned_ms = millis();
       Serial.printf("[link] ignoring %s (turned off in settings)\n", link_tag(from));
     }
-    message.clear();
+    if (!links_handled) command_ok = false;
+    message = nullptr;
   }
-  if (!message.empty()) {
+  if (message != nullptr) {
     JsonDocument doc(PSRAM_JSON);
-    if (deserializeJson(doc, message.data(), message.size())) {
-      Serial.printf("[link] bad json from %s (%u bytes)\n", link_tag(from), (unsigned)message.size());
+    if (deserializeJson(doc, message, item.len)) {
+      command_ok = false;
+      Serial.printf("[link] bad json from %s (%u bytes)\n", link_tag(from), (unsigned)item.len);
     } else {
-      last_ms = millis();
-      heard_ms[from] = millis();
+      if (usage) heard_ms[from] = millis();
+      // 이전 도우미는 30초마다 보내므로 기존 75초 유예를 유지한다.
+      if (doc["helper"]["proto"].is<int>() && doc["helper"]["proto"].as<int>() < 4) lease_ms[from] = 0;
       Link best = best_link();
       set_active(best == LINK_NONE ? from : best);
-      if (doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
+      if (from == active && usage && doc["now"].is<int64_t>()) set_clock(doc["now"], doc["utc_offset"] | 32400);
       if (doc["mic"].is<bool>()) set_mic_cb(doc["mic"]);
       if (doc["battery_mv"].is<int>()) battery_calibrate(doc["battery_mv"]);
       // PC 에서 화면을 바꾸면 사람이 만진 것처럼 화면 보호기·절전을 깨운다
       if (doc["camera"].is<const char *>()) {
         display_poke();
-        camera_ui_command(doc["camera"]);
+        if (!camera_ui_command(doc["camera"])) command_ok = false;
       }
       if (doc["view"].is<const char *>()) {
         display_poke();
@@ -303,6 +446,11 @@ void link_loop() {
       }
       if (doc["camera_mount"].is<JsonObjectConst>()) {
         camera_set_mount(doc["camera_mount"]["rot"] | 0, doc["camera_mount"]["mirror"] | false);
+      }
+      if (doc["camera_ctl"].is<JsonObjectConst>()) {
+        for (JsonPairConst c : doc["camera_ctl"].as<JsonObjectConst>()) {
+          if (!camera_ctl_set(c.key().c_str(), c.value() | 0)) command_ok = false;
+        }
       }
       if (doc["saver"] == true) saver_demo();
       // 진단용: I2C 데이터 선을 잠깐 낮게 잡아 막힌 상황을 만든다 (막힘 풀기가 동작하는지 본다)
@@ -316,7 +464,7 @@ void link_loop() {
         size_t len;
         if (camera_test_pattern(&jpg, &len)) photo_save(jpg, len);
       }
-      if (doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
+      if (from == active && usage && doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
       if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
       if (doc["wifi_clear"] | false) net_clear_wifi();
       if (doc["services"].is<JsonArrayConst>() && !usage) {
@@ -339,7 +487,7 @@ void link_loop() {
           f.close();
         }
         if (dir) dir.close();
-        if (last.length()) photo_send_sd_file(("/videos/" + last).c_str());
+        if (!last.length() || !photo_send_sd_file(("/videos/" + last).c_str())) command_ok = false;
       }
       // 진단용: SD 카드의 사진을 모두 지운다 (케이블로 연결한 PC 에서만)
       // 진단용(USB 만): 일부러 프로그램을 멈춰 재시작 원인 기록이 되는지 본다
@@ -356,6 +504,7 @@ void link_loop() {
         abort();
       }
       if (doc["sd_clear"] == true && from == LINK_USB && sd_video_active()) {
+        command_ok = false;
         Serial.println("[link] sd_clear refused: video still being written");
       } else if (doc["sd_clear"] == true && from == LINK_USB) {
         storage_clear("/photos");
@@ -366,6 +515,12 @@ void link_loop() {
       if (doc["os"].is<const char *>() && from == active && usage) pcpanel_set_os(doc["os"]);
       if (doc["keywords"].is<JsonArrayConst>() && from == active && usage) pcpanel_set_keywords(doc["keywords"]);
       if (doc["toast"].is<const char *>() && from == active && usage) ui_toast(doc["toast"], 3000);
+      if (doc["scan"].is<const char *>() && from == active && usage) camera_ui_scan_result(doc["scan"]);
+      if (doc["scan_roi"].is<JsonArrayConst>() && from == active && usage) {
+        JsonArrayConst a = doc["scan_roi"];
+        int box[4] = {a[0] | 0, a[1] | 0, a[2] | 0, a[3] | 0};
+        camera_ui_scan_roi(box, a.size() == 4);
+      }
       if (doc["ask"].is<JsonObjectConst>() && from == active && usage) askpanel_set(doc["ask"]);
       if (doc["ask_mic"].is<bool>() && from == active && usage) askpanel_set_mic(doc["ask_mic"]);
       if (doc["orca"].is<JsonObjectConst>() && from == active && usage) orcapanel_set(doc["orca"]);
@@ -405,10 +560,13 @@ void link_loop() {
     }
   }
 
+  if (durable) {
+    xSemaphoreTake(command_lock, portMAX_DELAY);
+    commands.finish(executed, command_ok);
+    xSemaphoreGive(command_lock);
+  }
   save_if_due();
-  if (active != LINK_NONE && millis() - last_ms > STALE_MS) {
-    set_active(LINK_NONE);
-  } else if (active != LINK_NONE && !alive(active)) {
+  if (active != LINK_NONE && !alive(active)) {
     // 지금 연결이 끊겼거나 설정에서 껐으면 살아 있는 다음 연결로 넘어간다 (없으면 "PC 없음")
     set_active(best_link());
   }

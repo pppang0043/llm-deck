@@ -9,6 +9,7 @@ def o(tmp_path, monkeypatch):
     monkeypatch.setattr(orca, "_screen_order", lambda: ({}, {}))
     monkeypatch.setattr(orca, "_custom_titles", lambda: {})
     monkeypatch.setattr(orca.time, "sleep", lambda s: None)
+    monkeypatch.setattr(orca, "HIDDEN_FILE", tmp_path / "orca_hidden.json")
     inst = orca.Orca({"enabled": False})  # 읽는 스레드는 띄우지 않는다
     inst.sent_cmds = []
     return inst
@@ -90,6 +91,12 @@ def test_send_key_keyword_and_unknown(o):
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/orchestration ")]
     assert o.pending_toast == "보냈습니다: /orchestration"
     o.sent_cmds.clear()
+    o.send_key("abc", "skill:minipc")  # 팝업 /스킬 의 스킬: 글만 보내고 Enter 는 치지 않는다
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/minipc ")]
+    assert o.pending_toast == "보냈습니다: /minipc"
+    o.sent_cmds.clear()
+    o.send_key("abc", "skill:rm -rf")  # SKILLS 에 없는 스킬은 입력하지 않는다
+    assert o.sent_cmds == [] and "모르는 키워드" in o.pending_toast
     o.send_key("abc", "clear")  # /clear 키워드는 지우기와 다르다: /clear 를 치고 Enter
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/clear"),
                            ("terminal", "send", "--terminal", "term_abc", "--enter")]
@@ -141,6 +148,42 @@ def test_orchestration_workers_hidden(o, monkeypatch):
     monkeypatch.setattr(orca, "_screen_order", lambda: ({}, {}))
     assert [r["id"] for r in o._read()["list"]] == ["main1"]
     assert "work1" not in o.handles
+
+
+def test_finished_worker_hidden(o):
+    # 일을 끝낸 워커는 ORCA 가 parentPaneKey 를 지운다. 첫 글(WORKER_PROMPT)로 알아본다
+    terminals = [{"handle": f"term_{n}", "tabId": n, "leafId": "l", "worktreePath": "/w/a",
+                  "title": n, "connected": True, "agentIdentity": "claude"} for n in ("main1", "done1")]
+    ps = {"worktrees": [{"agents": [
+        {"paneKey": "main1:l", "parentPaneKey": None, "state": "working", "prompt": "/orchestration 진행해"},
+        {"paneKey": "done1:l", "parentPaneKey": None, "state": "done",
+         "prompt": orca.WORKER_PROMPT + " Your task ID is: task_831c3998cb04"}]}]}
+    o._run = lambda *a, **k: ps if a[:2] == ("worktree", "ps") else {"terminals": terminals}
+    assert [r["id"] for r in o._read()["list"]] == ["main1"]
+
+
+def test_hide_session(o):
+    terminals = [{"handle": f"term_{n}", "tabId": n, "leafId": "l", "worktreePath": "/w/a",
+                  "title": n, "connected": True, "agentIdentity": "claude"} for n in ("keep1", "hide1")]
+    o._run = lambda *a, **k: {"worktrees": []} if a[:2] == ("worktree", "ps") else {"terminals": terminals}
+    o._read()
+    o.on_event({"orca": "hide", "id": "hide1"})
+    assert [r["id"] for r in o._read()["list"]] == ["keep1"]
+    # 도우미를 다시 켜도 숨긴 채로
+    again = orca.Orca({"enabled": False})
+    again._run = o._run
+    assert [r["id"] for r in again._read()["list"]] == ["keep1"]
+    # 터미널을 닫으면 숨긴 목록에서도 지운다
+    terminals.pop()
+    again._read()
+    assert again.hidden == set()
+    assert orca.json.loads(orca.HIDDEN_FILE.read_text()) == []
+
+
+def test_hide_unknown_session(o):
+    o.on_event({"orca": "hide", "id": "nope"})
+    assert o.hidden == set()
+    assert "찾지 못했습니다" in o.pending_toast
 
 
 def test_read_when_cli_missing(o):

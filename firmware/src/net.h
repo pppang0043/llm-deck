@@ -39,6 +39,8 @@ bool net_ble_mac(const char *label, const void *a, size_t an, const void *b, siz
                  uint8_t out[32]);
 // PC 가 기기별 키를 고르는 이름표 (Wi-Fi MAC 12자)
 String net_device_id();
+// 인증된 Wi-Fi PC 중 현재 선택된 주소인지 (조회는 소유권을 갱신하지 않는다).
+bool net_peer_is_owner(uint32_t peer);
 // UDP 로 보낼 내용 뒤에 붙일 순번·서명 (NET_UDP_TRAILER 바이트). Wi-Fi 로 인증된 PC 가 없으면 false. 어느 태스크에서 불러도 된다
 bool net_udp_trailer(const uint8_t *data, size_t len, uint8_t *trailer);
 // TCP 로 PC 에 접속한 직후 부른다 (위 TCP 인증). 실패하면 false (끊고 다시 시도)

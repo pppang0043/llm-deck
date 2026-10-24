@@ -370,8 +370,9 @@ class Mirror:
                     try:
                         with mirror.send_lock:
                             transport.send(message)
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        self._reply(409, str(exc).encode("utf-8"), "text/plain; charset=utf-8")
+                        return
                 self._reply(204, b"", "text/plain")
 
         return Handler

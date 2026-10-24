@@ -193,7 +193,8 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     defaults.register(defaults: ["onTop": true, "zoom": 1, "mirrorRight": 12.0, "mirrorBottom": 12.0])
   }
 
-  var zoom: Int { min(max(defaults.integer(forKey: "zoom"), 1), 3) }
+  // 배율. 메뉴의 1·2·3배, 또는 창 가장자리를 끌어 맞춘 크기 (0.5~4배)
+  var zoom: Double { min(max(defaults.double(forKey: "zoom"), 0.5), 4) }
   var onTop: Bool { defaults.bool(forKey: "onTop") }
 
   // 창을 연다 (열려 있으면 앞으로). 창이 떠 있는 동안만 Dock 아이콘과 메뉴 막대 메뉴를 보인다
@@ -213,7 +214,7 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
   }
 
   func makeWindow() -> NSWindow {
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled, .closable, .miniaturizable],
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
     window.title = "LLM Deck 미러링"
     window.isReleasedWhenClosed = false
@@ -268,10 +269,21 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     NSApp.setActivationPolicy(.accessory)
   }
 
+  // 창 가장자리를 끌어 크기를 바꾸면 그 배율을 기억한다
+  func windowDidEndLiveResize(_ note: Notification) {
+    guard let window else { return }
+    defaults.set(window.contentRect(forFrameRect: window.frame).width / CGFloat(w), forKey: "zoom")
+    fit()
+  }
+
   // 창 내용 크기를 기기 화면 × 배율로 맞춘다 (창 오른쪽 아래 모서리는 그대로, 화면 밖으로는 안 나가게)
   func fit() {
-    guard let window else { return }
-    let size = NSSize(width: w * zoom, height: h * zoom)
+    guard let window, !window.inLiveResize else { return }  // 끄는 동안 새 장이 와도 되돌리지 않는다
+    // 끌어서 크기를 바꿀 때도 기기 화면 비율을 지킨다
+    window.contentAspectRatio = NSSize(width: w, height: h)
+    window.contentMinSize = NSSize(width: Double(w) * 0.5, height: Double(h) * 0.5)
+    window.contentMaxSize = NSSize(width: Double(w) * 4, height: Double(h) * 4)
+    let size = NSSize(width: (Double(w) * zoom).rounded(), height: (Double(h) * zoom).rounded())
     let now = window.frame
     if window.contentRect(forFrameRect: now).size == size { return }
     var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
@@ -400,7 +412,7 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     if item.action == #selector(toggleOnTop) {
       item.state = onTop ? .on : .off
     } else if item.action == #selector(setZoom(_:)) {
-      item.state = item.tag == zoom ? .on : .off
+      item.state = Double(item.tag) == zoom ? .on : .off
     }
     return true
   }

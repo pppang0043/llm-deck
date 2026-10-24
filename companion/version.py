@@ -4,14 +4,16 @@ PROTO 는 서로 주고받는 내용(메시지 칸, 인증 방식)이 바뀔 때
     1: 이 번호를 주고받기 전 (보내지 않으면 0 으로 본다)
     2: Wi-Fi 인증, 키워드 버튼, ORCA 답장, 도우미 상태("helper")
     3: 블루투스 인증
+    4: 독립 생존 신호(5초), 수신 큐 포화 응답
+    5: 영구 명령 ID, 처리 완료 조회, 서명된 Wi-Fi ACK
 """
 
 import subprocess
 from pathlib import Path
 
-PROTO = 3
+PROTO = 5
 # git 이 없거나 저장소 밖에서 돌 때 보여줄 버전
-VERSION = "proto3"
+VERSION = "proto5"
 # 기기가 버전을 알려 주지 않은 채 사용량을 이만큼 보내면 오래된 펌웨어로 본다
 SILENT_SENDS = 3
 
@@ -83,7 +85,7 @@ class Peer:
         first = self.proto is None
         self.proto = proto
         if first:
-            self.log(f"[version] 기기 펌웨어 {event.get('fw', '?')} (proto {proto}), 도우미 {version()} (proto {PROTO})")
+            self.log(f"[version] 기기 펌웨어 {event.get('fw', '?')} (proto {proto}, build {event.get('build', 'unknown')}), 도우미 {version()} (proto {PROTO})")
         message = compare(proto)
         if message and not self.warned:
             self.warned = True

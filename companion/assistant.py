@@ -52,6 +52,8 @@ SYSTEM_PROMPT = (
 LONG_WORDS = ("길게", "자세히", "자세하게", "전부", "전체", "다 읽어", "풀어서", "길게 말")
 SAMPLE_RATE = 16000
 MAX_RECORD_SECONDS = 60
+# 소리가 오지 않은 마이크는 이만큼 동안 맨 뒤로 미룬다 (녹음마다 1.5초씩 버리고 "바꿉니다" 알림이 뜨지 않게)
+QUIET_MIC_SECONDS = 600
 # 처리를 기다리며 줄 설 수 있는 녹음 수. 넘으면 새로 누른 것은 받지 않는다
 MAX_QUEUED_TAKES = 5
 # 기기 화면에 보낼 답의 최대 글자 수 (넘으면 뒤를 자른다)
@@ -146,6 +148,13 @@ RESTART_AGAIN_SECONDS = 3600
 _VIRTUAL = ("blackhole", "cable output", "zoomaudio", "teams audio", "soundflower")
 # Windows 의 "기본 마이크" 별칭 장치 (MME 사운드 매퍼, DirectSound 주 캡처 드라이버). 진짜 기본 마이크를 알면 건너뛴다
 _ALIASES = ("sound mapper", "사운드 매퍼", "primary sound capture", "주 사운드 캡처")
+# 블루투스 이어폰 마이크는 쓰지 않는다. 쓰는 순간 음악용(AAC) 연결이 통화용(HFP)으로 바뀌어 듣는 소리가 나빠지고,
+# 바뀌는 1~3초 동안은 0 만 와서 녹음이 실패했다. 기본 마이크가 에어팟이면 이 PC 의 다른 마이크(MacBook 마이크)로 녹음한다
+_BLUETOOTH = ("airpods", "bluetooth", "beats", "buds", "hands-free", "handsfree", "핸즈프리")
+
+
+def _bluetooth(name: str) -> bool:
+    return any(b in name.lower() for b in _BLUETOOTH)
 
 
 def _system_default_input() -> str | None:
@@ -192,6 +201,55 @@ def _mac_default_input() -> str | None:
         return buf.value.decode() if ok else None
     except Exception:
         return None
+
+
+def _mac_use_builtin_input() -> str | None:
+    """Mac: 기본 입력이 블루투스 이어폰(에어팟)이면 내장 마이크로 되돌린다. 되돌렸으면 원래 장치 이름.
+    에어팟이 다시 붙으면 macOS 가 기본 입력까지 에어팟으로 바꾸는데, 그대로 두면 ORCA·브라우저처럼 기본 마이크를 쓰는
+    앱이 마이크를 여는 순간 에어팟이 통화용(HFP)으로 바뀌어 소리가 나빠진다."""
+    import ctypes
+    import ctypes.util
+    from ctypes import POINTER, Structure, byref, c_uint32, c_void_p, sizeof
+
+    class Address(Structure):
+        _fields_ = [("selector", c_uint32), ("scope", c_uint32), ("element", c_uint32)]
+
+    def code(text: str) -> int:
+        return int.from_bytes(text.encode(), "big")
+
+    name = _mac_default_input()
+    if not name or not _bluetooth(name):
+        return None
+    try:
+        ca = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreAudio"))
+        ca.AudioObjectGetPropertyDataSize.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p, POINTER(c_uint32)]
+        ca.AudioObjectGetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p,
+                                                  POINTER(c_uint32), c_void_p]
+        ca.AudioObjectSetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p, c_uint32, c_void_p]
+        size = c_uint32(0)
+        if ca.AudioObjectGetPropertyDataSize(1, byref(Address(code("dev#"), code("glob"), 0)), 0, None, byref(size)):
+            return None
+        devices = (c_uint32 * (size.value // sizeof(c_uint32)))()
+        if ca.AudioObjectGetPropertyData(1, byref(Address(code("dev#"), code("glob"), 0)), 0, None,
+                                         byref(size), devices):
+            return None
+        for device in devices:
+            # 내장('bltn') 이면서 입력 스트림이 있는 장치 = MacBook 마이크
+            kind, size = c_uint32(0), c_uint32(sizeof(c_uint32))
+            if ca.AudioObjectGetPropertyData(device, byref(Address(code("tran"), code("glob"), 0)), 0, None,
+                                             byref(size), byref(kind)) or kind.value != code("bltn"):
+                continue
+            streams = c_uint32(0)
+            if ca.AudioObjectGetPropertyDataSize(device, byref(Address(code("stm#"), code("inpt"), 0)), 0, None,
+                                                 byref(streams)) or not streams.value:
+                continue
+            if ca.AudioObjectSetPropertyData(1, byref(Address(code("dIn "), code("glob"), 0)), 0, None,
+                                             sizeof(c_uint32), byref(c_uint32(device))):
+                return None
+            return name
+    except Exception:
+        return None
+    return None
 
 
 def _windows_default_input() -> str | None:
@@ -477,6 +535,8 @@ class Assistant:
         self._stream_name = ""  # 그 통로의 마이크 이름
         self._opened = False  # 이 도우미에서 마이크를 한 번이라도 열었는지 (_refresh_devices)
         self._unmatched = ""  # 장치 목록을 다시 읽어도 찾지 못한 기본 마이크 이름 (또 다시 읽지 않는다)
+        self._quiet_until: dict[str, float] = {}  # 소리가 오지 않은 마이크 -> 다시 먼저 써 볼 시각 (monotonic)
+        self._input_checked = 0.0  # 기본 입력이 에어팟인지 마지막으로 본 시각 (_keep_builtin_input)
         # 장치 목록을 새로 읽으려고 도우미를 다시 띄울 까닭과 다시 띄우는 함수 (main.restart, main.py 가 넣어 준다)
         self.restart_for: str | None = None
         self.restart = None
@@ -722,9 +782,15 @@ class Assistant:
                     finally:
                         self._halt(stream)
                     if not quiet:
+                        self._quiet_until.pop(name, None)
                         return
                     print(f"[assistant] '{name}' 에서 소리가 오지 않습니다")
                     silent.append(name)
+                    self._quiet_until[name] = time.monotonic() + QUIET_MIC_SECONDS
+                    if sys.platform == "darwin" and i + 1 < len(order):
+                        # 도우미를 켠 뒤 다시 붙은 에어팟은 PortAudio 가 예전 장치로 알고 있어 0 만 온다.
+                        # 다음 녹음에서는 맨 뒤로 미루고, 녹음하지 않는 틈에 도우미를 다시 띄워 목록을 새로 읽는다
+                        self._refresh_devices(sd, f"'{name}' 마이크가 조용함")
                     # 조용한 마이크는 닫는다 (다음 녹음은 다시 시스템 기본 마이크부터)
                     self._close_stream()
             if silent:
@@ -737,7 +803,8 @@ class Assistant:
                 fail(f"PC 마이크를 열지 못했습니다\n{str(error or '마이크가 없습니다')[:60]}", True)
 
     def _mic_order(self, sd) -> list[str]:
-        """녹음할 마이크 순서: config 의 input (없으면 시스템 기본 마이크), 그다음 이 PC 의 다른 마이크 모두."""
+        """녹음할 마이크 순서: config 의 input (없으면 시스템 기본 마이크), 그다음 이 PC 의 다른 마이크 모두.
+        블루투스 이어폰 마이크는 기본 마이크여도 뺀다 (_BLUETOOTH)."""
         def input_names() -> list[str]:
             devices = [d for d in sd.query_devices() if d["max_input_channels"] > 0]
             try:
@@ -754,8 +821,8 @@ class Assistant:
         else:
             full = _system_default_input()
             first = _match_input(full, names) if full else None
-            if full and first is None and full != self._unmatched:
-                # 도우미를 켠 뒤 연결된 마이크다
+            if full and first is None and full != self._unmatched and not _bluetooth(full):
+                # 도우미를 켠 뒤 연결된 마이크다 (에어팟이면 어차피 쓰지 않으니 다시 읽지 않는다)
                 if self._refresh_devices(sd, f"기본 마이크 '{full}'"):
                     names = input_names()
                     first = _match_input(full, names)
@@ -776,7 +843,11 @@ class Assistant:
             if name in order or any(v in lower for v in _VIRTUAL) or (real and any(a in lower for a in _ALIASES)):
                 continue
             order.append(name)
-        return order
+        order = [n for n in order if not _bluetooth(n)]
+        # 얼마 전 소리가 오지 않은 마이크는 맨 뒤로 (다른 마이크도 모두 조용할 때만 써 본다)
+        now = time.monotonic()
+        quiet = [n for n in order if self._quiet_until.get(n, 0.0) > now]
+        return [n for n in order if n not in quiet] + quiet
 
     def _open_stream(self, sd, name: str):
         index = _input_index(sd, name)
@@ -1050,6 +1121,7 @@ class Assistant:
 
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다. 오래 안 쓰면 CLI 를 내린다."""
+        self._keep_builtin_input()
         self._unload_if_idle()
         self._restart_if_wanted()
         state = self._outgoing()
@@ -1069,6 +1141,15 @@ class Assistant:
             return self.rec_state
         waiting = self.takes.qsize()
         return {**self.state, "queued": waiting} if self.state and waiting else self.state
+
+    def _keep_builtin_input(self) -> None:
+        """Mac: 2초마다 기본 입력을 보고, 에어팟이면 MacBook 마이크로 되돌린다 (_mac_use_builtin_input)."""
+        if sys.platform != "darwin" or time.monotonic() - self._input_checked < 2:
+            return
+        self._input_checked = time.monotonic()
+        moved = _mac_use_builtin_input()
+        if moved:
+            print(f"[assistant] 기본 입력이 '{moved}' 로 바뀌어 MacBook 마이크로 되돌렸습니다")
 
     def _restart_if_wanted(self) -> None:
         """장치 목록을 새로 읽으려고 도우미를 다시 띄운다. 녹음·받아 적기 중이 아니고, 결과를 기기에 보낼 틈이 지났을 때."""

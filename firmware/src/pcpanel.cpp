@@ -45,7 +45,7 @@ static const Shortcut DEFAULT_KEYWORDS[] = {
     {"deploy", "배포", "\"배포해줘\"를", nullptr, KW_COLOR},
     {"push", "푸쉬", "\"푸쉬해줘\"를", nullptr, KW_COLOR},
     {"error", "에러 확인", "\"에러 확인\"을", nullptr, KW_COLOR},
-    {"orchestration", "/orchestration", "\"/orchestration\"을", nullptr, KW_SLASH_COLOR},
+    {"orchestration", "/orch", "\"/orchestration\"을", nullptr, KW_SLASH_COLOR},
     {"clear", "/clear", "\"/clear\"를", nullptr, KW_SLASH_COLOR},
     {"compact", "/compact", "\"/compact\"을", nullptr, KW_SLASH_COLOR},
 };

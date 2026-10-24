@@ -10,6 +10,8 @@
 #include <time.h>
 
 #include "psram_json.h"
+#include "bounded_buffer.h"
+#include <memory>
 #include "camera.h"
 #include "link.h"
 #include "settings.h"
@@ -98,12 +100,33 @@ static bool poll(const char *from) {
   return ok;
 }
 
+// HTTPClient 가 chunked 응답을 해제한 뒤에도 16KB 한도를 적용한다.
+static constexpr size_t BODY_MAX = 16384;
+class CloudBody : public Stream {
+ public:
+  explicit CloudBody(uint8_t *data) : buffer(data, BODY_MAX), started(millis()) {}
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t *data, size_t len) override {
+    if (millis() - started > 20000) { timed_out = true; return 0; }
+    return buffer.append(data, len);
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+  BoundedBuffer buffer;
+  bool timed_out = false;
+ private:
+  uint32_t started;
+};
+
 static bool fetch(const char *from) {
+  if (strncmp(from, "https://", 8) != 0) return false;
   NetworkClientSecure client;
-  // 화면에 보여줄 사용률 숫자만 읽으므로 서버 인증서 검증은 생략한다
-  client.setInsecure();
+  client.useBuiltinCACertBundle();
   HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  // 공유 주소는 직접 읽는 HTTPS raw URL 이다. 다른 주소로 우회하지 않는다.
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   http.setTimeout(8000);
   if (!http.begin(client, from)) return false;
   int code = http.GET();
@@ -114,20 +137,33 @@ static bool fetch(const char *from) {
     http.end();
     return false;
   }
-  String body = http.getString();
+  if (http.getSize() > (int)BODY_MAX) {
+    Serial.println("[cloud] response too large");
+    http.end();
+    return false;
+  }
+  std::unique_ptr<uint8_t, decltype(&heap_caps_free)> data(
+      static_cast<uint8_t *>(heap_caps_malloc(BODY_MAX, MALLOC_CAP_SPIRAM)), heap_caps_free);
+  if (!data) { http.end(); return false; }
+  CloudBody body(data.get());
+  int received = http.writeToStream(&body);
   http.end();
+  if (received <= 0 || body.buffer.failed() || body.timed_out) {
+    Serial.println("[cloud] response incomplete/over limit");
+    return false;
+  }
 
   JsonDocument shared(PSRAM_JSON);
-  if (deserializeJson(shared, body) || !shared.is<JsonObjectConst>()) {
+  if (deserializeJson(shared, data.get(), body.buffer.size()) || !shared.is<JsonObjectConst>()) {
     Serial.println("[cloud] bad data");
     return false;
   }
   JsonDocument message(PSRAM_JSON);
   build_pages(shared.as<JsonObjectConst>(), message["services"].to<JsonArray>());
+  if (message.overflowed()) return false;
   String out;
   serializeJson(message, out);
-  link_submit(LINK_CLOUD, out.c_str(), out.length());
-  return true;
+  return link_submit(LINK_CLOUD, out.c_str(), out.length());
 }
 
 // 암호화 통신(mbedTLS)이 쓰는 메모리(연결 하나에 40KB 안팎)를 큰 메모리(PSRAM)에서 받게 한다.
@@ -174,7 +210,7 @@ void cloud_init() {
 }
 
 void cloud_set_url(const char *value) {
-  if (strlen(value) >= URL_MAX || strcmp(value, url) == 0) return;
+  if ((value[0] && strncmp(value, "https://", 8) != 0) || strlen(value) >= URL_MAX || strcmp(value, url) == 0) return;
   xSemaphoreTake(lock, portMAX_DELAY);
   strlcpy(url, value, sizeof(url));
   xSemaphoreGive(lock);

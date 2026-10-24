@@ -43,10 +43,20 @@ void usb_link_loop() {
     armed = false;
     usb_reconnect("nothing from the PC for 2 minutes");
   }
-  while (Serial.available()) {
+  // 입력이 계속 쌓여도 link_loop/UI 가 돌아가야 큐가 비워지고 명령이 실행된다.
+  // 긴 JSON 은 다음 loop 에 이어 받는다. 사진/터치 부하 중에도 입력만 읽으며 굶지 않는다.
+  unsigned bytes = 0, lines = 0;
+  while (Serial.available() && bytes < 2048 && lines < 4) {
+    ++bytes;
     char c = Serial.read();
     if (c == '\n') {
-      if (!line.empty() && line[0] == '{') link_submit(LINK_USB, line.data(), line.size());
+      ++lines;
+      if (!line.empty() && line[0] == '{') {
+        String reply;
+        if (!link_submit(LINK_USB, line.data(), line.size(), true, &reply))
+          usb_send_event("{\"link_error\":\"not_queued\"}");
+        else if (reply.length()) usb_send_event(reply.c_str());
+      }
       line.clear();
     } else if (line.size() < MAX_LINE) {
       line += c;

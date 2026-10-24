@@ -15,6 +15,7 @@
 #include "psram_json.h"
 #include "health.h"
 #include "link.h"
+#include "control_policy.h"
 #include "mic.h"
 #include "photo.h"
 #include "settings.h"
@@ -30,6 +31,9 @@ static Preferences prefs;
 static SemaphoreHandle_t lock;
 static bool station = false;
 static bool was_connected = false;
+static WifiPeerLease wifi_owner;
+
+bool net_peer_is_owner(uint32_t peer) { return wifi_owner.owns(peer, millis()); }
 
 // 기기에 저장된 Wi-Fi 목록: [{"s": 이름, "p": 비밀번호}, ...]
 static JsonDocument saved(PSRAM_JSON);
@@ -306,13 +310,41 @@ static void handle_usage() {
   const String &body = server.arg("plain");
   int slot;
   if (!authorized("/usage", body, &slot)) return;
-  // 인증된 PC 로 마이크 소리·알림을 보낸다 (아무나 소리를 자기 쪽으로 돌리지 못한다)
-  mic_set_target(server.client().remoteIP());
-  portENTER_CRITICAL(&tx_mux);
-  memcpy(tx_nonce, sessions[slot].nonce, 16);
-  tx_ready = true;
-  portEXIT_CRITICAL(&tx_mux);
-  link_submit(LINK_WIFI, body.c_str(), body.length());
+  JsonDocument request(PSRAM_JSON);
+  if (deserializeJson(request, body) || !request.is<JsonObjectConst>()) {
+    server.send(400, "application/json", "{\"error\":\"invalid_json\"}");
+    return;
+  }
+  uint32_t peer = (uint32_t)server.client().remoteIP();
+  bool read_only = !request["command_protocol"].isNull() || !request["command_status"].isNull() || !request["firmware_info"].isNull();
+  bool selected = wifi_owner.owns(peer, millis());
+  if (!read_only) selected = wifi_owner.claim(peer, millis(), request["heartbeat"] == true,
+      request["helper"]["proto"].is<int>() && request["helper"]["proto"].as<int>() < 4);
+  String reply;
+  if (!link_submit(LINK_WIFI, body.c_str(), body.length(), selected, &reply, peer)) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"not_queued\"}");
+    return;
+  }
+  if (selected && !read_only) {
+    // 인증된 선택 PC 만 마이크 소리·알림 목적지를 갱신한다
+    mic_set_target(server.client().remoteIP());
+    portENTER_CRITICAL(&tx_mux);
+    memcpy(tx_nonce, sessions[slot].nonce, 16);
+    tx_ready = true;
+    portEXIT_CRITICAL(&tx_mux);
+  }
+  if (reply.length()) {
+    // ACK 는 요청 nonce/순번에 묶어 서명한다. 조회가 활성 PC 의 미디어 목적지를 바꾸지 않는다.
+    String auth = server.header("X-Deck-Auth");
+    uint32_t ctr = strtoul(auth.c_str() + 33, nullptr, 10);
+    uint8_t tag[32];
+    char hex[65];
+    sign({{"http-reply", 10}, {sessions[slot].nonce, 16}, {&ctr, 4}, {reply.c_str(), reply.length()}}, tag);
+    to_hex(tag, 32, hex);
+    server.sendHeader("X-Deck-Reply", hex);
+    server.send(200, "application/json", reply);
+    return;
+  }
   send_state();
 }
 
@@ -442,6 +474,7 @@ void net_loop() {
     start_services();
     ui_set_wifi_info(WiFi.localIP().toString().c_str());
   } else if (!connected && was_connected) {
+    wifi_owner.reset();
     Serial.println("[net] wifi lost");
     ui_set_wifi_info("다시 연결 중...");
   }
@@ -456,6 +489,7 @@ void net_set_enabled(bool on) {
   if (on == radio_on) return;
   radio_on = on;
   if (!on) {
+    wifi_owner.reset();
     WiFi.disconnect(true);
     Serial.println("[net] wifi off in settings");
     ui_set_wifi_info("꺼짐 (설정)");

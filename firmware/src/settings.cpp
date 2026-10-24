@@ -824,7 +824,7 @@ static void build_camera(lv_obj_t *parent) {
   cam_value = add_label(row, "", &font_ko_14, COLOR_DIM);
   lv_obj_align(cam_value, LV_ALIGN_RIGHT_MID, -76, 0);
   mirror_sw = add_switch(add_row(p, "좌우 반전", "글자가 거꾸로면"), camera_mount_mirror(), mirror_changed);
-  add_note(p, "지금 카메라는 0°, 좌우 반전 켬이 맞습니다.");
+  add_note(p, "지금 카메라는 90°, 좌우 반전 켬이 맞습니다. 사진 방향은 기울기 센서를 따릅니다.");
 }
 
 static void build_sd(lv_obj_t *parent) {

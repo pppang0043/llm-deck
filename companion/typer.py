@@ -21,7 +21,7 @@ DEFAULT_KEYWORDS = [
     ("deploy", "배포", "배포해줘"),
     ("push", "푸쉬", "푸쉬해줘"),
     ("error", "에러 확인", "에러 확인"),
-    ("orchestration", "/orchestration", "/orchestration "),
+    ("orchestration", "/orch", "/orchestration "),
     ("clear", "/clear", "/clear"),
     ("compact", "/compact", "/compact"),
 ]

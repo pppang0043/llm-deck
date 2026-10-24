@@ -110,12 +110,15 @@ static void set_scale(float value, bool manual) {
     Serial.printf("[battery] calibration %.4f out of range, ignored\n", value);
     return;
   }
+  float old = scale;
   scale = value;
   scale_manual = manual;
   scale_saved = true;
   prefs.putFloat("bat_scale", scale);
   prefs.putBool("bat_manual", manual);
-  restart_readings();
+  // 다듬던 값은 새 배율로 옮긴다 (지우면 다음 3초 동안 0 mV 로 보인다)
+  last_raw_n = 0;
+  smooth_mv = smooth_mv * scale / old;
   Serial.printf("[battery] calibrated (%s): scale %.4f\n", manual ? "manual" : "auto", scale);
 }
 
@@ -169,7 +172,9 @@ static void check_full(int raw) {
   Serial.printf("[battery] charge looks complete (raw %d..%d mV)\n", lo, hi);
   if (!scale_manual) {
     float value = (float)FULL_REST_MV / (sum / minute_n);
-    if (scale_saved) value = (scale + value) / 2;
+    // 20분 평탄은 충전이 끝났을 때 말고도 (PC USB 전원이 약해 전류가 막힐 때 등) 생겨서, 그때마다 배율이
+    // 1.003~1.031 로 흔들렸다. 처음이 아니면 한 번에 0.5% 까지만 옮겨 여러 번의 값에 천천히 맞춘다
+    if (scale_saved) value = constrain(value, scale * 0.995f, scale * 1.005f);
     // 저장 횟수를 줄이려고 0.3% 넘게 달라질 때만 바꾼다
     if (fabsf(value - scale) / scale > 0.003f) set_scale(value, false);
   }
@@ -238,6 +243,8 @@ void battery_init() {
   scale_saved = prefs.isKey("bat_scale");
   scale = prefs.getFloat("bat_scale", 1.0f);
   scale_manual = prefs.getBool("bat_manual", false);
+  // 끄기 전 충전 중이었으면 그때 잔량부터 (save_level). 배터리로 쓰다 꺼졌으면 저장값이 -1 이다
+  level.resume(prefs.getChar("bat_resume", -1));
   // 감쇠는 기본값(11dB, 약 3.1V 까지)을 그대로 쓴다
   update(read_mv());
   Serial.printf("[battery] %d mV, %d%%, %s, scale %.4f%s\n", battery_mv(), battery_pct(),
@@ -297,12 +304,26 @@ int battery_minutes_left() {
   return minutes_left;
 }
 
+// 충전 중 잔량이 바뀔 때마다 적어 둔다 (다시 켜도 이어 가게). 배터리로 쓰는 중이면 지운다.
+// 충전 한 번에 100번 남짓 쓰므로 NVS 수명에는 문제없다
+static void save_level() {
+  static int saved = -2;
+  // 켠 직후에는 USB 를 아직 못 알아봐 "배터리 사용 중" 일 수 있다. 그때 지우지 않게 30초 기다린다.
+  // 충전이 끝나도(full) 꽂혀 있는 동안은 적어 둔다
+  if (millis() < 30000) return;
+  int value = charging ? battery_pct() : -1;
+  if (value == saved) return;
+  saved = value;
+  prefs.putChar("bat_resume", value);
+}
+
 void battery_loop() {
   static uint32_t checked_ms = 0;
   if (millis() - checked_ms < 3000) return;
   checked_ms = millis();
   int mv = read_mv();
   update(mv);
+  save_level();
   // 1분마다 기록을 남긴다 (충전/방전 추세 확인용)
   static uint32_t logged_ms = 0;
   if (millis() - logged_ms >= 60000) {

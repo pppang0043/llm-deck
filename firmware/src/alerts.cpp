@@ -54,7 +54,7 @@ void alerts_check(JsonArrayConst services) {
         sound = "limit_reset";
       }
 
-      // 소진 미리 알림: "16:40 소진" 과 같은 예상(history_forecast). 이번 칸 기록이 없는 오래된 값으로는 예상하지 않는다.
+      // 소진 미리 알림: "16:40 소진 예상" 과 같은 예상(history_forecast). 이번 칸 기록이 없는 오래된 값으로는 예상하지 않는다.
       uint32_t resets = bar["resets"] | 0u;
       time_t full = history_forecast(name, label, pct, resets);
       long left = full ? (long)(full - now) : -1;

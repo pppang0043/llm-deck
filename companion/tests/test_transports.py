@@ -16,7 +16,7 @@ def test_firmware_priority_matches():
     path = Path(__file__).resolve().parents[2] / "firmware" / "src" / "link.cpp"
     if not path.exists():
         pytest.skip("펌웨어 소스가 없는 배포본")
-    src = path.read_text()
+    src = path.read_text(encoding="utf-8")
     rank = {name: int(n) for name, n in re.findall(r"case LINK_(USB|WIFI|BLE): return (\d);", src)}
     assert rank["USB"] > rank["WIFI"] > rank["BLE"]
 
@@ -39,6 +39,15 @@ def test_wifi_send_fails_when_device_turned_it_off():
     w.send({"host": "t"})
     w._request = lambda path, body=None, timeout=5: b'{"ok":true,"mic":false}'  # 옛 펌웨어
     w.send({"host": "t"})
+
+
+def test_wifi_touch_reports_missing_control_ownership():
+    from transports.wifi import WifiTransport
+
+    w = WifiTransport({}, lambda *a: None)
+    w._request = lambda *a, **kw: b'{"link_error":"not_owner"}'
+    with pytest.raises(OSError, match="다른 PC"):
+        w.send({"touch": {"x": 1, "y": 1, "down": True}})
 
 
 def test_usb_announces_only_after_deck_confirmed(tmp_path, monkeypatch):
@@ -85,3 +94,47 @@ def test_usb_stays_off_the_port_while_flashing(tmp_path, monkeypatch):
     import os
     os.utime(flag, (old, old))  # 올리기가 죽어 남은 표시
     assert not usb.flashing()
+
+
+def test_wifi_retries_only_explicit_queue_rejection(monkeypatch):
+    import io
+    import urllib.error
+    from transports import wifi
+
+    w = wifi.WifiTransport({}, lambda *a: None)
+    calls = []
+    monkeypatch.setattr(wifi.time, "sleep", lambda seconds: None)
+
+    def request(path, body):
+        calls.append(body)
+        if len(calls) < 3:
+            raise urllib.error.HTTPError("http://device/usage", 503, "busy", {},
+                                         io.BytesIO(b'{"error":"not_queued"}'))
+        return b'{"ok":true}'
+
+    w._request = request
+    w.send({"camera": "record"})
+    assert len(calls) == 3 and calls[0] == calls[1] == calls[2]
+
+
+@pytest.mark.parametrize("failure", ["timeout", "unknown503", "full"])
+def test_wifi_never_blindly_replays_camera_toggle(monkeypatch, failure):
+    import io
+    import urllib.error
+    from transports import wifi
+
+    w = wifi.WifiTransport({}, lambda *a: None)
+    calls = []
+    monkeypatch.setattr(wifi.time, "sleep", lambda seconds: None)
+
+    def request(path, body):
+        calls.append(body)
+        if failure == "timeout":
+            raise TimeoutError("response lost")
+        response = b'{"error":"not_queued"}' if failure == "full" else b'busy'
+        raise urllib.error.HTTPError("http://device/usage", 503, "busy", {}, io.BytesIO(response))
+
+    w._request = request
+    with pytest.raises(OSError):
+        w.send({"camera": "record"})
+    assert len(calls) == (3 if failure == "full" else 1)
