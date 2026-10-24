@@ -563,7 +563,11 @@ static void go_back() {
 
 static void screen_gesture(lv_event_t *e) {
   // 어디서든 오른쪽으로 밀면 뒤로
-  if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_RIGHT) go_back();
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_RIGHT || view == VIEW_HOME) return;
+  go_back();
+  // LVGL 은 밀고 난 뒤 손을 떼도 처음 누른 버튼에 "눌림" 을 보낸다. 버튼 위에서 밀기 시작하면
+  // 뒤로 가면서 그 버튼(키워드 입력 등)까지 눌렸다. 손을 뗄 때까지 아무것도 누르지 않게 한다
+  lv_indev_wait_release(lv_indev_get_act());
 }
 
 // 상태줄 왼쪽: [뒤로 버튼] [연결 방식]. 뒤로 버튼이 숨으면 글자가 왼쪽 끝으로 간다.

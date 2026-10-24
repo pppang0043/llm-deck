@@ -122,7 +122,11 @@ static void overlay_gesture(lv_event_t *e) {
     ui_show_home();
   } else if (dir == LV_DIR_BOTTOM) {
     close_camera();
+  } else {
+    return;
   }
+  // 밀기를 셔터 버튼 위에서 시작했어도 손을 뗄 때 찍히지 않게 (ui.cpp screen_gesture 참고)
+  lv_indev_wait_release(lv_indev_get_act());
 }
 
 static void shutter_clicked(lv_event_t *e) {
@@ -175,6 +179,8 @@ void camera_ui_init() {
   lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
   lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_clear_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
+  // 밀기 신호가 위 레이어(lv_layer_top)로 올라가지 않고 이 화면에서 받게 한다
+  lv_obj_clear_flag(overlay, LV_OBJ_FLAG_GESTURE_BUBBLE);
   lv_obj_add_event_cb(overlay, overlay_gesture, LV_EVENT_GESTURE, NULL);
 
   preview = lv_img_create(overlay);
