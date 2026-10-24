@@ -9,6 +9,12 @@
 
 #include "pins.h"
 
+// 오래 기다리는 동안 멈춤 감시(health.cpp)에 살아 있다고 알린다. 카메라 작업 태스크(camera_ui.cpp)는 감시 대상이
+// 아니므로 거기서 부르면 아무것도 하지 않는다 (대상이 아닌 태스크가 reset 하면 오류 로그가 쌓인다)
+static void feed_wdt() {
+  if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
+}
+
 static bool running = false;
 static char model[16] = "";
 static Preferences prefs;
@@ -38,7 +44,7 @@ static bool af_command(sensor_t *s, uint8_t cmd) {
   for (int i = 0; i < 1000; i++) {  // 계속 맞추기(0x04)는 1초 넘게 걸린다. 라이브러리와 같게 5초까지
     if (s->get_reg(s, OV5640_CMD_ACK, 0xff) == 0x00) return true;
     // 찍을 때는 화면 루프에서 불린다: 기다리는 동안 멈춤 감시(5초)에 걸려 재부팅되지 않게 (2026-10-24)
-    esp_task_wdt_reset();
+    feed_wdt();
     delay(5);
   }
   return false;
@@ -117,7 +123,7 @@ static void af_focus_once(sensor_t *s, char *note, size_t size) {
     while (millis() - t0 < 1500) {
       st = s->get_reg(s, OV5640_CMD_FW_STATUS, 0xff);
       if (st == FW_STATUS_S_FOCUSED) break;
-      esp_task_wdt_reset();
+      feed_wdt();
       delay(20);
     }
   }
@@ -652,7 +658,7 @@ bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len, bool focus) 
   // 큰 크기로 나온 첫 장을 쓴다 (보통 2~3장 뒤)
   camera_fb_t *fb = nullptr;
   for (int i = 0; i < 10; i++) {
-    esp_task_wdt_reset();  // 최대 크기는 한 장이 느리다
+    feed_wdt();  // 최대 크기는 한 장이 느리다
     fb = esp_camera_fb_get();
     int jw = 0, jh = 0;
     if (fb && jpeg_size(fb->buf, fb->len, &jw, &jh) && jw == PHOTO_W && i >= 1) break;
@@ -679,7 +685,7 @@ static int roi_w = 0;  // 2단계 창의 출력 폭 (0 이면 2단계가 아니�
 // 폭이 w 인 장이 나올 때까지 (크기를 바꾼 직후의 앞 장은 skip 만큼 버린다). 못 받으면 nullptr
 static camera_fb_t *frame_of_width(int w, int tries, int skip) {
   for (int i = 0; i < tries; i++) {
-    esp_task_wdt_reset();
+    feed_wdt();
     camera_fb_t *fb = esp_camera_fb_get();
     int jw = 0, jh = 0;
     if (fb && i >= skip && jpeg_size(fb->buf, fb->len, &jw, &jh) && jw == w) return fb;

@@ -91,6 +91,24 @@ def test_locate_frame_reports_roi_or_none(tmp_path):
     assert receiver.pending_roi == []  # 못 찾음: 기기가 바로 다시 넓게 찍는다
 
 
+def test_scan_result_typed_at_cursor_when_enabled(tmp_path, monkeypatch):
+    # [scan] type = true: 바코드 스캐너처럼 읽은 값을 커서 자리에 입력하고 Enter
+    import orca
+    import typer
+    monkeypatch.setattr(orca, "_copy", lambda t: True)
+    typed = []
+    monkeypatch.setattr(typer, "_type", lambda text, enter=True, tab=False: typed.append((text, enter)))
+    receiver = photos.PhotoReceiver({"dir": str(tmp_path / "pics")}, tmp_path / "vids", {"type": True})
+    data = photo(tmp_path, "LLM-DECK-TEST", zxingcpp.BarcodeFormat.QRCode, 8).read_bytes()
+    receiver.save("SCAN_1.jpg", data)
+    for _ in range(200):
+        if receiver.pending_scan:
+            break
+        threading.Event().wait(0.05)
+    assert typed == [("LLM-DECK-TEST", True)]
+    assert receiver.pending_scan == "QR: LLM-DECK-TEST\n커서 자리에 입력했습니다"
+
+
 def test_describe_labels_and_shortens():
     text = scanner.describe([("QRCode", "x" * 60), ("EAN13", "8809381792717")])
     assert text.splitlines() == ["QR: " + "x" * 37 + "...", "바코드: 8809381792717"]

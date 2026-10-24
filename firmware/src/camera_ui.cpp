@@ -1,6 +1,7 @@
 #include "camera_ui.h"
 
 #include <img_converters.h>
+#include <freertos/idf_additions.h>
 #include <lvgl.h>
 
 #include "camera.h"
@@ -31,7 +32,7 @@ static lv_obj_t *guide, *guide_lbl;
 // 장(SCAN_)을 보낸다. PC 가 읽으면({"scan"}) 멈춘다. 갤러리·SD 에는 남기지 않는다
 static lv_obj_t *scan_btn;
 static bool scanning = false;
-enum ScanStage { SCAN_LOCATE, SCAN_WAIT_ROI, SCAN_ZOOM };
+enum ScanStage { SCAN_LOCATE, SCAN_WAIT_ROI, SCAN_FOCUS, SCAN_ZOOM };
 static ScanStage scan_stage = SCAN_LOCATE;
 static uint32_t scan_started = 0, scan_stage_at = 0, scan_frames = 0;
 static int zoom_shots = 0;
@@ -41,6 +42,71 @@ static int zoom_shots = 0;
 // 스캔으로 읽은 뒤에는 카메라를 금방 닫는다 (센서가 뜨거워진다: 2026-10-24 시험 중 발열로 중단)
 #define SCAN_DONE_IDLE_MS 20000
 static uint32_t scan_done_at = 0;  // 마지막으로 읽은 시각 (0 이면 아직)
+
+// 카메라 작업(사진·스캔 장 찍기, 초점)은 따로 도는 태스크가 한다: 찍는 0.2~2.5초 동안 화면이 멈추지 않게.
+// 결과는 camera_ui_loop 가 받아 저장·전송한다(job_finish). 작업 중에는 미리보기를 쉰다 (카메라를 같이 쓰지 않게)
+enum CamJob { JOB_NONE, JOB_PHOTO, JOB_LOCATE, JOB_GRAB, JOB_ZOOM };
+static volatile CamJob job = JOB_NONE;
+static volatile bool job_done = false;
+static bool job_ok = false;
+static uint8_t *job_jpg = nullptr;
+static size_t job_len = 0;
+static uint8_t job_rot = 0;
+static int job_box[4];
+static TaskHandle_t job_task = nullptr;
+
+static void job_worker(void *) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    switch (job) {
+      case JOB_PHOTO: job_ok = camera_capture(job_rot, &job_jpg, &job_len); break;
+      case JOB_LOCATE: job_ok = camera_scan_locate(job_rot, &job_jpg, &job_len); break;
+      case JOB_GRAB: job_ok = camera_scan_grab(job_rot, &job_jpg, &job_len); break;
+      case JOB_ZOOM: job_ok = camera_scan_zoom(job_box[0], job_box[1], job_box[2], job_box[3]); break;
+      default: job_ok = false; break;
+    }
+    job_done = true;
+  }
+}
+
+// 사진 방향은 기울기 센서로 (화면을 손으로 돌려 두었어도 실제로 든 방향대로). 눕혀 두어 모르면 화면 방향
+static uint8_t photo_rot() {
+  int tilt = imu_rotation();
+  return tilt >= 0 ? tilt : display_rotation();
+}
+
+static bool job_start(CamJob j) {
+  if (job != JOB_NONE) return false;
+  if (!job_task &&
+      xTaskCreatePinnedToCoreWithCaps(job_worker, "camjob", 6144, NULL, 3, &job_task, 0, MALLOC_CAP_SPIRAM) != pdPASS) {
+    job_task = nullptr;
+    return false;
+  }
+  job_rot = photo_rot();
+  job_ok = false;
+  job_jpg = nullptr;
+  job_done = false;
+  job = j;
+  xTaskNotifyGive(job_task);
+  return true;
+}
+
+// 하던 작업이 끝날 때까지 기다리고 결과는 버린다 (카메라 크기를 바꾸거나 끄기 전에)
+static void job_wait_drop() {
+  uint32_t t0 = millis();
+  while (job != JOB_NONE && !job_done && millis() - t0 < 8000) delay(10);
+  if (job_done && job_ok && job_jpg) free(job_jpg);
+  job_jpg = nullptr;
+  job_done = false;
+  job = JOB_NONE;
+}
+
+// 칩 온도 감시: 카메라를 켠 동안 뜨거워지면 끄고, 식을 때까지 다시 켜지 않는다.
+// ESP32 칩 온도라 카메라 센서 온도와 같지는 않다. 로그([camera] chip)를 보고 기준을 맞춘다
+#define CAMERA_HOT_C 75.0f
+#define CAMERA_COOL_C 65.0f
+static bool too_hot = false;
+static uint32_t temp_at = 0, temp_log_at = 0;
 static lv_obj_t *adjust_panel;  // 화질 조절 (camera_ctl_*): 미리보기를 보면서 바꾼다
 static lv_obj_t **adjust_vals;
 static lv_obj_t *record_btn;
@@ -73,7 +139,7 @@ static void stop_recording() {
 }
 
 static void start_recording() {
-  if (!camera_running() || video_recording()) return;
+  if (!camera_running() || video_recording() || job != JOB_NONE) return;  // 찍는 중이면 다음에
   const char *error = video_start(camera_turns(display_rotation()));
   if (error) {
     show_message(error, 3000);
@@ -89,7 +155,10 @@ static void start_recording() {
 }
 
 static void scan_stop(const char *msg, uint32_t ms = 3000) {
-  if (scanning) camera_scan_end();
+  if (scanning) {
+    job_wait_drop();
+    camera_scan_end();
+  }
   scanning = false;
   lv_obj_set_style_border_color(guide, lv_color_white(), 0);
   if (msg) {
@@ -102,6 +171,7 @@ static void scan_stop(const char *msg, uint32_t ms = 3000) {
 static void close_camera() {
   if (!is_open) return;
   stop_recording();
+  job_wait_drop();
   if (scanning) camera_scan_end();
   scanning = false;
   is_open = false;
@@ -112,6 +182,16 @@ static void close_camera() {
 
 static void open_camera() {
   if (is_open) return;
+  if (too_hot) {
+    float t = temperatureRead();
+    if (t > CAMERA_COOL_C) {
+      char msg[64];
+      snprintf(msg, sizeof(msg), "기기가 식을 때까지 카메라를 켤 수 없습니다\n(지금 %.0f도)", t);
+      ui_toast(msg, 3000);
+      return;
+    }
+    too_hot = false;
+  }
   is_open = true;
   scan_done_at = 0;
   display_poke();  // PC 에서 열었을 때도 2분 세기를 지금부터
@@ -139,19 +219,9 @@ static bool take_photo() {
     show_message("녹화 중에는 사진을 찍을 수 없습니다", 2500);
     return false;
   }
+  if (!job_start(JOB_PHOTO)) return false;  // 결과는 job_finish 가 저장한다
   show_message("찍는 중...", 0);
-  lv_refr_now(NULL);
-  uint8_t *jpg;
-  size_t len;
-  // 사진 방향은 기울기 센서로 (화면을 손으로 돌려 두었어도 실제로 든 방향대로). 눕혀 두어 모르면 화면 방향
-  int tilt = imu_rotation();
-  if (camera_capture(tilt >= 0 ? tilt : display_rotation(), &jpg, &len)) {
-    show_message(photo_save(jpg, len), 2500);
-    return true;
-  } else {
-    show_message("찍지 못했습니다", 2500);
-  }
-  return false;
+  return true;
 }
 
 static void overlay_gesture(lv_event_t *e) {
@@ -195,34 +265,23 @@ static bool scan_send(const char *prefix, uint8_t *jpg, size_t len) {
   return false;
 }
 
-// 앞 장을 다 보냈으면 단계에 맞게 다음 장을 찍어 보낸다
+// 앞 장을 다 보냈고 하던 작업이 없으면 단계에 맞게 다음 장을 찍게 한다 (결과는 job_finish)
 static void scan_step() {
-  if (!scanning || photo_sending()) return;
+  if (!scanning || photo_sending() || job != JOB_NONE) return;
   if (millis() - scan_started > SCAN_LIMIT_MS) {
     scan_stop("30초 동안 찾지 못했습니다\n20cm 이상 떨어져, 밝은 곳에서", 4000);
     return;
   }
-  uint8_t *jpg;
-  size_t len;
-  int tilt = imu_rotation();
-  uint8_t rot = tilt >= 0 ? tilt : display_rotation();
   if (scan_stage == SCAN_WAIT_ROI) {
     if (millis() - scan_stage_at > SCAN_ROI_WAIT_MS) scan_stage = SCAN_LOCATE;
     return;
   }
   if (scan_stage == SCAN_ZOOM && zoom_shots >= SCAN_ZOOM_SHOTS) {
-    camera_scan_end();
-    scan_stage = SCAN_LOCATE;
+    scan_stage = SCAN_LOCATE;  // 넓게 찍으면서 2단계 창도 풀린다
     show_message("위치 찾는 중...", 0);
   }
-  if (scan_stage == SCAN_LOCATE) {
-    if (!camera_scan_locate(rot, &jpg, &len) || !scan_send("LOC", jpg, len)) return;
-    scan_stage = SCAN_WAIT_ROI;
-    scan_stage_at = millis();
-    return;
-  }
-  if (!camera_scan_grab(rot, &jpg, &len) || !scan_send("SCAN", jpg, len)) return;
-  zoom_shots++;
+  if (scan_stage == SCAN_LOCATE) job_start(JOB_LOCATE);
+  else if (scan_stage == SCAN_ZOOM) job_start(JOB_GRAB);
 }
 
 // PC 가 1단계 장에서 찾은 바코드 자리 (0~1000). 비어 있으면 못 찾음: 다시 넓게 찍는다
@@ -232,14 +291,45 @@ void camera_ui_scan_roi(const int *box, bool found) {
     scan_stage = SCAN_LOCATE;
     return;
   }
-  show_message("초점 맞추는 중...", 0);
-  lv_refr_now(NULL);
-  if (camera_scan_zoom(box[0], box[1], box[2], box[3])) {
-    scan_stage = SCAN_ZOOM;
-    zoom_shots = 0;
-    show_message("읽는 중...", 0);
-  } else {
+  memcpy(job_box, box, sizeof(job_box));
+  if (!job_start(JOB_ZOOM)) {
     scan_stage = SCAN_LOCATE;
+    return;
+  }
+  scan_stage = SCAN_FOCUS;
+  show_message("초점 맞추는 중...", 0);
+}
+
+// 작업 태스크가 끝낸 결과를 받는다 (화면 루프에서)
+static void job_finish() {
+  if (job == JOB_NONE || !job_done) return;
+  CamJob j = job;
+  bool ok = job_ok;
+  uint8_t *jpg = job_jpg;
+  size_t len = job_len;
+  job_jpg = nullptr;
+  job_done = false;
+  job = JOB_NONE;
+  if (j == JOB_PHOTO) {
+    show_message(ok ? photo_save(jpg, len) : "찍지 못했습니다", 2500);
+    return;
+  }
+  if (!scanning) {  // 그 사이 스캔을 멈췄다
+    if (ok && jpg) free(jpg);
+    if (j == JOB_ZOOM && ok) camera_scan_end();
+    return;
+  }
+  if (j == JOB_LOCATE) {
+    if (ok && scan_send("LOC", jpg, len)) {
+      scan_stage = SCAN_WAIT_ROI;
+      scan_stage_at = millis();
+    }
+  } else if (j == JOB_GRAB) {
+    if (ok && scan_send("SCAN", jpg, len)) zoom_shots++;
+  } else if (j == JOB_ZOOM) {
+    scan_stage = ok ? SCAN_ZOOM : SCAN_LOCATE;
+    zoom_shots = 0;
+    show_message(ok ? "읽는 중..." : "위치 찾는 중...", 0);
   }
 }
 
@@ -285,6 +375,7 @@ static void show_adjust_values() {
 }
 
 static void adjust_step(lv_event_t *e) {
+  if (job != JOB_NONE) return;  // 작업 태스크가 센서를 쓰는 중
   intptr_t code = (intptr_t)lv_event_get_user_data(e);  // 칸 번호 * 2 + (1 이면 +)
   if (!camera_ctl_step(code / 2, code % 2 ? 1 : -1)) show_message("바꿀 수 없습니다", 1200);
   show_adjust_values();  // 하나를 바꾸면 다른 값(수동 노출 등)도 바뀔 수 있다
@@ -553,7 +644,25 @@ static void show_send_progress() {
 void camera_ui_loop() {
   show_send_progress();
   if (!is_open) return;
+  job_finish();
   scan_step();
+  if (millis() - temp_at > 5000) {
+    temp_at = millis();
+    float t = temperatureRead();
+    if (millis() - temp_log_at > 30000) {
+      temp_log_at = millis();
+      Serial.printf("[camera] chip %.1fC\n", t);
+    }
+    if (t >= CAMERA_HOT_C) {
+      Serial.printf("[camera] too hot (%.1fC), closing\n", t);
+      too_hot = true;
+      close_camera();
+      char msg[64];
+      snprintf(msg, sizeof(msg), "기기가 뜨거워 카메라를 껐습니다\n(%.0f도, 식으면 다시 켜집니다)", t);
+      ui_toast(msg, 4000);
+      return;
+    }
+  }
   if (!video_recording() && millis() - display_last_touch_ms() > CAMERA_IDLE_MS) {
     Serial.println("[camera] idle, closing");
     close_camera();
@@ -585,6 +694,7 @@ void camera_ui_loop() {
     // SD 카드가 가득 차 더 쓰지 못하면, PC 로도 보내는 중이 아니면 멈춘다 (알림은 sd_video 가 띄운다)
     if (sd_video_failed() && link_active() != LINK_USB && link_active() != LINK_WIFI) stop_recording();
   }
+  if (job != JOB_NONE) return;  // 작업 태스크가 카메라를 쓰는 중
   if (!camera_preview(frame_buf, display_width(), display_height(), display_rotation(), &w, &h)) return;
   static uint32_t frames = 0, counted_ms = 0;
   frames++;

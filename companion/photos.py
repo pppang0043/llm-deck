@@ -83,7 +83,7 @@ def find_same(folders: list[Path], name: str, default: str, size: int, digest) -
 
 
 class PhotoReceiver:
-    def __init__(self, cfg: dict, video_dir: Path | None = None):
+    def __init__(self, cfg: dict, video_dir: Path | None = None, scan_cfg: dict | None = None):
         self.dir = Path(cfg.get("dir", "")).expanduser() if cfg.get("dir") else DEFAULT_DIR
         self.video_dir = video_dir or self.dir
         self.lock = threading.Lock()
@@ -95,6 +95,8 @@ class PhotoReceiver:
         self.pending_toast: str | None = None  # main.py 가 기기 알림으로 보낸다
         self.pending_scan: str | None = None  # 연속 스캔 결과 {"scan": 글}: 기기가 보이고 스캔을 멈춘다
         self.pending_roi: list[int] | None = None  # 스캔 1단계 장의 바코드 자리 {"scan_roi": [...]} ([] 면 못 찾음)
+        # config.toml [scan] type: 스캔으로 읽은 값을 커서 자리에 입력하고 Enter (바코드 스캐너처럼)
+        self.type_scan = bool((scan_cfg or {}).get("type", False))
 
     def _folders(self, name: str) -> tuple[Path, str, str]:
         if name.lower().endswith(".mov"):
@@ -238,8 +240,15 @@ class PhotoReceiver:
             from orca import _copy
 
             copied = _copy("\n".join(text for _, text in found))
-            print(f"[scan] {name}: {found}{' (클립보드에 넣음)' if copied else ''}")
-            self.pending_scan = scanner.describe(found) + ("\n클립보드에 넣었습니다" if copied else "")
+            typed = None
+            if self.type_scan:
+                import typer
+
+                error = typer._type(found[0][1], enter=True)
+                typed = "커서 자리에 입력했습니다" if not error else f"입력하지 못했습니다: {error}"
+            print(f"[scan] {name}: {found}{' (클립보드에 넣음)' if copied else ''}{f' ({typed})' if typed else ''}")
+            note = typed or ("클립보드에 넣었습니다" if copied else "")
+            self.pending_scan = scanner.describe(found) + (f"\n{note}" if note else "")
 
         threading.Thread(target=run, daemon=True).start()
 

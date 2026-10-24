@@ -461,7 +461,7 @@ def main() -> None:
     sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
     speaker = sounds.Sounds(cfg.get("sounds", {}))
     movies = videos.VideoReceiver(cfg.get("videos", {}))
-    receiver = photos.PhotoReceiver(cfg.get("photos", {}), movies.dir)
+    receiver = photos.PhotoReceiver(cfg.get("photos", {}), movies.dir, cfg.get("scan", {}))
     apps = launcher.Launcher()
     pc = pcstats.PcStats()
     typer.configure(cfg.get("keywords"))  # config.toml 의 키워드 버튼 (없으면 기본 목록)
