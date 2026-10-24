@@ -8,6 +8,7 @@
 #include "link.h"
 #include "mic.h"
 #include "net.h"
+#include "orcapanel.h"
 #include "pcpanel.h"
 #include "ui.h"
 #include "usb_link.h"
@@ -36,6 +37,7 @@ static uint32_t until_ms = 0;
 // 나눠 쓰기: 켜면 기기 LCD 에는 사용량을 따로 보여 주고, PC 창은 원래 화면을 혼자 쓴다.
 // 미러링이 시작될 때마다 켜진 채로 시작하고, 구독제 화면의 작은 "합치기"/"분리" 버튼으로 켜고 끈다.
 static bool split_on = true;
+static bool select_start_view = false;
 static uint32_t last_ms = 0;
 static uint32_t frame_no = 0;
 static TaskHandle_t task = nullptr;
@@ -199,10 +201,14 @@ void mirror_keep(bool on) {
   bool changed = on != (until_ms != 0);
   if (changed) Serial.printf("[mirror] %s\n", on ? "on" : "off");
   // 새로 연결되면 기본은 나눠 쓰기 (기기 LCD 에는 사용량)
-  if (changed && on) split_on = true;
+  if (changed && on) {
+    split_on = true;
+    select_start_view = true;
+  }
   until_ms = on ? millis() + KEEP_MS : 0;
   display_mirror(on);
   if (!on) {
+    select_start_view = false;
     display_split(false);
     pcpanel_device_watch(false);
   }
@@ -230,6 +236,11 @@ void mirror_loop() {
   if ((int32_t)(millis() - until_ms) > 0 || (now != LINK_USB && now != LINK_WIFI)) {
     mirror_keep(false);
     return;
+  }
+  // 처음 상태가 미러링 시작보다 늦게 와도 첫 화면을 고른다. 이후 상태 갱신은 화면을 바꾸지 않는다.
+  if (select_start_view && orcapanel_received()) {
+    select_start_view = false;
+    if (orcapanel_running()) ui_show("orca");
   }
   if (split_on) device_refresh();
   display_split(split_on);

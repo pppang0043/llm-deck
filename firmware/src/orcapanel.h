@@ -20,6 +20,9 @@ void orcapanel_layout(int x, int y, int w, int h);
 void orcapanel_show(bool on);
 // PC 가 보낸 {"orca": {...}} (link.cpp 가 부른다)
 void orcapanel_set(JsonObjectConst orca);
+// 미러링 첫 화면 선택: PC 상태를 받았는지, ORCA 가 실행 중인지.
+bool orcapanel_received();
+bool orcapanel_running();
 // 받아쓰기 진행이나 연결이 바뀌었을 때 다시 그린다 (ui_refresh_talk 가 부른다)
 void orcapanel_refresh();
 // 키워드 단축키 목록이 바뀌면 세션 팝업 버튼을 다시 만든다 (pcpanel.cpp 가 부른다)

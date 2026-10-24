@@ -732,6 +732,14 @@ static void check_alerts(const Session *next, int n) {
   link_send_event(event);
 }
 
+bool orcapanel_received() {
+  return received;
+}
+
+bool orcapanel_running() {
+  return orca_ok;
+}
+
 void orcapanel_set(JsonObjectConst orca) {
   received = true;
   orca_ok = orca["ok"] | false;
