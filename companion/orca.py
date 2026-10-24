@@ -31,15 +31,30 @@ ACTIVE_TAB_LAG_SECONDS = 2.0
 MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
-# ORCA 화면 세션 팝업의 키 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter). 나머지 이름은 typer.KEYWORDS 의 글 + Enter.
+# ORCA 화면 세션 팝업의 키 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter). 나머지 이름은 typer.KEYWORDS 의 글 + Enter
+# (글이 띄어쓰기로 끝나면 Enter 없이, typer.wants_enter).
 # Tab + Enter 는 Claude Code 가 흐리게 보여준 추천 문장을 받아서 바로 보낸다.
-# 지우기는 Ctrl+E (줄 끝으로) 뒤 Ctrl+U (줄 처음까지 지우기): 입력칸이 비어 있어도, Claude 가 일하는 중이어도 아무 일 없다.
+# 지우기는 여러 줄도 모두 지운다 (erase_keys). Ctrl+E (줄 끝으로) + Ctrl+U (줄 처음까지 지우기) 로 한 줄을 비우고,
+# Delete 로 아래 줄을, Backspace 로 위 줄을 끌어와 다시 비운다. 입력칸이 비어 있어도, Claude 가 일하는 중이어도 아무 일 없다.
 # Esc 두 번 / Ctrl+C 도 입력칸을 비우지만, 빈 칸이면 되감기(/rewind) 창을 열거나 일하는 Claude 를 멈추므로 쓰지 않는다.
 KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": ("Tab + Enter", "\t", True),
         # 이름이 "clear" 면 /clear 키워드(typer.KEYWORDS)와 겹쳐 /clear 를 눌러도 지우기가 됐다
-        "erase": ("지우기", "\x05\x15", False),
+        "erase": ("지우기", None, False),
         # Esc 한 번: 일하는 Claude 를 멈추거나 열린 고르기 창을 닫는다 (사용자가 Esc 버튼을 직접 누를 때만)
         "esc": ("Esc", "\x1b", False)}
+# Claude Code 는 키를 한 번에 많이 받으면 일부만 처리한다 (10줄 치를 몰아 보내면 글자가 섞였다). 5줄씩 나눠 보낸다
+ERASE_CHUNK = 5
+ERASE_BELOW = 20  # 커서 아래로 지우는 줄 수 (보통 커서는 맨 끝이라 0)
+ERASE_ABOVE = 50  # 커서 위로 지우는 줄 수
+
+
+def erase_keys() -> list[str]:
+    """입력칸을 모두 비우는 키를 나눠 보낼 묶음들"""
+    clear_line, below, above = "\x05\x15", "\x1b[3~", "\x7f"
+    return ([(clear_line + below) * ERASE_CHUNK] * (ERASE_BELOW // ERASE_CHUNK)
+            + [(clear_line + above) * ERASE_CHUNK] * (ERASE_ABOVE // ERASE_CHUNK) + [clear_line])
+
+
 # 빠른 답 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter, 보내도 되는 상태). 기기는 이름만 보낸다.
 # Claude Code 권한 묻기는 "1. Yes / 2. ... / 3. No (esc)" 고르기라 허용은 "1" (Yes 를 바로 고른다), 거부는 Esc.
 # 허용에 Enter 를 쓰지 않는다: 목록이 늦어 이미 입력칸으로 돌아갔으면 "1" 만 남고 아무것도 보내지지 않는다.
@@ -419,6 +434,8 @@ class Orca:
             handle = term["handle"]
             short = handle.removeprefix("term_")[:8]
             agent = agents.get(f"{term.get('tabId')}:{term.get('leafId')}")
+            if agent and agent.get("parentPaneKey"):
+                continue  # /orchestration 이 띄운 워커는 그 세션 안의 일이라 목록에 넣지 않는다
             if agent:
                 # state 는 안에서 돌린 하위 작업까지 섞인 값이라, 세션 자체의 상태(mainAgent)를 먼저 본다
                 state = (agent.get("mainAgent") or {}).get("state") or agent.get("state") or "idle"
@@ -502,7 +519,8 @@ class Orca:
         if name in KEYS:
             shown, text, enter = KEYS[name]
         elif typer.KEYWORDS.get(name):
-            shown, text, enter = typer.KEYWORDS[name], typer.KEYWORDS[name], True
+            text = typer.KEYWORDS[name]
+            shown, enter = text.strip(), typer.wants_enter(text)
         else:
             print(f"[orca] 모르는 키: {name}")
             self.pending_toast = "PC 도우미가 모르는 키워드입니다\n도우미를 새로 깔아 주세요"
@@ -513,7 +531,10 @@ class Orca:
             self._wake.set()
             return
         ok = True
-        if text:
+        if text is None:
+            for keys in erase_keys():
+                ok = ok and self._run("terminal", "send", "--terminal", handle, "--text", keys) is not None
+        elif text:
             ok = self._run("terminal", "send", "--terminal", handle, "--text", text) is not None
             if enter and text == "\t":
                 time.sleep(0.15)  # 추천 문장이 입력칸에 들어갈 틈

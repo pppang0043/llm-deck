@@ -78,8 +78,17 @@ def test_send_key_keyword_and_unknown(o):
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\t"),
                            ("terminal", "send", "--terminal", "term_abc", "--enter")]
     o.sent_cmds.clear()
-    o.send_key("abc", "erase")  # 입력칸 비우기: Enter 는 치지 않는다
-    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\x05\x15")]
+    o.send_key("abc", "erase")  # 입력칸을 여러 줄까지 비우기: 나눠 보내고 Enter 는 치지 않는다
+    sent = [c[5] for c in o.sent_cmds]
+    assert all(c[:5] == ("terminal", "send", "--terminal", "term_abc", "--text") for c in o.sent_cmds)
+    assert sent == orca.erase_keys() and len(sent) > 1
+    assert sent[0].count("\x1b[3~") == orca.ERASE_CHUNK and sent[-2].count("\x7f") == orca.ERASE_CHUNK
+    assert sum(k.count("\x7f") for k in sent) == orca.ERASE_ABOVE
+    assert "\r" not in "".join(sent)
+    o.sent_cmds.clear()
+    o.send_key("abc", "orchestration")  # 띄어쓰기로 끝나는 키워드: 글만 보내고 Enter 는 치지 않는다
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/orchestration ")]
+    assert o.pending_toast == "보냈습니다: /orchestration"
     o.sent_cmds.clear()
     o.send_key("abc", "clear")  # /clear 키워드는 지우기와 다르다: /clear 를 치고 Enter
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/clear"),
@@ -120,6 +129,18 @@ def test_session_order_follows_orca_screen(o, monkeypatch):
     # 화면 상태를 못 읽으면 orca terminal list 순서 그대로
     monkeypatch.setattr(orca, "_screen_order", lambda: ({}, {}))
     assert [r["id"] for r in o._read()["list"]] == ["aaaa1", "bbbb1", "bbbb2", "cccc1", "zzzz1"]
+
+
+def test_orchestration_workers_hidden(o, monkeypatch):
+    # /orchestration 이 띄운 워커(parentPaneKey 가 있는 것)는 목록에서 뺀다
+    terminals = [{"handle": f"term_{n}", "tabId": n, "leafId": "l", "worktreePath": "/w/a",
+                  "title": n, "connected": True, "agentIdentity": "claude"} for n in ("main1", "work1")]
+    ps = {"worktrees": [{"agents": [{"paneKey": "main1:l", "parentPaneKey": None, "state": "working"},
+                                    {"paneKey": "work1:l", "parentPaneKey": "main1:l", "state": "working"}]}]}
+    o._run = lambda *a, **k: ps if a[:2] == ("worktree", "ps") else {"terminals": terminals}
+    monkeypatch.setattr(orca, "_screen_order", lambda: ({}, {}))
+    assert [r["id"] for r in o._read()["list"]] == ["main1"]
+    assert "work1" not in o.handles
 
 
 def test_read_when_cli_missing(o):
