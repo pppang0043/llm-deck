@@ -39,7 +39,12 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-import assistant
+# Windows 설치(windows/install.ps1)는 가상 환경 없이 이 PC 의 Python 으로 돌고, 부품은 이 폴더의 lib 에 풀어 둔다
+_LIB = Path(__file__).resolve().parent / "lib"
+if _LIB.is_dir() and str(_LIB) not in sys.path:
+    sys.path.insert(1, str(_LIB))
+
+import assistant  # noqa: E402 (위에서 부품 경로를 넣은 뒤에 불러온다)
 import audio
 import photos
 import videos

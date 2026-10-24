@@ -3,8 +3,10 @@
 #   uninstall.cmd  자동 실행과 Claude Code 상태줄 설정을 되돌린다
 #   mirror.cmd     켜져 있는 도우미의 미러링 창(기기 화면)을 연다
 #
-# 이 PC 에 깔린 Python(3.11~3.14)으로 app\.venv 를 만들고 pip 로 부품을 깐다.
-# 예전에는 uv 가 Python 까지 받아 깔았지만, 회사 보안이 uv 를 막아 이 PC 의 Python 과 pip 만 쓴다.
+# 이 PC 에 깔린 Python(3.11~3.14, Python 재단이 서명한 python.exe·pythonw.exe)으로 바로 돌린다. 새 exe 를 만들지 않는다:
+#   - 가상 환경(.venv)을 만들지 않는다 (python.exe 복사본과 pip 가 만드는 명령 exe 가 생긴다)
+#   - pip 로는 부품 파일(wheel)을 받기만 하고 (pip download, 파일 지문 확인) unpack_wheels.py 가 app\lib 에 푼다
+#   - uv 는 쓰지 않는다 (회사 보안이 막는다)
 # 부품 목록은 requirements.txt (버전과 파일 지문을 고정해 둔 것. Mac 에서 make_zip.py 가 uv.lock 으로 만든다)
 param([switch]$Uninstall, [switch]$Mirror)
 $ErrorActionPreference = 'Stop'
@@ -12,9 +14,15 @@ $Dir = Split-Path -Parent $PSScriptRoot
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $Name = 'LLMDeck'
 $LogFile = Join-Path $env:USERPROFILE '.llm-deck\companion.log'
+# 도우미 부품 (unpack_wheels.py 가 푼다. main.py·app.pyw 가 스스로 import 경로에 넣는다)
+$Lib = Join-Path $Dir 'lib'
+$Wheels = Join-Path $Dir '.wheels'
+# 설치 때 고른 Python (mirror.cmd·uninstall.cmd 가 읽는다)
+$PythonFile = Join-Path $Dir 'python.txt'
+$Py = $null
+$Pyw = $null
+# 예전 설치의 가상 환경 (python.exe 복사본과 pip 가 만든 exe 가 들어 있다). 보이면 지운다
 $Venv = Join-Path $Dir '.venv'
-$VenvPy = Join-Path $Venv 'Scripts\python.exe'
-$VenvPyw = Join-Path $Venv 'Scripts\pythonw.exe'
 # 도우미 앱: 트레이 아이콘을 두고 도우미를 띄우며, 거기서 미러링 창을 연다 (Python 재단이 서명한 pythonw.exe 로 돌린다)
 $AppPyw = Join-Path $PSScriptRoot 'app.pyw'
 $AppIcon = Join-Path $PSScriptRoot 'llm-deck.ico'
@@ -152,11 +160,7 @@ function Find-PythonCandidates($storage) {
         $v = Get-StoragePath $storage $key
         if (-not $v) { continue }
         if (Test-Path -LiteralPath $v -PathType Leaf) { $list.Add($v) }
-        else {
-            $list.Add((Join-Path $v 'python.exe'))
-            # 예전 python_dir 는 uv 가 Python 을 받아 두던 곳이라 한 단계 아래에 있다
-            Get-ChildItem -LiteralPath $v -Directory -ErrorAction SilentlyContinue | ForEach-Object { $list.Add((Join-Path $_.FullName 'python.exe')) }
-        }
+        else { $list.Add((Join-Path $v 'python.exe')) }
     }
     # Python 실행기(py.exe)가 아는 것
     $py = Get-Command py -ErrorAction SilentlyContinue
@@ -179,8 +183,6 @@ function Find-PythonCandidates($storage) {
     foreach ($base in (Join-Path $env:LOCALAPPDATA 'Programs\Python'), $env:ProgramFiles) {
         if ($base) { Get-ChildItem -Path $base -Filter 'Python3*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { $list.Add((Join-Path $_.FullName 'python.exe')) } }
     }
-    # 예전 설치 때 uv 가 받아 둔 Python (다른 것이 없을 때만)
-    Get-ChildItem -Path (Join-Path $env:APPDATA 'uv\python') -Directory -ErrorAction SilentlyContinue | ForEach-Object { $list.Add((Join-Path $_.FullName 'python.exe')) }
     return $list
 }
 
@@ -196,6 +198,16 @@ function Select-Python($storage) {
         $minor = [version]("{0}.{1}" -f $info.Version.Major, $info.Version.Minor)
         if (-not $info.Bits64 -or $minor -lt $MinPython -or $minor -gt $MaxPython) {
             $others += "$($info.Version)$(if (-not $info.Bits64) { ' (32비트)' }) $($info.Exe)"
+            continue
+        }
+        # uv 가 받아 둔 Python 은 서명되지 않은 exe 라 회사 보안 프로그램이 막는다. 설치 프로그램으로 깐 것만 쓴다
+        if ($info.Exe -match '\\uv\\') {
+            $others += "$($info.Version) (uv 가 받은 것, 쓰지 않음) $($info.Exe)"
+            continue
+        }
+        # 창 없이 돌릴 pythonw.exe 가 옆에 있어야 한다
+        if (-not (Test-Path -LiteralPath (Join-Path (Split-Path $info.Exe) 'pythonw.exe'))) {
+            $others += "$($info.Version) (pythonw.exe 없음) $($info.Exe)"
             continue
         }
         if (-not $best -or $info.Version -gt $best.Version) { $best = $info }
@@ -218,7 +230,7 @@ function Stop-App {
         ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
     if (-not $apps) { return }
     $apps | Stop-Process -Force -ErrorAction SilentlyContinue
-    # 다 꺼져야 .venv 를 지우거나 새로 쓸 수 있다
+    # 다 꺼져야 부품 폴더(lib)를 지우거나 새로 쓸 수 있다
     $apps | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
 }
 
@@ -230,10 +242,34 @@ function Stop-Companion {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
-# 예전 설치가 남긴 것 (설치 때 컴파일한 exe, uv 설정)
+# 예전 설치가 남긴 것 (설치 때 컴파일한 exe, 가상 환경, uv 설정)
 function Remove-Old {
     Remove-Item $OldAppExe, $OldMirrorExe, $OldMirrorLink, (Join-Path $Dir 'uv.toml') -Force -ErrorAction SilentlyContinue
     Remove-Item $OldHelperKey -Recurse -ErrorAction SilentlyContinue
+    if (Test-Path $Venv) {
+        Remove-Item $Venv -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host '      예전 부품 폴더(.venv, 새로 만든 exe 가 들어 있던 곳)를 지웠습니다.'
+    }
+    # 이 폴더에는 exe 를 두지 않는다 (도우미는 이 PC 에 설치된 Python 만 실행한다)
+    $exes = @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue)
+    if ($exes) {
+        $exes | Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Host "      남아 있던 exe $($exes.Count)개를 지웠습니다."
+    }
+}
+
+function Set-Python([string]$exe) {
+    $script:Py = $exe
+    $script:Pyw = Join-Path (Split-Path $exe) 'pythonw.exe'
+}
+
+# 설치 때 고른 Python (mirror.cmd·uninstall.cmd). 없거나 지워졌으면 $false
+function Read-InstalledPython {
+    if (-not (Test-Path $PythonFile)) { return $false }
+    $exe = ([IO.File]::ReadAllText($PythonFile)).Trim()
+    if (-not $exe -or -not (Test-Path -LiteralPath $exe)) { return $false }
+    Set-Python $exe
+    return (Test-Path -LiteralPath $Pyw)
 }
 
 function Install-OrcaShim {
@@ -265,13 +301,13 @@ function Install-OrcaShim {
 # 도우미 폴더에서 Python 으로 main.py 를 돌린다 (설정을 고치는 일들)
 function Invoke-Main([string[]]$arguments) {
     Push-Location $Dir
-    try { & $VenvPy (Join-Path $Dir 'main.py') @arguments } finally { Pop-Location }
+    try { & $Py (Join-Path $Dir 'main.py') @arguments } finally { Pop-Location }
 }
 
 if ($Mirror) {
     # 도우미 앱이 떠 있으면 그 앱이 창을 열고, 없으면 창만 띄운다. 도우미가 꺼져 있으면 창에 안내가 뜬다
-    if ((Test-Path $VenvPyw) -and (Test-Path $AppPyw)) {
-        Start-Process -FilePath $VenvPyw -ArgumentList @("`"$AppPyw`"", '--mirror') -WorkingDirectory $Dir
+    if ((Read-InstalledPython) -and (Test-Path $AppPyw) -and (Test-Path $Lib)) {
+        Start-Process -FilePath $Pyw -ArgumentList @("`"$AppPyw`"", '--mirror') -WorkingDirectory $Dir
         exit 0
     }
     Write-Host '먼저 install.cmd 로 설치하세요.'
@@ -287,8 +323,9 @@ if ($Uninstall) {
     }
     Remove-Item 'HKCU:\Software\LLMDeck' -Recurse -ErrorAction SilentlyContinue  # 미러링 창의 항상 위·배율·위치
     Remove-ItemProperty -Path $RunKey -Name $Name -ErrorAction SilentlyContinue
-    Set-Firewall 'remove' | Out-Null
-    if ((Test-Path $VenvPy) -and (Test-Path (Join-Path $env:USERPROFILE '.claude'))) {
+    # 규칙이 있을 때만 지운다 (관리자 확인 창이 뜬다. 규칙 목록은 관리자 권한 없이 읽힌다)
+    if (Get-NetFirewallRule -DisplayName 'LLM Deck *' -ErrorAction SilentlyContinue) { Set-Firewall 'remove' | Out-Null }
+    if ((Read-InstalledPython) -and (Test-Path $Lib) -and (Test-Path (Join-Path $env:USERPROFILE '.claude'))) {
         Invoke-Main @('--uninstall-statusline')
     }
     Write-Host '제거했습니다. 이 폴더는 지워도 됩니다.'
@@ -340,42 +377,46 @@ Write-Host '[2/8] Python 찾기'
 $python = Select-Python $storage
 Write-Host "      Python $($python.Version)  $($python.Exe)"
 
-Write-Host '[3/8] 도우미 준비 (처음에는 몇 분 걸릴 수 있습니다)'
-# 예전에 uv 로 만든 .venv(pip 가 없다)나 다른 Python 으로 만든 것은 새로 만든다
-$venvCfg = Join-Path $Venv 'pyvenv.cfg'
-$remake = $false
-if (Test-Path $venvCfg) {
-    $cfgText = [IO.File]::ReadAllText($venvCfg)
-    $venvHome = if ($cfgText -match '(?m)^home\s*=\s*(.+?)\s*$') { $Matches[1] } else { '' }
-    if ($cfgText -match '(?m)^uv\s*=' -or $venvHome.TrimEnd('\') -ne (Split-Path $python.Exe).TrimEnd('\') -or -not (Get-PythonInfo $VenvPy)) { $remake = $true }
-} elseif (Test-Path $Venv) {
-    $remake = $true
+Write-Host '[3/8] 도우미 부품 (처음에는 몇 분 걸릴 수 있습니다)'
+Set-Python $python.Exe
+if (-not (Invoke-Quiet $Py @('-m', 'pip', '--version')).Ok) {
+    Write-Host '      이 Python 에 pip 가 없습니다. Python 설치 프로그램을 다시 열어 [Modify] > "pip" 를 켜고 install.cmd 를 다시 실행하세요.'
+    throw 'pip 가 필요합니다.'
 }
-if ($remake) {
-    Stop-Companion
-    Remove-Item $Venv -Recurse -Force
-    Write-Host '      예전 도우미 부품을 지우고 새로 만듭니다.'
-}
-if (-not (Test-Path $VenvPy)) {
-    $r = Invoke-Quiet $python.Exe @('-m', 'venv', $Venv)
-    if (-not $r.Ok -or -not (Test-Path $VenvPy)) { throw "도우미 부품 폴더(.venv)를 만들지 못했습니다. ($($python.Exe) -m venv)" }
-}
-# 버전과 파일 지문이 고정된 목록대로, 미리 만들어진 파일(wheel)만 받는다 (이 PC 에서 컴파일하지 않는다)
+# 버전과 파일 지문이 고정된 목록대로, 미리 만들어진 파일(wheel)만 받는다 (이 PC 에서 컴파일하지 않는다).
+# pip install 은 부품마다 명령 exe 를 새로 만들어서 pip 로는 받기만 하고, 푸는 것은 unpack_wheels.py 가 한다 (exe 를 만들지 않는다)
+Remove-Item $Wheels, "$Lib.new" -Recurse -Force -ErrorAction SilentlyContinue
 $ErrorActionPreference = 'Continue'
-& $VenvPy -m pip install --disable-pip-version-check --no-input --quiet --only-binary ':all:' --require-hashes -r (Join-Path $Dir 'requirements.txt')
+& $Py -m pip download --disable-pip-version-check --no-input --quiet --only-binary ':all:' --require-hashes -r (Join-Path $Dir 'requirements.txt') -d $Wheels
 $pipOk = $LASTEXITCODE -eq 0
+if ($pipOk) {
+    & $Py (Join-Path $PSScriptRoot 'unpack_wheels.py') $Wheels "$Lib.new"
+    $pipOk = $LASTEXITCODE -eq 0
+}
 $ErrorActionPreference = 'Stop'
-if (-not $pipOk) { throw '도우미 준비에 실패했습니다. 위 오류 문구를 보고 INSTALL.txt 의 "9. 회사 PC" 를 확인하세요.' }
+Remove-Item $Wheels -Recurse -Force -ErrorAction SilentlyContinue
+if (-not $pipOk) {
+    Remove-Item "$Lib.new" -Recurse -Force -ErrorAction SilentlyContinue
+    throw '도우미 준비에 실패했습니다. 위 오류 문구를 보고 INSTALL.txt 의 "9. 회사 PC" 를 확인하세요.'
+}
+# 켜져 있는 도우미가 부품 파일을 쓰고 있으면 지우지 못한다
+Stop-Companion
+Remove-Old
+if (Test-Path $Lib) { Remove-Item $Lib -Recurse -Force }
+Rename-Item "$Lib.new" 'lib'
+[IO.File]::WriteAllText($PythonFile, $Py, (New-Object Text.UTF8Encoding $false))
+# 아래 확인들도 그 부품을 쓴다 (도우미는 main.py·app.pyw 가 스스로 lib 를 넣는다)
+$env:PYTHONPATH = $Lib
 # 고친 config.toml 에 틀린 곳이 없는지 본다 (틀리면 도우미가 켜지지 않는다)
-$check = Invoke-Quiet $VenvPy @('-c', "import tomllib, pathlib, sys; tomllib.loads(pathlib.Path(sys.argv[1]).read_bytes().decode('utf-8-sig'))", $config)
+$check = Invoke-Quiet $Py @('-c', "import tomllib, pathlib, sys; tomllib.loads(pathlib.Path(sys.argv[1]).read_bytes().decode('utf-8-sig'))", $config)
 if (-not $check.Ok) {
-    $bad = Invoke-Quiet $VenvPy @('-c', "import tomllib, pathlib, sys`ntry: tomllib.loads(pathlib.Path(sys.argv[1]).read_bytes().decode('utf-8-sig'))`nexcept Exception as e: print(e)", $config)
+    $bad = Invoke-Quiet $Py @('-c', "import tomllib, pathlib, sys`ntry: tomllib.loads(pathlib.Path(sys.argv[1]).read_bytes().decode('utf-8-sig'))`nexcept Exception as e: print(e)", $config)
     Write-Host "      config.toml 에 틀린 곳이 있습니다: $($bad.Out | Select-Object -Last 1)"
     Write-Host "      Windows 경로는 작은따옴표로 적으세요. 예: model_dir = 'D:\LLM Deck\models'"
     throw 'config.toml 을 고친 뒤 다시 실행하세요.'
 }
 # 음성 질문용 부품(faster-whisper)이 이 PC 에서 켜지는지 본다. 안 돼도 나머지 기능은 쓸 수 있다.
-if (-not (Invoke-Quiet $VenvPy @('-c', 'import ctranslate2, onnxruntime, av, faster_whisper')).Ok) {
+if (-not (Invoke-Quiet $Py @('-c', 'import ctranslate2, onnxruntime, av, faster_whisper')).Ok) {
     Write-Host '      주의: 음성 질문 부품을 켜지 못했습니다. "Microsoft Visual C++ 재배포 가능 패키지(x64)"를 설치한 뒤 다시 실행하세요.'
     Write-Host '            https://aka.ms/vs/17/release/vc_redist.x64.exe  (음성 질문 말고는 그대로 쓸 수 있습니다)'
 }
@@ -398,12 +439,19 @@ if (Test-Path (Join-Path $env:USERPROFILE '.claude')) {
     Write-Host '      이 PC 에는 Claude Code 가 없어 건너뜁니다. (다른 PC 값은 gist 로 받아 옵니다)'
 }
 
-Write-Host '[5/8] Windows 방화벽 (Wi-Fi 연결용, 관리자 확인 창이 뜨면 [예])'
-if (Set-Firewall 'add') {
-    $rules = @(Get-NetFirewallRule -DisplayName 'LLM Deck *' -ErrorAction SilentlyContinue)
-    Write-Host "      허용 규칙 $($rules.Count)개를 두었습니다."
+Write-Host '[5/8] Windows 방화벽 (Wi-Fi 연결용)'
+# 관리자 권한으로 방화벽을 바꾸는 일이라 회사 보안 프로그램이 막을 수 있다. config.toml 에서 켰을 때만 한다
+if ($network['firewall'] -ne $true) {
+    Write-Host '      건너뜁니다 (config.toml [network] firewall = false). USB·블루투스는 상관없습니다.'
+    Write-Host '      Wi-Fi 로 쓰는데 사진·동영상·알림이 안 오면 firewall = true 로 바꾸고 install.cmd 를 다시 실행하세요.'
 } else {
-    Write-Host '      건너뜁니다. USB·블루투스는 상관없고, Wi-Fi 로 쓸 때 사진·동영상·알림이 안 올 수 있습니다.'
+    Write-Host '      관리자 확인 창이 뜨면 [예]'
+    if (Set-Firewall 'add') {
+        $rules = @(Get-NetFirewallRule -DisplayName 'LLM Deck *' -ErrorAction SilentlyContinue)
+        Write-Host "      허용 규칙 $($rules.Count)개를 두었습니다."
+    } else {
+        Write-Host '      건너뜁니다. USB·블루투스는 상관없고, Wi-Fi 로 쓸 때 사진·동영상·알림이 안 올 수 있습니다.'
+    }
 }
 # 예전에 방화벽 창에서 [취소]를 누르면 python.exe 를 막는 규칙이 생긴다. 막는 규칙이 허용보다 앞선다.
 $blocked = Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
@@ -417,17 +465,17 @@ Write-Host '[6/8] 도우미 앱 (트레이 아이콘, 미러링 창)'
 Stop-Companion
 Remove-Old
 $appOk = $false
-if (-not (Invoke-Quiet $VenvPy @('-c', 'import tkinter; tkinter.Tcl()')).Ok) {
+if (-not (Invoke-Quiet $Py @('-c', 'import tkinter; tkinter.Tcl()')).Ok) {
     Write-Host '      건너뜁니다: 이 Python 에 창을 그리는 부품(tcl/tk)이 없습니다.'
     Write-Host '      Python 설치 프로그램을 다시 열어 [Modify] > "tcl/tk and IDLE" 를 켜고 install.cmd 를 다시 실행하세요.'
     Write-Host '      그 전까지 도우미는 트레이 아이콘 없이 돌고, mirror.cmd 를 누르면 브라우저로 엽니다 (http://127.0.0.1:4013/).'
-} elseif (-not (Invoke-Quiet $VenvPy @('-c', 'import pystray, PIL')).Ok) {
+} elseif (-not (Invoke-Quiet $Py @('-c', 'import pystray, PIL')).Ok) {
     Write-Host '      건너뜁니다: 트레이 아이콘 부품(pystray)을 켜지 못했습니다. 도우미는 트레이 아이콘 없이 돕니다.'
 } else {
-    Invoke-Quiet $VenvPy @($AppPyw, '--write-icon', $AppIcon) | Out-Null
+    Invoke-Quiet $Py @($AppPyw, '--write-icon', $AppIcon) | Out-Null
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($AppLink)
-    $link.TargetPath = $VenvPyw
+    $link.TargetPath = $Pyw
     $link.Arguments = "`"$AppPyw`""
     $link.WorkingDirectory = $Dir
     if (Test-Path $AppIcon) { $link.IconLocation = $AppIcon }
@@ -443,7 +491,7 @@ Install-OrcaShim
 Write-Host '[8/8] 로그인할 때 자동 실행'
 # 도우미를 끈 뒤에 비운다 (켜져 있으면 쓰는 중인 파일이 있어 지우지 못할 수 있다)
 if ($storage['clean_cache'] -eq $true) {
-    Invoke-Quiet $VenvPy @('-m', 'pip', 'cache', 'purge') | Out-Null
+    Invoke-Quiet $Py @('-m', 'pip', 'cache', 'purge') | Out-Null
     Write-Host '      설치 부품 보관함을 비웠습니다 (clean_cache = true)'
 }
 # 예전 방식(공유만 하는 도우미)이 등록되어 있으면 지운다. 이제 이 도우미가 공유도 함께 한다.
@@ -451,12 +499,12 @@ Remove-ItemProperty -Path $RunKey -Name 'LLMDeckSync' -ErrorAction SilentlyConti
 New-Item -ItemType Directory -Force (Split-Path $LogFile) | Out-Null
 if ($appOk) {
     # 앱이 도우미를 띄운다. 로그인할 때는 미러링 창 없이 트레이 아이콘만
-    Set-ItemProperty -Path $RunKey -Name $Name -Value "`"$VenvPyw`" `"$AppPyw`" --background"
-    Start-Process -FilePath $VenvPyw -ArgumentList @("`"$AppPyw`"", '--background') -WorkingDirectory $Dir
+    Set-ItemProperty -Path $RunKey -Name $Name -Value "`"$Pyw`" `"$AppPyw`" --background"
+    Start-Process -FilePath $Pyw -ArgumentList @("`"$AppPyw`"", '--background') -WorkingDirectory $Dir
 } else {
     $mainPy = Join-Path $Dir 'main.py'
-    Set-ItemProperty -Path $RunKey -Name $Name -Value "`"$VenvPyw`" `"$mainPy`" --log `"$LogFile`""
-    Start-Process -FilePath $VenvPyw -ArgumentList @("`"$mainPy`"", '--log', "`"$LogFile`"") -WorkingDirectory $Dir
+    Set-ItemProperty -Path $RunKey -Name $Name -Value "`"$Pyw`" `"$mainPy`" --log `"$LogFile`""
+    Start-Process -FilePath $Pyw -ArgumentList @("`"$mainPy`"", '--log', "`"$LogFile`"") -WorkingDirectory $Dir
 }
 
 Write-Host ''

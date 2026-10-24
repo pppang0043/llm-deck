@@ -9,6 +9,10 @@ companion/config.toml
 # Python
 __pycache__/
 .venv/
+# Windows 설치가 부품을 푸는 곳과 고른 Python (windows/install.ps1)
+companion/lib/
+companion/.wheels/
+companion/python.txt
 .DS_Store
 
 # 배포용 압축 파일

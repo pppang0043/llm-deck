@@ -10,7 +10,7 @@ host = ""
 port = ""
 
 [claude_code]
-# 구독 한도 사용률. PC 마다 한 번 `uv run main.py --install-statusline` 을 실행해야 값이 들어옵니다.
+# 구독 한도 사용률. PC 마다 한 번 설정해야 값이 들어옵니다 (Windows 는 install.cmd 가 한다. Mac 은 `uv run main.py --install-statusline`).
 enabled = true
 
 [codex]
@@ -49,7 +49,7 @@ credit_date = ""
 # 값을 내려받기만 하는 PC(Claude Code / Codex 가 없는 PC)는 gist_id 만 적으면 되고 로그인이 필요 없습니다.
 # github_token: 비워 두면 GitHub CLI 로그인(`gh auth login -s gist`)을 씁니다.
 #   gh 가 없는 PC 에서는 github.com > Settings > Developer settings > Personal access tokens 에서 gist 권한만 준 토큰을 적습니다.
-# gist_id: 처음 한 번 `uv run main.py --setup-sync` 로 만들고, 모든 PC 에 같은 값을 적습니다.
+# gist_id: 처음 한 번 Mac 에서 `uv run main.py --setup-sync` 로 만들고, 모든 PC 에 같은 값을 적습니다 (Windows 압축 파일에는 들어 있다).
 github_token = ""
 gist_id = ""
 
@@ -122,7 +122,7 @@ dir = ""
 # 저장 위치: PC 용량이 적을 때 큰 것을 다른 드라이브(예: D:)에 둔다. 비워 두면 기본 자리.
 # 바꾼 뒤에는 install.cmd 를 다시 실행하세요 (Mac 은 도우미를 다시 켜면 model_dir 만 적용됩니다).
 # Windows 경로는 작은따옴표로 적습니다. 예: model_dir = 'D:\LLM Deck\models'  (큰따옴표면 \ 를 \\ 로 두 번)
-# 도우미 부품(.venv, 약 300MB)은 이 폴더(llm-deck-companion\app) 안에 깔립니다. 폴더째 D: 에 두면 함께 옮겨집니다.
+# 도우미 부품(lib, 약 300MB)은 이 폴더(llm-deck-companion\app) 안에 깔립니다. 폴더째 D: 에 두면 함께 옮겨집니다.
 # 사진·동영상 폴더는 위의 [photos] [videos] 에서 정합니다.
 [storage]
 # 음성 인식 모델 (small 약 480MB, 처음 말로 질문할 때 받는다). 비우면 C:\Users\내이름\.cache\huggingface
@@ -144,3 +144,6 @@ system_certs = false
 proxy = ""
 # PyPI(pypi.org)가 막혀 회사 안 부품 저장소를 쓸 때. 예: index_url = 'https://nexus.example.com/repository/pypi/simple'
 index_url = ""
+# Wi-Fi 로 기기를 연결할 때만 true: 설치할 때 관리자 확인 창을 띄워 Windows 방화벽에 허용 규칙을 둔다 (같은 공유기 안에서 오는 것만).
+# 회사 PC 는 보통 USB·블루투스로 쓰니 false 로 둔다 (관리자 권한으로 방화벽을 바꾸는 것을 보안 프로그램이 막을 수 있다)
+firewall = false

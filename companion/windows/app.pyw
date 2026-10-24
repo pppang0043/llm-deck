@@ -27,6 +27,9 @@ import urllib.request
 from pathlib import Path
 
 COMPANION = Path(__file__).resolve().parents[1]
+# 가상 환경 없이 이 PC 의 Python 으로 돈다. 부품(pystray, Pillow)은 install.ps1 이 app\lib 에 풀어 둔다
+if (COMPANION / "lib").is_dir() and str(COMPANION / "lib") not in sys.path:
+    sys.path.insert(1, str(COMPANION / "lib"))
 BASE = "http://127.0.0.1:4013/"
 TITLE = "LLM Deck 미러링"
 DISCONNECTED = "도우미와 연결이 끊겼습니다. 도우미가 켜져 있는지 확인하세요"

@@ -19,8 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "dist" / "llm-deck-companion-windows.zip"
 TOP = ("install.cmd", "uninstall.cmd", "mirror.cmd", "config.cmd", "README.txt", "INSTALL.txt")
-# Windows 에서 쓰지 않는 것 (Mac 설치, 이 Mac 에서만 돌리는 도구)
-SKIP = ("companion/macos/", "companion/windows/make_zip.py", "companion/windows/pack_model.py")
+# Windows 에서 쓰지 않는 것 (Mac 설치, 이 Mac 에서만 돌리는 도구, 테스트)
+SKIP = ("companion/macos/", "companion/windows/make_zip.py", "companion/windows/pack_model.py", "companion/tests/")
 
 
 def export_requirements() -> None:
@@ -67,6 +67,15 @@ def main() -> None:
     if leaked:
         OUT.unlink()
         raise SystemExit(f"토큰으로 보이는 값이 있어 지웠습니다: {leaked}")
+    # 회사 보안 프로그램이 막는 exe 같은 실행 파일은 넣지 않는다 (누르는 .cmd 와 설치 install.ps1 만)
+    with zipfile.ZipFile(OUT) as z:
+        allowed = {"install.cmd", "uninstall.cmd", "mirror.cmd", "config.cmd", "install.ps1", "orca.cmd"}
+        runnable = [n for n in z.namelist()
+                    if n.lower().endswith((".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".com", ".scr", ".msi"))
+                    and n.rsplit("/", 1)[-1] not in allowed]
+    if runnable:
+        OUT.unlink()
+        raise SystemExit(f"실행 파일이 있어 지웠습니다: {runnable}")
     print(f"{OUT} ({len(files)}개 파일, gist {'있음' if gist else '없음'})")
 
 

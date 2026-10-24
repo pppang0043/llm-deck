@@ -16,7 +16,8 @@
       회사 PC: 회사 소프트웨어 센터(포털)에서 Python 3.12 또는 3.13
       개인 PC: https://www.python.org/downloads/windows/ 의 "Windows installer (64-bit)"
                설치 화면의 "tcl/tk and IDLE" 와 "py launcher" 는 켜 둡니다 (기본값. 미러링 창에 필요합니다)
-    uv 나 다른 설치 도구는 쓰지 않습니다. Python 에 들어 있는 pip 로 부품을 받습니다.
+    uv 나 다른 설치 도구는 쓰지 않습니다. Python 에 들어 있는 pip 로 부품을 받기만 하고 직접 풉니다.
+    새 exe 를 만들지 않습니다: 가상 환경(.venv)을 만들지 않고, 이 PC 에 설치된 python.exe·pythonw.exe 로 돕니다.
 - 처음 설치할 때 인터넷 연결 (부품을 받습니다)
 - 빈 공간 (모두 C: 에 둘 때)
     도우미 부품    약 300MB
@@ -29,7 +30,7 @@
 ------------
 1) 압축 파일을 지우지 않을 곳에 풉니다. 설치한 뒤에도 이 폴더에서 실행되므로, 옮기거나 지우면 다시 설치해야 합니다.
      예: C:\Users\내이름\llm-deck-companion   또는 용량이 적으면  D:\llm-deck-companion
-   도우미 부품(약 300MB)은 이 폴더 안(app\.venv)에 깔리므로, D: 에 풀면 그만큼 C: 를 아낍니다.
+   도우미 부품(약 300MB)은 이 폴더 안(app\lib)에 깔리므로, D: 에 풀면 그만큼 C: 를 아낍니다.
 2) 예전 버전이 깔려 있으면 그 폴더의 uninstall.cmd 를 먼저 누르고 그 폴더를 지웁니다.
    (설정을 이어 쓰려면 예전 app\config.toml 을 새 폴더의 app 안에 덮어씁니다)
 
@@ -39,7 +40,8 @@
 1) (용량이 적으면 먼저) "4. 저장 위치 바꾸기" 대로 app\config.toml 을 고칩니다.
 2) install.cmd 를 더블클릭합니다.
    - "Windows의 PC 보호" 창이 뜨면 [추가 정보] > [실행]
-   - 관리자 확인 창이 뜨면 [예] (Wi-Fi 연결용 방화벽 허용. [아니요] 여도 USB·블루투스는 됩니다)
+   - 관리자 권한은 쓰지 않습니다. (Wi-Fi 로 연결할 때만 config.toml [network] firewall = true 로 바꾸면
+     방화벽 허용을 위해 관리자 확인 창이 뜹니다. USB·블루투스는 필요 없습니다)
    - 처음에는 부품을 받느라 몇 분 걸립니다.
 3) 단계가 [1/8] 부터 [8/8] 까지 지나가고 "설치했습니다" 가 나오면 끝입니다.
    도우미는 로그인할 때마다 저절로 켜지고, 작업 표시줄 오른쪽 아래(트레이)에 LLM Deck 아이콘이 생깁니다.
@@ -50,9 +52,9 @@
 설치 단계
   [1/8] 설정 파일과 저장 위치        app\config.toml 을 만들고 [storage] [network] 를 읽습니다
   [2/8] Python 찾기                이 PC 에 깔린 Python 3.11 ~ 3.14 중 가장 새 것
-  [3/8] 도우미 준비                app\.venv 를 만들고 pip 로 부품을 받습니다
+  [3/8] 도우미 부품                pip 로 부품을 받아 app\lib 에 풉니다 (exe 를 만들지 않습니다)
   [4/8] Claude Code 한도 사용률     Claude Code 가 있는 PC 만
-  [5/8] Windows 방화벽             Wi-Fi 연결용
+  [5/8] Windows 방화벽             Wi-Fi 연결용 (firewall = true 일 때만)
   [6/8] 도우미 앱                  트레이 아이콘과 미러링 창 (시작 메뉴 "LLM Deck", pythonw.exe 로 돕니다)
   [7/8] 터미널의 orca 명령         %USERPROFILE%\.local\bin\orca.cmd (ORCA 를 다시 깔거나 옮겨도 찾아 갑니다)
   [8/8] 로그인할 때 자동 실행
@@ -171,5 +173,7 @@ install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니�
 - 로그인해도 도우미가 켜지지 않을 때
     자동 실행이 막혔을 수 있습니다. 기록 파일에 오늘 줄이 없으면 install.cmd 를 다시 실행하면 지금 켜집니다.
 - 보안 프로그램이 파일을 지우거나 격리할 때
-    이 도우미는 새 exe 를 만들지 않고 Python 재단이 서명한 python.exe·pythonw.exe 로만 돕니다.
+    이 도우미는 새 exe 를 만들지 않고 이 PC 에 설치된 (Python 재단이 서명한) python.exe·pythonw.exe 로만 돕니다.
+    가상 환경(.venv)도 만들지 않고, 부품의 명령 exe(pip 가 만드는 f2py.exe 같은 것)도 풀지 않습니다.
+    예전 설치가 남긴 app\.venv 와 exe 는 install.cmd 를 다시 실행하면 지웁니다.
     그래도 막히면 IT 부서에 이 폴더(llm-deck-companion) 예외를 부탁합니다.
