@@ -294,6 +294,22 @@ def usb_plugged(cfg: dict) -> bool:
     return TRANSPORTS["usb"](cfg.get("device", {}), lambda seq, pcm: None)._find_port() is not None
 
 
+_usb_stuck = 0  # 기기에서 아무것도 받지 못한 채 USB 로 보내기가 연달아 실패한 횟수
+
+
+def usb_health(transport, ok: bool) -> None:
+    """PC 를 다시 켠 뒤 USB 포트는 보이는데 기기가 받지도 보내지도 않는 일이 있다. 그렇게 보이면 한 번 알린다.
+    기기는 PC 에서 2분 동안 아무것도 오지 않으면 USB 를 다시 붙인다 (usb_link.cpp usb_reconnect)."""
+    global _usb_stuck
+    if ok or transport.name != "USB" or transport.last_rx > transport.opened_at:
+        _usb_stuck = 0
+        return
+    _usb_stuck += 1
+    if _usb_stuck == 3:
+        print("[device] USB 포트는 보이는데 기기가 응답하지 않습니다. 기기가 2분 안에 USB 를 다시 붙입니다.")
+        print("         그래도 안 되면 케이블을 뽑았다 꽂아 주세요.")
+
+
 def connect(names: list[str], cfg: dict, on_audio, on_event, on_photo, on_video):
     for name in names:
         transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event, on_photo, on_video)
@@ -509,11 +525,13 @@ def main() -> None:
                     message["battery_mv"] = round(args.battery * 1000)
                 try:
                     transport.send(message)
+                    usb_health(transport, True)
                     print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
                     first = False
                     peer.sent()
                 except OSError as e:
                     print(f"[device] 전송 실패: {e}")
+                    usb_health(transport, False)
                     transport.close()
                     transport = None
                 # 블루투스·Wi-Fi 로 붙어 있는데 USB 케이블이 꽂히면 USB 로 갈아탄다 (더 빠르고, 기기도 USB 를 우선한다)
@@ -619,6 +637,7 @@ def main() -> None:
                             transport.send({**extra, "host": _host_name()})
                         except OSError as e:
                             print(f"[device] 전송 실패: {e}")
+                            usb_health(transport, False)
                             transport.close()
                             transport = None
                             break

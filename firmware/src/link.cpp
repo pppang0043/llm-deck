@@ -307,6 +307,8 @@ void link_loop() {
       if (doc["saver"] == true) saver_demo();
       // 진단용: I2C 데이터 선을 잠깐 낮게 잡아 막힌 상황을 만든다 (막힘 풀기가 동작하는지 본다)
       if (doc["i2c_test"] == true) display_i2c_test();
+      // 진단용: PC 를 다시 켜 USB 가 꼬였을 때 하는 USB 다시 붙이기를 해 본다
+      if (doc["usb_reconnect"] == true) usb_reconnect("asked by the PC");
       // 진단용: 화면 돌리기 버튼을 누른 것과 같다
       if (doc["rotate"] == true && rotate_cb) rotate_cb();
       if (doc["photo_test"] == true) {

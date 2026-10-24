@@ -462,8 +462,7 @@ class Assistant:
             try:
                 if self._stream is None:
                     opened = time.monotonic()
-                    device = self.cfg.get("input") or None
-                    self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=device)
+                    self._stream = self._open_stream(sd)
                     print(f"[assistant] 마이크를 열었습니다 ({time.monotonic() - opened:.1f}초)")
                 stream = self._stream
                 stream.start()
@@ -503,6 +502,20 @@ class Assistant:
                 self._close_stream()
                 self._mic_failed_until = time.monotonic() + 300
                 fail(f"PC 마이크를 열지 못했습니다\n{str(e)[:60]}", True)
+
+    def _open_stream(self, sd):
+        device = self.cfg.get("input") or None
+        try:
+            return sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=device)
+        except Exception as e:
+            if self.other_audio():
+                raise
+            # PortAudio 는 처음 켤 때 본 장치만 기억한다. 그 뒤 덮개를 여닫거나 에어팟·아이폰 마이크가 붙고 빠지면
+            # 기억한 장치가 사라져 열리지 않는다 (Mac: Invalid Property Value). 목록을 다시 읽고 한 번 더 연다
+            print(f"[assistant] 마이크를 열지 못해 장치 목록을 다시 읽습니다: {str(e)[:80]}")
+            sd._terminate()
+            sd._initialize()
+            return sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=device)
 
     def _halt(self, stream) -> None:
         """녹음을 멈춘다. Mac 에서 stream.stop() 이 돌아오지 않아 다음 녹음이 모두 막힌 적이 있다.

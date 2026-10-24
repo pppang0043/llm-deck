@@ -3,10 +3,15 @@
 #include <string>
 
 #include "link.h"
+#include "soc/soc.h"
+#include "soc/usb_serial_jtag_reg.h"
 
 #define MAX_LINE 16384
+// PC 에서 받던 것이 이만큼 끊기면 USB 를 다시 붙인다 (도우미는 USB 로 30초마다 보낸다)
+#define RX_GAP_MS 120000
 
 static std::string line;
+static uint32_t rx_ms = 0;
 
 void usb_link_init() {
   // Serial.begin() 보다 먼저 불러야 한다
@@ -16,7 +21,28 @@ void usb_link_init() {
   Serial.setTxTimeoutMs(20);
 }
 
+void usb_reconnect(const char *why) {
+  Serial.printf("[usb] reconnecting: %s\n", why);
+  // D+ 풀업을 잠깐 떼면 PC 는 케이블을 뽑았다 꽂은 것으로 보고 처음부터 다시 연결한다.
+  // 기기 재시작(esp_restart)으로는 USB 부분이 초기화되지 않아, PC 를 다시 켤 때 꼬인 USB 가 그대로 남은 적이 있다
+  SET_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_PAD_PULL_OVERRIDE);
+  CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_DP_PULLUP);
+  delay(200);
+  SET_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_DP_PULLUP);
+  CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_PAD_PULL_OVERRIDE);
+}
+
 void usb_link_loop() {
+  // PC 에서 받은 뒤로 아직 다시 붙이지 않았다. 다시 붙인 뒤에도 안 오면 되풀이하지 않는다 (도우미를 끈 PC, 충전기)
+  static bool armed = false;
+  if (Serial.available()) {
+    rx_ms = millis() ? millis() : 1;
+    armed = true;
+  }
+  if (armed && millis() - rx_ms > RX_GAP_MS) {
+    armed = false;
+    usb_reconnect("nothing from the PC for 2 minutes");
+  }
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') {
@@ -93,4 +119,8 @@ bool usb_host_present() {
   }
   if (!lost_ms) lost_ms = millis() ? millis() : 1;
   return millis() - lost_ms < 3000;
+}
+
+uint32_t usb_last_rx_ms() {
+  return rx_ms;
 }
