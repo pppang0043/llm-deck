@@ -8,7 +8,7 @@ git 이 아는 companion 파일(커밋 전 새 파일 포함, .gitignore 에 든
 풀었을 때 맨 위에는 누를 파일과 README 만 두고, 도우미 코드는 app 폴더에 넣는다.
     llm-deck-companion/  install.cmd  uninstall.cmd  mirror.cmd  config.cmd  README.txt  INSTALL.txt  app/
 음성 인식(Whisper) 모델은 넣지 않는다. 받는 방법은 INSTALL.txt 에 적어 두었다.
-Windows 설치(install.ps1)는 uv 없이 pip 로 부품을 까므로, 먼저 uv.lock 으로 requirements.txt 를 새로 만든다.
+Windows 설치(install.py)는 uv 없이 pip 로 부품을 까므로, 먼저 uv.lock 으로 requirements.txt 를 새로 만든다.
 """
 
 import subprocess
@@ -24,7 +24,7 @@ SKIP = ("companion/macos/", "companion/windows/make_zip.py", "companion/windows/
 
 
 def export_requirements() -> None:
-    """uv.lock 과 같은 버전·파일 지문으로 requirements.txt 를 만든다 (install.ps1 이 pip 로 깐다)"""
+    """uv.lock 과 같은 버전·파일 지문으로 requirements.txt 를 만든다 (install.py 가 pip 로 받는다)"""
     subprocess.run(["uv", "export", "--no-dev", "--no-emit-project", "--no-annotate", "--format", "requirements-txt",
                     "--quiet", "-o", "requirements.txt"], cwd=ROOT / "companion", check=True)
 
@@ -67,9 +67,9 @@ def main() -> None:
     if leaked:
         OUT.unlink()
         raise SystemExit(f"토큰으로 보이는 값이 있어 지웠습니다: {leaked}")
-    # 회사 보안 프로그램이 막는 exe 같은 실행 파일은 넣지 않는다 (누르는 .cmd 와 설치 install.ps1 만)
+    # 회사 보안 프로그램이 막는 exe 같은 실행 파일은 넣지 않는다 (누르는 .cmd 만. PowerShell 스크립트도 넣지 않는다)
     with zipfile.ZipFile(OUT) as z:
-        allowed = {"install.cmd", "uninstall.cmd", "mirror.cmd", "config.cmd", "install.ps1", "orca.cmd"}
+        allowed = {"install.cmd", "uninstall.cmd", "mirror.cmd", "config.cmd", "orca.cmd"}
         runnable = [n for n in z.namelist()
                     if n.lower().endswith((".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".com", ".scr", ".msi"))
                     and n.rsplit("/", 1)[-1] not in allowed]

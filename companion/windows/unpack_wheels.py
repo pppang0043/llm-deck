@@ -1,4 +1,4 @@
-"""받아 둔 부품 파일(wheel)을 도우미 부품 폴더(app\\lib)에 푼다 (Windows 설치, install.ps1 이 부른다).
+"""받아 둔 부품 파일(wheel)을 도우미 부품 폴더(app\\lib)에 푼다 (Windows 설치, install.py 가 부른다).
 
     python unpack_wheels.py <wheel 폴더> <풀 폴더>
 

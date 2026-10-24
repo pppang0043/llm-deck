@@ -92,7 +92,7 @@ def find_orca() -> str | None:
             if os.path.isfile(path):
                 return path
     path = shutil.which("orca")
-    # 끊어진 링크는 which 가 건너뛴다. Windows 에서 orca.exe 가 옆에 없는 .cmd(install.ps1 이 까는 orca.cmd)는
+    # 끊어진 링크는 which 가 건너뛴다. Windows 에서 orca.exe 가 옆에 없는 .cmd(install.py 가 까는 orca.cmd)는
     # cmd.exe 를 거쳐 글이 망가질 수 있어 (_native) 진짜 orca.exe 를 못 찾을 때만 쓴다
     if path and not _native(path).lower().endswith((".cmd", ".bat")):
         return _native(path)

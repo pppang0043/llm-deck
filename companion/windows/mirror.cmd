@@ -1,7 +1,19 @@
 @echo off
 chcp 65001 >nul
-rem In the zip this file is at the top and install.ps1 is in app\windows
-set "PS1=%~dp0install.ps1"
-if not exist "%PS1%" set "PS1=%~dp0app\windows\install.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Mirror
+setlocal
+rem Opens the mirror window of the running helper (the tray app opens it, or the browser if there is no app)
+set "APP=%~dp0.."
+if exist "%~dp0app\main.py" set "APP=%~dp0app"
+set "PY="
+if exist "%APP%\python.txt" set /p PY=<"%APP%\python.txt"
+if not defined PY goto missing
+if not exist "%PY%" goto missing
+cd /d "%APP%"
+"%PY%" main.py --mirror
 if errorlevel 1 pause
+exit /b
+
+:missing
+echo 먼저 install.cmd 로 설치하세요.
+pause
+exit /b 1

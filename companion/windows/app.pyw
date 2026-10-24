@@ -6,7 +6,7 @@
     pythonw app.pyw               (시작 메뉴) 도우미가 꺼져 있으면 켜고, 미러링 창을 연다
     pythonw app.pyw --background  (로그인할 때) 도우미만 켠다
     pythonw app.pyw --mirror      (mirror.cmd, main.py --mirror) 미러링 창만. 앱이 떠 있으면 그 앱이 연다
-    python app.pyw --write-icon F 시작 메뉴 바로 가기에 쓸 아이콘(.ico)을 만든다 (install.ps1)
+    python app.pyw --write-icon F 시작 메뉴 바로 가기에 쓸 아이콘(.ico)을 만든다 (install.py)
 
 예전에는 C# 으로 만든 LLM Deck.exe 였다. 설치할 때 새로 만든 exe 를 회사 보안 프로그램(Symantec 등)이
 처음 보는 프로그램이라고 막아서, Python 재단이 서명한 pythonw.exe 로 돌리는 이 파일로 바꿨다.
@@ -27,7 +27,7 @@ import urllib.request
 from pathlib import Path
 
 COMPANION = Path(__file__).resolve().parents[1]
-# 가상 환경 없이 이 PC 의 Python 으로 돈다. 부품(pystray, Pillow)은 install.ps1 이 app\lib 에 풀어 둔다
+# 가상 환경 없이 이 PC 의 Python 으로 돈다. 부품(pystray, Pillow)은 install.py 가 app\lib 에 풀어 둔다
 if (COMPANION / "lib").is_dir() and str(COMPANION / "lib") not in sys.path:
     sys.path.insert(1, str(COMPANION / "lib"))
 BASE = "http://127.0.0.1:4013/"

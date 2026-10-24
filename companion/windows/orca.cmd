@@ -1,6 +1,6 @@
 @echo off
 rem LLM Deck orca shim
-rem The orca command for terminals. install.ps1 puts it at %USERPROFILE%\.local\bin\orca.cmd and adds that folder to PATH.
+rem The orca command for terminals. install.py puts it at %USERPROFILE%\.local\bin\orca.cmd and adds that folder to PATH.
 rem It looks for ORCA on every call, so reinstalling or moving ORCA does not break it.
 setlocal
 set "ORCA_BIN="

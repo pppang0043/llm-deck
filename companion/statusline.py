@@ -16,7 +16,7 @@ DATA_DIR = Path.home() / ".llm-deck"
 SNAPSHOT = DATA_DIR / "claude-statusline.json"
 WINDOWS = os.name == "nt"
 SCRIPT = DATA_DIR / ("statusline.py" if WINDOWS else "statusline.sh")
-# 예전 Windows 설치가 쓰던 PowerShell 스크립트. 실행 정책을 우회해(-ExecutionPolicy Bypass) 상태줄마다 PowerShell 을
+# 예전 Windows 설치가 쓰던 PowerShell 스크립트. 실행 정책을 우회해 상태줄마다 PowerShell 을
 # 띄우는 것을 회사 보안 프로그램이 의심해서, 이 PC 에 설치된 Python 으로 도는 statusline.py 로 바꿨다
 LEGACY_SCRIPT = DATA_DIR / "statusline.ps1"
 # 원래 있던 상태줄 명령. Windows 에서는 이것을 그대로 실행할 배치 파일(NEXT_CMD)도 함께 만든다.

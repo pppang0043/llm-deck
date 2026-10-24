@@ -173,7 +173,7 @@ def test_find_orca_prefers_orca_bin_dir(tmp_path, monkeypatch, no_orca):
 
 
 def test_find_orca_uses_shim_only_as_last_resort(tmp_path, monkeypatch, no_orca):
-    shim = tmp_path / "shim" / "orca.cmd"  # install.ps1 이 까는 것. 옆에 orca.exe 가 없다
+    shim = tmp_path / "shim" / "orca.cmd"  # install.py 가 까는 것. 옆에 orca.exe 가 없다
     shim.parent.mkdir()
     shim.write_text("")
     real = tmp_path / "Orca" / "orca.exe"

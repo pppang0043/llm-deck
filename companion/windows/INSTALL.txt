@@ -168,8 +168,9 @@ install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니�
     mirror.cmd 가 대신 브라우저로 엽니다.
 - 음성 인식 모델을 받지 못할 때 (huggingface.co 가 막힘)
     "5. 음성 인식 모델 설치" 의 방법 B (집 PC 에서 받아 USB 로 옮기기) 를 씁니다.
-- PowerShell 이 막혀 install.cmd 가 바로 끝날 때 ("스크립트를 실행할 수 없습니다", "실행 정책")
-    회사가 PowerShell 스크립트 실행을 막아 둔 것입니다. 사용자가 풀 수 없으니 IT 부서에 부탁합니다.
+- install.cmd 가 "Python 을 찾지 못했습니다" 로 바로 끝날 때
+    install.cmd 는 PowerShell 없이 이 PC 의 Python 으로 설치합니다 (app\windows\install.py).
+    "1. 준비" 대로 Python 을 설치하고 다시 실행합니다. 설치할 때 "py launcher" 를 켜 두면 찾기 쉽습니다.
 - 로그인해도 도우미가 켜지지 않을 때
     자동 실행이 막혔을 수 있습니다. 기록 파일에 오늘 줄이 없으면 install.cmd 를 다시 실행하면 지금 켜집니다.
 - 보안 프로그램이 파일을 지우거나 격리할 때
@@ -177,3 +178,15 @@ install.cmd 를 다시 실행합니다. (이 설정은 설치할 때만 씁니�
     가상 환경(.venv)도 만들지 않고, 부품의 명령 exe(pip 가 만드는 f2py.exe 같은 것)도 풀지 않습니다.
     예전 설치가 남긴 app\.venv 와 exe 는 install.cmd 를 다시 실행하면 지웁니다.
     그래도 막히면 IT 부서에 이 폴더(llm-deck-companion) 예외를 부탁합니다.
+
+PowerShell 을 쓰는 곳 (회사 보안 프로그램이 PowerShell 을 의심하거나 막을 때)
+  설치·제거·미러링 (install.cmd, uninstall.cmd, mirror.cmd)
+      쓰지 않습니다. Python 으로 설치하고, 레지스트리·바로 가기·방화벽(netsh)은 Windows 를 바로 부릅니다.
+  Claude Code 상태줄 (한도 사용률)
+      쓰지 않습니다. python.exe 로 statusline.py 를 돌립니다. 예전 PowerShell 설정은 install.cmd 가 바꿔 둡니다.
+  답 읽어 주기 (말로 질문한 답을 PC 스피커로)
+      쓰지 않습니다. Windows 음성(SAPI)을 도우미 안에서 바로 부릅니다.
+      그게 안 되는 PC 에서만 config.toml [assistant] speak_powershell = true 로 PowerShell 로 읽게 할 수 있습니다
+      (처음에는 꺼져 있습니다. 켜면 도우미가 답마다 PowerShell 을 띄웁니다).
+  기기의 "파워쉘" 단축 버튼
+      누를 때 사용자가 쓸 PowerShell 창을 엽니다. 회사가 PowerShell 을 막아 열리지 않으면 대신 명령 프롬프트(cmd)를 엽니다.
