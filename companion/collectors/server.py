@@ -13,14 +13,20 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 INTERVAL = 120  # 이만큼마다 묻는다
 RETRY_AFTER_FAIL = 600  # 실패하면 이만큼 쉰다
+MAX_BACKOFF = 3600  # 너무 자주 묻는다(429)고 하면 쉬는 시간을 두 배씩 늘리되 이만큼까지만
+# 도우미를 다시 켜도 곧바로 묻지 않게 다음에 물을 시각을 남겨 둔다 (재시작 직후에 429 가 났다)
+STATE = Path.home() / ".llm-deck" / "server-usage.json"
 
-_cache: dict[str, tuple[float, dict | None]] = {}
+_cache: dict[str, tuple[float, dict | None]] = {}  # 이름: (다음에 물을 시각, 마지막 값)
+_backoff: dict[str, float] = {}  # 429 뒤 지금 쉬는 시간
+_quiet: set[str] = set()  # 실패를 이미 알린 이름. 성공할 때까지 다시 알리지 않는다
 
 
 def _get(url: str, headers: dict) -> dict:
@@ -29,19 +35,70 @@ def _get(url: str, headers: dict) -> dict:
         return json.load(res)
 
 
+def _load_next(name: str) -> float:
+    try:
+        return float(json.loads(STATE.read_text(encoding="utf-8"))[name])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.0
+
+
+def _save_next(name: str, at: float) -> None:
+    try:
+        state = json.loads(STATE.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+    state[name] = at
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _retry_after(e: urllib.error.HTTPError) -> float:
+    try:
+        return float(e.headers.get("Retry-After") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _cached(name: str, fetch) -> dict | None:
     now = time.time()
-    at, value = _cache.get(name, (0.0, None))
-    if now - at < (INTERVAL if value else RETRY_AFTER_FAIL):
+    if name not in _cache:
+        _cache[name] = (_load_next(name), None)
+    next_at, value = _cache[name]
+    if now < next_at:
         return value
     try:
         value = fetch()
+        _backoff.pop(name, None)
+        _quiet.discard(name)
+        next_at = now + (INTERVAL if value else RETRY_AFTER_FAIL)
+    except urllib.error.HTTPError as e:
+        if e.code != 429:
+            return _failed(name, now, e)
+        wait = min(MAX_BACKOFF, max(_backoff.get(name, RETRY_AFTER_FAIL / 2) * 2, _retry_after(e)))
+        if name not in _quiet:
+            _quiet.add(name)
+            print(f"[server] {name} 사용량 서버가 너무 자주 묻는다고 해서 {wait / 60:.0f}분 쉽니다 (기존 값 사용)")
+        _backoff[name] = wait
+        next_at = now + wait  # 그동안은 마지막으로 읽은 값을 그대로 쓴다
     except Exception as e:  # 주소가 바뀌었거나 네트워크 문제. 기존 값으로 넘어간다
-        if value is not None or name not in _cache:
-            print(f"[server] {name} 사용량을 서버에서 읽지 못했습니다: {type(e).__name__} {e}")
-        value = None
-    _cache[name] = (now, value)
+        return _failed(name, now, e)
+    _cache[name] = (next_at, value)
+    _save_next(name, next_at)
     return value
+
+
+def _failed(name: str, now: float, e: Exception) -> None:
+    if name not in _quiet:
+        _quiet.add(name)
+        print(f"[server] {name} 사용량을 서버에서 읽지 못했습니다: {type(e).__name__} {e}")
+    _cache[name] = (now + RETRY_AFTER_FAIL, None)
+    _save_next(name, now + RETRY_AFTER_FAIL)
+    return None
 
 
 def _minute(t: float) -> int:
