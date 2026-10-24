@@ -405,6 +405,61 @@ static bool forecast(const char *service, JsonObjectConst bar, char *out, size_t
   return true;
 }
 
+// ---- 리셋까지 남은 시간: 페이지를 다시 만들지 않고 30초마다 글자만 바꾼다 ----
+
+struct Remain {
+  lv_obj_t *label;
+  time_t resets;
+};
+#define MAX_REMAINS 12
+static Remain remains[MAX_REMAINS];
+static lv_timer_t *remain_timer;
+
+// "리셋 0일 02:13 (15:00)": 남은 날, 시:분, 괄호 안은 리셋 시각 (오늘이 아니면 "(23일 15:00)")
+static void remain_update(Remain &r) {
+  char text[48];
+  time_t now = time(nullptr);
+  long left = (long)(r.resets - now);
+  struct tm t, today;
+  localtime_r(&r.resets, &t);
+  localtime_r(&now, &today);
+  char when[16];
+  if (t.tm_yday == today.tm_yday && t.tm_year == today.tm_year) {
+    snprintf(when, sizeof(when), "%02d:%02d", t.tm_hour, t.tm_min);
+  } else {
+    snprintf(when, sizeof(when), "%d일 %02d:%02d", t.tm_mday, t.tm_hour, t.tm_min);
+  }
+  if (left < 0) left = 0;
+  snprintf(text, sizeof(text), "리셋 %ld일 %02ld:%02ld (%s)", left / 86400, left % 86400 / 3600, left % 3600 / 60, when);
+  if (strcmp(lv_label_get_text(r.label), text) != 0) lv_label_set_text(r.label, text);
+}
+
+static void remain_tick(lv_timer_t *t) {
+  for (Remain &r : remains) {
+    if (r.label) remain_update(r);
+  }
+}
+
+static void remain_deleted(lv_event_t *e) {
+  for (Remain &r : remains) {
+    if (r.label == lv_event_get_target(e)) r.label = nullptr;
+  }
+}
+
+// label 에 남은 시간을 쓰고 계속 고쳐 나간다. 초기화 시각을 모르면 아무것도 하지 않는다.
+static void add_remain(lv_obj_t *label, uint32_t resets) {
+  if (!resets) return;
+  for (Remain &r : remains) {
+    if (r.label) continue;
+    r.label = label;
+    r.resets = (time_t)resets;
+    lv_obj_add_event_cb(label, remain_deleted, LV_EVENT_DELETE, NULL);
+    remain_update(r);
+    if (!remain_timer) remain_timer = lv_timer_create(remain_tick, 30000, NULL);
+    return;
+  }
+}
+
 // 한도 한 구간: 왼쪽에 이름과 초기화 시각, 오른쪽에 큰 숫자, 아래에 막대. 누르면 기록 그래프.
 static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar) {
   int pct = constrain(bar["pct"] | 0, 0, 100);
@@ -414,7 +469,12 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
   lv_obj_align(add_label(row, bar["label"] | "", &font_ko_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
-  lv_obj_align(add_label(row, bar["note"] | "", &font_ko_14, COLOR_DIM), LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  // 리셋 시각을 알면 남은 시간과 함께 밝게 ("리셋 0일 02:13 (15:00)")
+  bool known = bar["resets"] | 0u;
+  lv_obj_t *note = add_label(row, bar["note"] | "", known ? &font_ko_20 : &font_ko_14,
+                             known ? lv_color_white() : COLOR_DIM);
+  lv_obj_align(note, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  add_remain(note, bar["resets"] | 0u);
   lv_obj_align(add_label(row, bar["text"] | "", &lv_font_montserrat_48, color), LV_ALIGN_RIGHT_MID, 0, 0);
   if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
@@ -459,10 +519,13 @@ static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst b
   lv_bar_set_range(b, 0, 100);
   lv_bar_set_value(b, pct, LV_ANIM_OFF);
   if (pct >= 70) lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
+  // 리셋 시각을 알면 남은 시간과 함께 밝게 ("리셋 0일 02:13 (15:00)"), 모르면 받은 글자를 흐리게
   const char *when = bar["note"] | "";
-  lv_obj_t *note = add_label(cell, when[0] ? when : "-", &font_ko_14, COLOR_DIM);
+  bool known = bar["resets"] | 0u;
+  lv_obj_t *note = add_label(cell, when[0] ? when : "-", &font_ko_14, known ? lv_color_white() : COLOR_DIM);
   lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
   lv_obj_set_style_max_width(note, lv_pct(100), 0);
+  add_remain(note, bar["resets"] | 0u);
   char soon[32];
   if (forecast(service, bar, soon, sizeof(soon))) {
     lv_obj_t *lbl = add_label(cell, soon, &font_ko_14, COLOR_WARN);
