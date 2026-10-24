@@ -26,13 +26,19 @@ from pathlib import Path
 import typer
 
 POLL_SECONDS = 10
+# ORCA 는 탭을 바꾸면 이만큼 뒤에 화면 상태를 저장한다 (재 보니 1~1.5초)
+ACTIVE_TAB_LAG_SECONDS = 2.0
 MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
-RECENT_FILE = Path.home() / ".llm-deck" / "orca_recent.json"
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
 # ORCA 화면 세션 팝업의 키 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter). 나머지 이름은 typer.KEYWORDS 의 글 + Enter.
 # Tab + Enter 는 Claude Code 가 흐리게 보여준 추천 문장을 받아서 바로 보낸다.
-KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": ("Tab + Enter", "\t", True)}
+# 지우기는 Ctrl+E (줄 끝으로) 뒤 Ctrl+U (줄 처음까지 지우기): 입력칸이 비어 있어도, Claude 가 일하는 중이어도 아무 일 없다.
+# Esc 두 번 / Ctrl+C 도 입력칸을 비우지만, 빈 칸이면 되감기(/rewind) 창을 열거나 일하는 Claude 를 멈추므로 쓰지 않는다.
+KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": ("Tab + Enter", "\t", True),
+        "clear": ("지우기", "\x05\x15", False),
+        # Esc 한 번: 일하는 Claude 를 멈추거나 열린 고르기 창을 닫는다 (사용자가 Esc 버튼을 직접 누를 때만)
+        "esc": ("Esc", "\x1b", False)}
 # 빠른 답 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter, 보내도 되는 상태). 기기는 이름만 보낸다.
 # Claude Code 권한 묻기는 "1. Yes / 2. ... / 3. No (esc)" 고르기라 허용은 "1" (Yes 를 바로 고른다), 거부는 Esc.
 # 허용에 Enter 를 쓰지 않는다: 목록이 늦어 이미 입력칸으로 돌아갔으면 "1" 만 남고 아무것도 보내지지 않는다.
@@ -214,25 +220,73 @@ else:
     ORCA_DATA = Path.home() / ".config" / "orca"
 
 
-def _custom_titles() -> dict[str, str]:
-    """탭 id -> 사용자가 붙인 탭 이름 (ORCA 에서 탭 이름 바꾸기). 못 읽으면 빈 dict.
+def _profile_docs(*domains: str) -> list[dict]:
+    """ORCA 가 화면 상태를 저장한 문서들 (JSON). 프로필마다 {domain: 문서}.
 
-    ORCA 는 탭 목록을 profiles/<프로필>/profile-state.db 의 workspaceSession 문서(JSON)에 저장한다.
-    terminal list 의 title 은 Claude 가 붙인 자동 제목이라, 이 이름이 있으면 이것을 쓴다.
+    ORCA 는 profiles/<프로필>/profile-state.db 에 저장한다. workspaceSession 은 탭 목록과 지금 보이는 탭,
+    projects 는 사이드바의 프로젝트 (그 순서대로). 최근에 쓴 프로필(지금 쓰는 것)이 앞에.
     """
-    titles: dict[str, str] = {}
+    found = []
     for db in ORCA_DATA.glob("profiles/*/profile-state.db"):
         try:
             # 읽기만 한다 (ORCA 가 쓰는 중이어도 막지 않게)
             con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=1)
             try:
-                row = con.execute(
-                    "select payload from profile_state_documents where domain = 'workspaceSession'").fetchone()
+                docs = {domain: json.loads(row[0]) for domain in domains
+                        for row in [con.execute("select payload from profile_state_documents where domain = ?",
+                                                (domain,)).fetchone()] if row}
             finally:
                 con.close()
-            session = json.loads(row[0]) if row else {}
-        except (sqlite3.Error, ValueError, TypeError):
+            wal = db.with_name(db.name + "-wal")
+            changed = max(db.stat().st_mtime, wal.stat().st_mtime if wal.exists() else 0)
+        except (OSError, sqlite3.Error, ValueError, TypeError):
             continue
+        found.append((changed, docs))
+    return [docs for _, docs in sorted(found, key=lambda f: f[0], reverse=True)]
+
+
+def _workspace_sessions() -> list[dict]:
+    return [d["workspaceSession"] for d in _profile_docs("workspaceSession")
+            if isinstance(d.get("workspaceSession"), dict)]
+
+
+def _screen_order() -> tuple[dict[str, int], dict[str, int]]:
+    """ORCA 화면에 보이는 순서: (저장소 id -> 사이드바의 프로젝트 순서, 탭 id -> 그 작업 폴더 안의 탭 순서).
+    못 읽으면 빈 dict (그때는 orca terminal list 순서대로)."""
+    docs = _profile_docs("workspaceSession", "projects")
+    if not docs:
+        return {}, {}
+    repos: dict[str, int] = {}
+    projects = docs[0].get("projects")
+    for i, project in enumerate(projects if isinstance(projects, list) else []):
+        for repo in (project.get("sourceRepoIds") or []) if isinstance(project, dict) else []:
+            repos.setdefault(repo, i)
+    tabs: dict[str, int] = {}
+    session = docs[0].get("workspaceSession")
+    groups_by_worktree = session.get("tabGroups") if isinstance(session, dict) else None
+    for groups in (groups_by_worktree or {}).values():
+        n = 0
+        for group in groups or []:
+            for tab in (group.get("tabOrder") or []) if isinstance(group, dict) else []:
+                tabs.setdefault(tab, n)
+                n += 1
+    return repos, tabs
+
+
+def active_tab() -> str | None:
+    """ORCA 화면에 지금 보이는 탭 id. 못 읽으면 None.
+    탭을 바꾸면 ORCA 가 1~1.5초 뒤에 저장하므로 그만큼 늦다 (orca terminal show 는 화면을 따라가지 않는다)."""
+    sessions = _workspace_sessions()
+    tab = sessions[0].get("activeTabId") if sessions else None
+    return tab if isinstance(tab, str) else None
+
+
+def _custom_titles() -> dict[str, str]:
+    """탭 id -> 사용자가 붙인 탭 이름 (ORCA 에서 탭 이름 바꾸기). 못 읽으면 빈 dict.
+    terminal list 의 title 은 Claude 가 붙인 자동 제목이라, 이 이름이 있으면 이것을 쓴다.
+    """
+    titles: dict[str, str] = {}
+    for session in _workspace_sessions():
         for tabs in (session.get("tabsByWorktree") or {}).values():
             for tab in tabs or []:
                 name = (tab.get("customTitle") or "").strip() if isinstance(tab, dict) else ""
@@ -244,6 +298,20 @@ def _custom_titles() -> dict[str, str]:
 def _short_title(title: str) -> str:
     # ORCA 는 탭 이름 앞에 작업 중 표시(◐ ✳ 등)를 붙인다
     return re.sub(r"^[^\w가-힣/]+\s*", "", title or "").strip() or "터미널"
+
+
+def _copy(text: str) -> bool:
+    """클립보드에 넣는다 (넣지 못한 받아쓰기를 잃지 않게). 잘 되면 True."""
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["pbcopy"], input=text.encode("utf-8"), timeout=5, check=True)
+        elif sys.platform == "win32":
+            subprocess.run(["clip"], input=text.encode("utf-16"), timeout=5, check=True, creationflags=_NO_WINDOW)
+        else:
+            return False
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _front_windows() -> bool:
@@ -292,13 +360,8 @@ class Orca:
         self.enabled = cfg.get("enabled", True)
         self.cli: str | None = None
         self.handles: dict[str, str] = {}  # 기기에 보낸 짧은 id -> orca 터미널 handle
+        self.tabs: dict[str, str] = {}  # 터미널 handle -> ORCA 탭 id (화면에 보이는지 볼 때)
         self.workdirs: list[str] = []
-        # 기기에서 세션을 연 시각 (handle -> time.time()). 최근에 연 것을 앞에 둔다. 도우미를 다시 켜도 남긴다
-        self.recent: dict[str, float] = {}
-        try:
-            self.recent = json.loads(RECENT_FILE.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
         self.state: dict | None = None
         self.sent: dict | None = None
         self.pending_toast: str | None = None
@@ -346,7 +409,8 @@ class Orca:
         for wt in ps.get("worktrees", []):
             for agent in wt.get("agents", []):
                 agents[agent.get("paneKey")] = agent
-        rows, handles = [], {}
+        rows, handles, tabs = [], {}, {}
+        order_keys = []  # (작업 폴더 id, 탭 id, 짧은 id). terminal list 순서
         custom = _custom_titles()
         for term in terms.get("terminals", []):
             if term.get("orphaned") or not term.get("connected"):
@@ -365,16 +429,20 @@ class Orca:
             rows.append({"id": short, "t": title[:30], "p": Path(path).name[:20],
                          "s": state})
             handles[short] = handle
-        # 프로젝트별로 모으고, 손댈 일이 있는 세션(승인·입력·완료)이 앞에, 작업 중과 터미널은 뒤에.
-        # 같은 무리 안에서는 최근에 연 세션(과 그 프로젝트)이 앞에
-        def rank(row: dict) -> tuple:
-            return (row["s"] == "working", row["s"] == "shell", -self.recent.get(handles[row["id"]], 0))
-
-        best: dict[str, tuple] = {}
-        for row in rows:
-            best[row["p"]] = min(best.get(row["p"], rank(row)), rank(row))
-        rows.sort(key=lambda r: (best[r["p"]], r["p"], rank(r)))
+            tabs[handle] = term.get("tabId")
+            order_keys.append((term.get("worktreeId") or path, term.get("tabId"), short))
+        # ORCA 화면에 떠 있는 순서대로: 사이드바의 프로젝트 순서, 그 안에서 탭 순서.
+        # (상태로 정렬하면 상태가 바뀔 때마다 버튼 자리가 바뀌어 헷갈린다) 모르는 것은 terminal list 순서대로 뒤에
+        repo_order, tab_order = _screen_order()
+        wt_first: dict[str, int] = {}
+        for i, key in enumerate(order_keys):
+            wt_first.setdefault(key[0], i)
+        rank = {short: (repo_order.get(wt.split("::")[0], len(repo_order)), wt_first[wt],
+                        tab_order.get(tab, len(tab_order)), i)
+                for i, (wt, tab, short) in enumerate(order_keys)}
+        rows.sort(key=lambda r: rank[r["id"]])
         self.handles = handles
+        self.tabs = tabs
         self.workdirs = sorted({t.get("worktreePath") for t in terms.get("terminals", []) if t.get("worktreePath")})
         return {"ok": True, "list": rows[:MAX_SESSIONS]}
 
@@ -413,15 +481,6 @@ class Orca:
             return None
         if self._run("terminal", "switch", "--terminal", handle) is None:
             print(f"[orca] {short} 로 바꾸지 못했습니다")
-        self.recent[handle] = time.time()
-        live = set(self.handles.values())
-        self.recent = {h: t for h, t in self.recent.items() if h in live}  # 닫힌 세션은 지운다
-        try:
-            RECENT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            RECENT_FILE.write_text(json.dumps(self.recent), encoding="utf-8")
-        except OSError:
-            pass
-        self._wake.set()  # 순서가 바뀌었다
         if sys.platform == "darwin":
             subprocess.run(["open", "-b", BUNDLE_ID], capture_output=True, timeout=10)
         elif sys.platform == "win32":
@@ -487,9 +546,39 @@ class Orca:
         self.pending_toast = f"{row['t']}\n{shown} 보냈습니다" if ok else f"ORCA 세션에 {shown}\n보내지 못했습니다"
         self._wake.set()  # 상태가 곧 바뀐다
 
+    def _tab_title(self, tab: str | None) -> str:
+        handle = next((h for h, t in self.tabs.items() if t == tab), None)
+        return self._title(handle) if handle else "다른 탭"
+
+    def _title(self, handle: str) -> str:
+        short = handle.removeprefix("term_")[:8]
+        row = next((r for r in (self.state or {}).get("list", []) if r["id"] == short), None)
+        return row["t"] if row else short
+
+    def showing(self, handle: str) -> tuple[bool, str | None]:
+        """ORCA 화면에 지금 그 세션이 보이는지, 그리고 보이는 탭. 화면 상태를 못 읽으면 (예전 ORCA 등) 보이는 것으로 본다."""
+        want = self.tabs.get(handle)
+        active = active_tab()
+        if not want or not active or active == want:
+            return True, active
+        # 막 바꾼 탭은 ORCA 가 늦게 저장하므로 한 번 더 기다려 본다 (짧게 말하면 끝날 때까지 아직 안 바뀌어 있다)
+        time.sleep(ACTIVE_TAB_LAG_SECONDS)
+        active = active_tab()
+        return active == want, active
+
     def send_text(self, handle: str, text: str) -> str | None:
-        """세션 터미널에 글을 넣는다 (Enter 없이). 잘 되면 None, 안 되면 이유."""
+        """세션 터미널에 글을 넣는다 (Enter 없이). 잘 되면 None, 안 되면 이유.
+        넣기 직전에 ORCA 화면에 그 세션이 보이는지 확인한다. 받아 적는 동안 다른 세션(에이전트)이 자기 세션을
+        앞으로 띄우면 글이 그쪽으로 넘어간 적이 있어, 다르면 넣지 않고 글을 클립보드에 남긴다."""
+        ok, active = self.showing(handle)
+        if not ok:
+            now = self._tab_title(active)
+            print(f"[orca] 넣지 않음: 고른 세션 {self._title(handle)}, 지금 보이는 세션 {now}")
+            copied = _copy(text)
+            return (f"ORCA 화면이 다른 세션({now})으로 바뀌어 넣지 않았습니다"
+                    + ("\n받아 적은 글은 클립보드에 있습니다" if copied else ""))
         if self._run("terminal", "send", "--terminal", handle, "--text", text) is None:
             return "ORCA 세션에 넣지 못했습니다"
+        print(f"[orca] {self._title(handle)} 에 받아 적은 글을 넣었습니다")
         self._wake.set()  # 상태가 곧 바뀐다
         return None

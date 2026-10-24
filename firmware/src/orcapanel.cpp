@@ -273,15 +273,50 @@ static void set_btn_text(lv_obj_t *lbl, const char *text) {
   lv_obj_center(lbl);
 }
 
-// 세션들을 쪽(6칸)에 PC 가 보낸 순서(프로젝트별로 모아 최근에 연 것이 앞)대로 빈칸 없이 채운다.
+// 세션들을 쪽(6칸)에 PC 가 보낸 순서(ORCA 화면의 프로젝트·탭 순서)대로 놓는다.
+// 같은 프로젝트는 한 줄에 같이 둔다: 한 줄에 들어가는 프로젝트는 그만큼 빈 줄(앞쪽 줄의 남은 칸 포함)에 통째로,
+// 한 줄보다 많으면 새 줄부터 이어서 (한 쪽에 들어가면 쪽을 넘기지 않는다).
 static void lay_out_pages() {
   for (Page &p : pages) {
     for (int &i : p.session) i = -1;
   }
   page_count = 0;
-  for (int i = 0; i < count && i < MAX_PAGES * PER_PAGE; i++) {
-    if (i % PER_PAGE == 0) page_count++;
-    pages[i / PER_PAGE].session[i % PER_PAGE] = i;
+  const int total_rows = MAX_PAGES * rows;
+  int fill[MAX_PAGES * PER_PAGE] = {};  // 줄마다 채운 칸 수
+  bool placed[MAX_ROWS] = {};
+  int next_row = 0;  // 아직 아무것도 놓지 않은 첫 줄
+  auto put = [&](int row, int i) {
+    int n = row / rows;
+    pages[n].session[(row % rows) * cols + fill[row]++] = i;
+    placed[i] = true;
+    if (n >= page_count) page_count = n + 1;
+  };
+  for (int i = 0; i < count;) {
+    int n = 1;
+    while (i + n < count && strcmp(sessions[i + n].project, sessions[i].project) == 0) n++;
+    if (n <= cols) {
+      int r = 0;
+      while (r < next_row && fill[r] + n > cols) r++;
+      if (r == next_row && next_row < total_rows) next_row++;
+      if (r < next_row) {
+        for (int k = 0; k < n; k++) put(r, i + k);
+      }
+    } else {
+      int need = (n + cols - 1) / cols;
+      if (need <= rows && next_row % rows + need > rows) next_row += rows - next_row % rows;
+      for (int k = 0; k < n && (k % cols || next_row < total_rows); k++) {
+        if (k % cols == 0) next_row++;
+        put(next_row - 1, i + k);
+      }
+    }
+    i += n;
+  }
+  // 칸이 모자라 못 놓은 세션은 남은 빈칸에 차례로
+  for (int i = 0, r = 0; i < count; i++) {
+    if (placed[i]) continue;
+    while (r < total_rows && fill[r] == cols) r++;
+    if (r == total_rows) break;
+    put(r, i);
   }
 }
 
@@ -771,6 +806,7 @@ void orcapanel_layout(int x, int y, int w, int h) {
       lv_obj_set_width(p.lbl[k], label_w);
     }
   }
+  lay_out_pages();      // 한 줄 칸 수가 바뀌었을 수 있다
   orcapanel_refresh();  // 글자 폭이 바뀌었다
 }
 

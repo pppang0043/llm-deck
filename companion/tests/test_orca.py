@@ -6,7 +6,7 @@ import typer
 
 @pytest.fixture
 def o(tmp_path, monkeypatch):
-    monkeypatch.setattr(orca, "RECENT_FILE", tmp_path / "recent.json")
+    monkeypatch.setattr(orca, "_screen_order", lambda: ({}, {}))
     monkeypatch.setattr(orca, "_custom_titles", lambda: {})
     monkeypatch.setattr(orca.time, "sleep", lambda s: None)
     inst = orca.Orca({"enabled": False})  # 읽는 스레드는 띄우지 않는다
@@ -77,35 +77,45 @@ def test_send_key_keyword_and_unknown(o):
     o.send_key("abc", "tab_enter")
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\t"),
                            ("terminal", "send", "--terminal", "term_abc", "--enter")]
+    o.sent_cmds.clear()
+    o.send_key("abc", "clear")  # 입력칸 비우기: Enter 는 치지 않는다
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\x05\x15")]
 
 
-def test_session_sort_order(o):
-    def term(n, wt, agent=True):
-        return {"handle": f"term_{n}", "tabId": f"t{n}", "leafId": "l", "worktreePath": f"/w/{wt}",
-                "title": f"✳ 세션{n}", "connected": True, "agentIdentity": "claude" if agent else None}
+def test_session_order_follows_orca_screen(o, monkeypatch):
+    # 상태(작업 중·권한 요청 등)와 상관없이 ORCA 화면 순서대로: 사이드바의 프로젝트 순서, 그 안에서 탭 순서
+    def term(n, repo, tab_id, agent=True):
+        return {"handle": f"term_{n}", "tabId": tab_id, "leafId": "l", "worktreeId": f"{repo}::/w/{repo}",
+                "worktreePath": f"/w/{repo}", "title": f"✳ 세션{n}", "connected": True,
+                "agentIdentity": "claude" if agent else None}
 
     terminals = [
-        term("aaaa1", "alpha"),               # 작업 중
-        term("bbbb1", "beta"),                # 작업 중
-        term("bbbb2", "beta"),                # 권한 요청
-        term("cccc1", "gamma", agent=False),  # 그냥 터미널
-        term("dddd1", "delta"),               # 입력 기다림
-        {**term("eeee1", "eps"), "connected": False},  # 끊긴 것은 뺀다
+        term("aaaa1", "alpha", "ta1"),
+        term("bbbb1", "beta", "tb1"),
+        term("bbbb2", "beta", "tb2"),
+        term("cccc1", "gamma", "tc1", agent=False),
+        term("zzzz1", "zeta", "tz1"),  # ORCA 화면 상태에 없는 것은 뒤에
+        {**term("eeee1", "eps", "te1"), "connected": False},  # 끊긴 것은 뺀다
     ]
-    states = {"aaaa1": "working", "bbbb1": "working", "bbbb2": "permission", "dddd1": "waiting"}
-    ps = {"worktrees": [{"agents": [{"paneKey": f"t{n}:l", "mainAgent": {"state": s}} for n, s in states.items()]}]}
+    states = {"aaaa1": "working", "bbbb1": "working", "bbbb2": "permission"}
+    ps = {"worktrees": [{"agents": [{"paneKey": f"{t['tabId']}:l", "mainAgent": {"state": states[t['handle'][5:]]}}
+                                    for t in terminals if t["handle"][5:] in states]}]}
 
     def run(*args, **kw):
         return ps if args[:2] == ("worktree", "ps") else {"terminals": terminals}
 
     o._run = run
+    # 사이드바: gamma, beta, alpha 순. beta 안의 탭은 tb2, tb1 순
+    monkeypatch.setattr(orca, "_screen_order", lambda: ({"gamma": 0, "beta": 1, "alpha": 2}, {"tb2": 0, "tb1": 1}))
     state = o._read()
-    order = [(r["p"], r["s"]) for r in state["list"]]
-    # 손댈 일이 있는 프로젝트(beta: 권한, delta: 입력)가 앞, 그냥 터미널과 작업 중만 있는 프로젝트는 뒤
-    assert order == [("beta", "permission"), ("beta", "working"), ("delta", "waiting"),
-                     ("gamma", "shell"), ("alpha", "working")]
-    assert state["list"][0]["t"] == "세션bbbb2"  # 앞의 ✳ 표시를 뗀다
+    assert [r["id"] for r in state["list"]] == ["cccc1", "bbbb2", "bbbb1", "aaaa1", "zzzz1"]
+    assert state["list"][1]["s"] == "permission"
+    assert state["list"][1]["t"] == "세션bbbb2"  # 앞의 ✳ 표시를 뗀다
     assert o.handles["bbbb2"] == "term_bbbb2"
+
+    # 화면 상태를 못 읽으면 orca terminal list 순서 그대로
+    monkeypatch.setattr(orca, "_screen_order", lambda: ({}, {}))
+    assert [r["id"] for r in o._read()["list"]] == ["aaaa1", "bbbb1", "bbbb2", "cccc1", "zzzz1"]
 
 
 def test_read_when_cli_missing(o):
@@ -153,3 +163,55 @@ def test_find_orca_uses_shim_only_as_last_resort(tmp_path, monkeypatch, no_orca)
 
 def test_find_orca_missing(no_orca):
     assert orca.find_orca() is None
+
+
+@pytest.fixture
+def two_tabs(o, monkeypatch):
+    # 받아쓰기를 고른 세션(abc, 탭 t1)과 다른 에이전트의 세션(xyz, 탭 t2)
+    o.handles = {"abc": "term_abc", "xyz": "term_xyz"}
+    o.tabs = {"term_abc": "t1", "term_xyz": "t2"}
+    o.state = {"ok": True, "list": [{"id": "abc", "t": "내 세션"}, {"id": "xyz", "t": "남의 세션"}]}
+    o._run = lambda *a, **k: o.sent_cmds.append(a) or {}
+    copied = []
+    monkeypatch.setattr(orca, "_copy", lambda text: copied.append(text) or True)
+    return copied
+
+
+def test_send_text_when_session_showing(o, two_tabs, monkeypatch):
+    monkeypatch.setattr(orca, "active_tab", lambda: "t1")
+    assert o.send_text("term_abc", "안녕") is None
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "안녕")]
+    assert two_tabs == []
+
+
+def test_send_text_refused_after_other_session_took_screen(o, two_tabs, monkeypatch):
+    # 받아 적는 동안 다른 세션이 자기 세션을 앞으로 띄웠다: 넣지 않고 글은 클립보드에 남긴다
+    monkeypatch.setattr(orca, "active_tab", lambda: "t2")
+    error = o.send_text("term_abc", "안녕")
+    assert "남의 세션" in error and "클립보드" in error
+    assert o.sent_cmds == []
+    assert two_tabs == ["안녕"]
+
+
+def test_send_text_waits_for_late_saved_tab(o, two_tabs, monkeypatch):
+    # 막 바꾼 탭은 ORCA 가 1~1.5초 뒤에 저장한다: 한 번 더 읽어 보고 맞으면 넣는다
+    seen = iter(["t2", "t1"])
+    monkeypatch.setattr(orca, "active_tab", lambda: next(seen))
+    assert o.send_text("term_abc", "안녕") is None
+    assert o.sent_cmds
+
+
+def test_send_text_when_screen_state_unreadable(o, two_tabs, monkeypatch):
+    # 예전 ORCA 등으로 화면 상태를 못 읽으면 막지 않는다 (handle 로 그 세션에만 보낸다)
+    monkeypatch.setattr(orca, "active_tab", lambda: None)
+    assert o.send_text("term_abc", "안녕") is None
+
+
+def test_send_key_esc_without_enter(o):
+    # 팝업의 Esc 버튼: Esc 한 번만 보내고 Enter 는 치지 않는다
+    o.handles = {"abc": "term_abc"}
+    o.sent_cmds = []
+    o._run = lambda *args, **kw: o.sent_cmds.append(args) or {}
+    o.send_key("abc", "esc")
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\x1b")]
+    assert o.pending_toast == "보냈습니다: Esc"
