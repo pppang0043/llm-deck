@@ -72,6 +72,13 @@ if sys.platform == "win32":
     user32.MonitorFromPoint.restype = wintypes.HANDLE
     user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
 
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD)]
+
+    user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+
     ERROR_ALREADY_EXISTS = 183
     EVENT_MODIFY_STATE = 0x0002
     INFINITE = 0xFFFFFFFF
@@ -137,6 +144,30 @@ def signed(v: int) -> int:
     return v - (1 << 32) if v >= 1 << 31 else v
 
 
+def read_position(name: str) -> int | None:
+    """기억해 둔 창 위치 값 (음수일 수 있다). 없으면 None"""
+    v = signed(read_setting(name, -1 << 31) & 0xFFFFFFFF)
+    return None if v == -1 << 31 else v
+
+
+def mirror_origin(size: tuple[int, int], corner: tuple[int, int], area: tuple[int, int, int, int]) -> tuple[int, int]:
+    """창 오른쪽 아래 모서리를 corner 에 둘 때의 왼쪽 위. area (왼, 위, 오른, 아래) 밖으로는 안 나가게"""
+    w, h = size
+    x = min(max(corner[0] - w, area[0]), area[2] - w)
+    y = min(max(corner[1] - h, area[1]), area[3] - h)
+    return x, y
+
+
+def work_area(x: int, y: int, primary: bool = False) -> tuple[int, int, int, int] | None:
+    """Windows: (x, y) 가 있는 모니터에서 작업 표시줄을 뺀 영역. 그 자리에 모니터가 없으면 None. primary 면 메인 모니터"""
+    hmon = user32.MonitorFromPoint(wintypes.POINT(x, y), 1 if primary else 0)  # 1 = 메인 모니터, 0 = 없으면 NULL
+    info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+    if not hmon or not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+        return None
+    r = info.rcWork
+    return r.left, r.top, r.right, r.bottom
+
+
 # ---- 기기 화면 풀기 ----
 
 # 기기가 줄인 화면을 푼다 (펌웨어 mirror.cpp 의 pack): 머리 h < 128 이면 h+1 점 그대로, 아니면 한 점을 h-126 번.
@@ -198,6 +229,8 @@ class MirrorWindow:
         self.last_move = self.last_swipe = 0.0
         self.wheel = 0
         self.held: set[str] = set()
+        self.placed = False
+        self.save_job = None
 
         win = self.win = tk.Toplevel(root)
         win.title(TITLE)
@@ -234,29 +267,87 @@ class MirrorWindow:
             win.bind(f"<KeyPress-{key}>", lambda e, k=key, d=(dx, dy): self.arrow(k, *d))
             win.bind(f"<KeyRelease-{key}>", lambda e, k=key: self.held.discard(k))
         win.bind("<Escape>", lambda e: self.home())
+        win.bind("<Configure>", self.moved)
 
         threading.Thread(target=self.poll, daemon=True).start()
         threading.Thread(target=self.send, daemon=True).start()
         self.draw_state()
         self.pump()
 
-    # 창 안쪽 크기 = 기기 화면 크기 × 배율 (첫 장이 오기 전에는 320x240)
+    # 창 안쪽 크기 = 기기 화면 크기 × 배율 (첫 장이 오기 전에는 320x240). 창 오른쪽 아래 모서리는 그대로
     def fit(self) -> None:
+        before = self.outer() if self.placed else None
         width, height = (self.w or 320) * self.zoom, (self.h or 240) * self.zoom
         self.canvas.configure(width=width, height=height)
         self.canvas.coords(self.shade, 0, 0, width, height)
         self.canvas.coords(self.text, width / 2, height / 2)
         self.canvas.itemconfigure(self.text, width=max(width - 24, 60))
+        if before:
+            corner = before[2], before[3]
+            self.move_corner(corner, self.area_at(corner[0] - 20, corner[1] - 20) or self.main_area())
 
-    # 지난번 자리가 지금 있는 모니터 안이면 거기에 띄운다
-    def place(self) -> None:
-        x, y = read_setting("X", -1 << 31), read_setting("Y", -1 << 31)
-        x, y = signed(x & 0xFFFFFFFF), signed(y & 0xFFFFFFFF)
-        if x == -1 << 31:
-            return
-        if sys.platform == "win32" and not user32.MonitorFromPoint(wintypes.POINT(x + 20, y + 20), 0):  # 0 = 없으면 NULL
-            return
+    # 창 바깥 테두리 (왼, 위, 오른, 아래)
+    def outer(self) -> tuple[int, int, int, int]:
+        self.win.update_idletasks()
+        if sys.platform == "win32":
+            r = wintypes.RECT()
+            user32.GetWindowRect(int(self.win.wm_frame(), 16), ctypes.byref(r))
+            return r.left, r.top, r.right, r.bottom
+        x, y = self.win.winfo_x(), self.win.winfo_y()
+        return x, y, x + self.win.winfo_width(), y + self.win.winfo_height()
+
+    def area_at(self, x: int, y: int) -> tuple[int, int, int, int] | None:
+        if sys.platform == "win32":
+            return work_area(x, y)
+        sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+        return (0, 0, sw, sh) if 0 <= x < sw and 0 <= y < sh else None
+
+    # 메인 모니터 (작업 표시줄을 뺀 영역). 모니터를 붙였다 떼도 이것을 기준으로 위치를 잡는다
+    def main_area(self) -> tuple[int, int, int, int]:
+        if sys.platform == "win32":
+            area = work_area(0, 0, primary=True)
+            if area:
+                return area
+        return 0, 0, self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+
+    def move_corner(self, corner: tuple[int, int], area: tuple[int, int, int, int]) -> None:
+        left, top, right, bottom = self.outer()
+        x, y = mirror_origin((right - left, bottom - top), corner, area)
         self.win.geometry(f"+{x}+{y}")
+
+    # 지난번 닫은 위치에 띄운다 (창 오른쪽 아래 모서리 기준). 그 모니터가 지금 없으면 메인 모니터 오른쪽 아래에서
+    # 지난번만큼 떨어진 곳에 띄운다 (처음에는 12점). 화면 밖으로는 안 나가게
+    def place(self) -> None:
+        right, bottom = read_position("Right"), read_position("Bottom")
+        area = self.area_at(right - 20, bottom - 20) if right is not None and bottom is not None else None
+        if area:
+            corner = right, bottom
+        else:
+            area = self.main_area()
+            corner = area[2] - read_setting("MainRight", 12), area[3] - read_setting("MainBottom", 12)
+        self.move_corner(corner, area)
+        self.placed = True
+
+    # 창을 옮기면 (잠깐 멈춘 뒤) 위치를 기억한다. 앱이 갑자기 꺼져도 마지막 위치가 남는다
+    def moved(self, e) -> None:
+        if e.widget is not self.win or not self.placed or self.closing:
+            return
+        if self.save_job:
+            self.win.after_cancel(self.save_job)
+        self.save_job = self.win.after(500, self.remember)
+
+    # 창 오른쪽 아래 모서리를 기억한다. 메인 모니터에 있으면 메인 모니터 기준 위치도 기억한다
+    def remember(self) -> None:
+        self.save_job = None
+        if self.win.state() != "normal":
+            return
+        left, top, right, bottom = self.outer()
+        save_setting("Right", right)
+        save_setting("Bottom", bottom)
+        main = self.main_area()
+        if main[0] <= (left + right) // 2 < main[2] and main[1] <= (top + bottom) // 2 < main[3]:
+            save_setting("MainRight", max(0, main[2] - right))
+            save_setting("MainBottom", max(0, main[3] - bottom))
 
     def apply_top(self) -> None:
         self.win.attributes("-topmost", self.top_var.get())
@@ -291,9 +382,9 @@ class MirrorWindow:
             return
         self.closing = True
         self.outbox.put(None)
-        if self.win.state() == "normal":
-            save_setting("X", self.win.winfo_x())
-            save_setting("Y", self.win.winfo_y())
+        if self.save_job:
+            self.win.after_cancel(self.save_job)
+        self.remember()
         self.win.destroy()
         if self.on_closed:
             self.on_closed(self)

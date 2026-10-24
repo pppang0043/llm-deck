@@ -32,3 +32,15 @@ def test_unpack_stops_at_short_input_and_pixel_count():
     assert app.unpack(bytes([0]) + struct.pack("<H", 0xFFFF), 2) == b"\xff\xff\xff\x00\x00\x00"
     assert app.unpack(bytes([200]) + struct.pack("<H", 0xFFFF), 3) == b"\xff\xff\xff" * 3
     assert app.unpack(bytes([5, 0xFF]), 2) == b"\x00" * 6
+
+
+def test_mirror_origin_keeps_bottom_right_corner_on_screen():
+    app = load()
+    area = (0, 0, 1920, 1040)  # 작업 표시줄을 뺀 메인 모니터
+    # 오른쪽 아래 모서리를 그 자리에 둔다
+    assert app.mirror_origin((336, 279), (1908, 1028), area) == (1572, 749)
+    # 창이 커져 화면 밖으로 나가면 안으로 당긴다
+    assert app.mirror_origin((976, 759), (500, 300), area) == (0, 0)
+    assert app.mirror_origin((336, 279), (2500, 1500), area) == (1584, 761)
+    # 왼쪽 위 모니터 (음수 좌표)
+    assert app.mirror_origin((336, 279), (-100, -50), (-1920, -1080, 0, 0)) == (-436, -329)
