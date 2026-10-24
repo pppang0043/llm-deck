@@ -184,13 +184,13 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     config.timeoutIntervalForRequest = 10  // 서버는 1.5초 안에 답한다
     session = URLSession(configuration: config)
     super.init()
-    // 예전 미러링 앱(LLM Deck Mirror.app)에 저장해 둔 배율·항상 위·창 위치를 한 번 옮겨 온다
+    // 예전 미러링 앱(LLM Deck Mirror.app)에 저장해 둔 배율·항상 위를 한 번 옮겨 온다
     if defaults.object(forKey: "zoom") == nil, let old = UserDefaults(suiteName: "com.llmdeck.mirror") {
-      for key in ["zoom", "onTop", "NSWindow Frame mirror"] {
+      for key in ["zoom", "onTop"] {
         if let v = old.object(forKey: key) { defaults.set(v, forKey: key) }
       }
     }
-    defaults.register(defaults: ["onTop": true, "zoom": 1])
+    defaults.register(defaults: ["onTop": true, "zoom": 1, "mirrorRight": 12.0, "mirrorBottom": 12.0])
   }
 
   var zoom: Int { min(max(defaults.integer(forKey: "zoom"), 1), 3) }
@@ -220,10 +220,43 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     window.contentView = view
     window.delegate = self
     view.app = self
-    window.center()
-    window.setFrameAutosaveName("mirror")  // 지난번 창 위치를 기억한다
+    place(window)
     self.window = window
     return window
+  }
+
+  // 메인 화면(메뉴 막대가 있는 화면)의 Dock·메뉴 막대를 뺀 영역. 모니터를 붙였다 떼도 이것을 기준으로 위치를 잡는다
+  var mainArea: NSRect? { NSScreen.screens.first?.visibleFrame }
+
+  // 지난번 닫은 위치에 창을 둔다 (창 오른쪽 아래 모서리 기준). 그 모니터가 지금 없으면 메인 화면 오른쪽 아래에서
+  // 지난번만큼 떨어진 곳에 둔다 (처음에는 12pt). 화면 밖으로는 안 나가게
+  func place(_ window: NSWindow) {
+    let size = window.frame.size
+    var corner: NSPoint
+    var area: NSRect
+    let last = defaults.string(forKey: "mirrorFrame").map(NSRectFromString)
+    if let last, let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(NSPoint(x: last.midX, y: last.midY)) }) {
+      corner = NSPoint(x: last.maxX, y: last.minY)
+      area = screen.visibleFrame
+    } else if let main = mainArea {
+      corner = NSPoint(x: main.maxX - defaults.double(forKey: "mirrorRight"), y: main.minY + defaults.double(forKey: "mirrorBottom"))
+      area = main
+    } else { return }
+    var origin = NSPoint(x: corner.x - size.width, y: corner.y)
+    origin.x = min(max(origin.x, area.minX), area.maxX - size.width)
+    origin.y = min(max(origin.y, area.minY), area.maxY - size.height)
+    window.setFrameOrigin(origin)
+  }
+
+  // 창을 옮기면 위치를 기억한다 (닫을 때나 앱이 꺼질 때의 위치가 남는다). 메인 화면에 있으면 메인 화면 기준 위치도 기억한다
+  func windowDidMove(_ note: Notification) {
+    guard let window else { return }
+    let frame = window.frame
+    defaults.set(NSStringFromRect(frame), forKey: "mirrorFrame")
+    if let main = mainArea, main.contains(NSPoint(x: frame.midX, y: frame.midY)) {
+      defaults.set(main.maxX - frame.maxX, forKey: "mirrorRight")
+      defaults.set(frame.minY - main.minY, forKey: "mirrorBottom")
+    }
   }
 
   // 창을 닫으면 화면 받기를 멈춘다 (도우미가 기기에 미러링을 그만 보내게). 도우미는 계속 돈다
@@ -235,14 +268,18 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     NSApp.setActivationPolicy(.accessory)
   }
 
-  // 창 내용 크기를 기기 화면 × 배율로 맞춘다 (창 왼쪽 위 모서리는 그대로)
+  // 창 내용 크기를 기기 화면 × 배율로 맞춘다 (창 오른쪽 아래 모서리는 그대로, 화면 밖으로는 안 나가게)
   func fit() {
     guard let window else { return }
     let size = NSSize(width: w * zoom, height: h * zoom)
     let now = window.frame
     if window.contentRect(forFrameRect: now).size == size { return }
     var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
-    frame.origin = NSPoint(x: now.minX, y: now.maxY - frame.height)
+    frame.origin = NSPoint(x: now.maxX - frame.width, y: now.minY)
+    if let area = (window.screen ?? NSScreen.main)?.visibleFrame {
+      frame.origin.x = max(area.minX, frame.origin.x)
+      frame.origin.y = min(frame.origin.y, area.maxY - frame.height)
+    }
     window.setFrame(frame, display: true)
   }
 
