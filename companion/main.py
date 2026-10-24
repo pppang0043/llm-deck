@@ -479,7 +479,13 @@ def main() -> None:
                 if transport:
                     sessions.resend()  # 새로 연결한 기기에도 세션 목록을 보낸다
                     peer.reset()
-                    view.link_up(transport.name)
+                    if getattr(transport, "confirmed", True):
+                        view.link_up(transport.name)
+                    else:
+                        # USB 는 LLM Deck 인지 확인된 뒤에 알린다 (다른 ESP32 보드에 미러링 창을 열지 않게)
+                        transport.on_confirm = lambda name=transport.name: view.link_up(name)
+                        if transport.confirmed:  # 그 사이에 확인됐으면
+                            transport.take_confirm()
             if transport:
                 # 모으기는 따로 돈다. 보통 금방 끝나니 잠깐 기다려 새 값을 보내고, 느리면 지난 값을 보낸다 (새 값은 다음 차례에)
                 collector.start()

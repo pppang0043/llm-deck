@@ -62,6 +62,7 @@ class UsbTransport:
         self.opened_at = 0.0
         self.last_rx = 0.0  # 기기에서 마지막으로 무언가 받은 시각
         self.confirmed = False
+        self.on_confirm = None  # LLM Deck 으로 확인되면 부른다 (main.py)
         # 메인 루프와 미러링 창(누르기)이 따로 보내므로 한 줄씩 차례로 쓴다
         self._send_lock = threading.Lock()
         # Wi-Fi 인증 키를 받았는지, 마지막으로 달라고 한 시각 (auth.py). 케이블로 연결했을 때만 받는다
@@ -113,6 +114,13 @@ class UsbTransport:
                 KNOWN_FILE.write_text(self.serial_number)
             except OSError:
                 pass
+        self.take_confirm()
+
+    def take_confirm(self) -> None:
+        """on_confirm 을 한 번만 부른다"""
+        callback, self.on_confirm = self.on_confirm, None
+        if callback:
+            callback()
 
     def connected(self) -> bool:
         # 케이블을 뽑으면 읽는 쪽이 오류로 끝나며 포트가 닫히거나, 포트 자체가 사라진다

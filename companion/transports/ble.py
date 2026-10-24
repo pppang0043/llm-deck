@@ -66,7 +66,8 @@ class BleTransport:
         self._hello = None
         # bleak 은 asyncio 방식이라, 전용 스레드에서 이벤트 루프를 돌리고 일을 맡긴다
         self.loop = asyncio.new_event_loop()
-        threading.Thread(target=self.loop.run_forever, daemon=True).start()
+        self._thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self._thread.start()
 
     def _run(self, coro, timeout: float):
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
@@ -235,3 +236,10 @@ class BleTransport:
                 pass
             self.client = None
         self.key = None
+        # 연결을 시도할 때마다 새로 만들므로 루프와 스레드도 끝낸다. 남겨 두면 시도마다 파일 핸들이 쌓여
+        # 몇 시간 뒤 1024 개를 넘고, 그때부터 USB 연결이 "filedescriptor out of range in select()" 로 실패한다.
+        if not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self._thread.join(5)
+            if not self._thread.is_alive():
+                self.loop.close()
