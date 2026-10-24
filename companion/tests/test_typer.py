@@ -144,3 +144,29 @@ def test_other_app_in_front_is_left_alone(monkeypatch):
     monkeypatch.setattr(typer.subprocess, "run", fake)
     typer._leave_own_window()
     assert fake.opened == []
+
+
+def _win(hwnd, title, **kw):
+    w = {"hwnd": hwnd, "title": title, "cls": "Chrome_WidgetWin_1", "visible": True, "iconic": False, "owned": False,
+         "tool": False, "cloaked": False}
+    w.update(kw)
+    return w
+
+
+def test_windows_mirror_in_front_picks_window_behind():
+    windows = [
+        _win(1, typer.MIRROR_TITLE),
+        _win(2, "", tool=True),                       # 이름 없는 도구 창
+        _win(3, "알림", owned=True),                   # 딸린 작은 창
+        _win(4, "설정", cloaked=True),                 # 다른 가상 데스크톱
+        _win(5, "메모장", iconic=True),                # 최소화
+        _win(6, "작업 표시줄", cls="Shell_TrayWnd"),
+        _win(7, "Orca"),
+        _win(8, "메모장"),
+    ]
+    assert typer._pick_previous(windows) == 7
+
+
+def test_windows_other_window_in_front_is_left_alone():
+    assert typer._pick_previous([_win(7, "Orca"), _win(1, typer.MIRROR_TITLE)]) is None
+    assert typer._pick_previous([]) is None

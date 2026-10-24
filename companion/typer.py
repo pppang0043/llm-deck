@@ -128,6 +128,86 @@ def _type(text: str, enter: bool = True, tab: bool = False) -> str | None:
         return str(e)[:60]
 
 
+MIRROR_TITLE = "LLM Deck 미러링"  # Windows 미러링 창 제목 (windows/app.pyw 의 TITLE)
+# 돌아갈 창으로 고르지 않는 창 종류: 작업 표시줄, 바탕 화면
+_SHELL_CLASSES = {"Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"}
+
+
+def _pick_previous(windows: list[dict]) -> int | None:
+    """앞에서부터의 창 목록 (맨 앞이 지금 앞 창). 맨 앞이 미러링 창이면 그 뒤의 보통 창 (글을 쓰던 창), 아니면 None."""
+    if not windows or windows[0]["title"] != MIRROR_TITLE:
+        return None
+    for w in windows[1:]:
+        if (w["visible"] and not w["iconic"] and not w["owned"] and not w["tool"] and not w["cloaked"]
+                and w["title"] and w["title"] != MIRROR_TITLE and w["cls"] not in _SHELL_CLASSES):
+            return w["hwnd"]
+    return None
+
+
+def _windows_zorder(user32, limit: int = 1000) -> list[dict]:
+    """Windows: 지금 앞 창부터 뒤로 차례로 (GetWindow 의 다음 창)."""
+    import ctypes
+    from ctypes import wintypes
+
+    GW_HWNDNEXT, GW_OWNER, GWL_EXSTYLE, WS_EX_TOOLWINDOW, DWMWA_CLOAKED = 2, 4, -20, 0x80, 14
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindow.restype = wintypes.HWND
+    user32.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
+    # 창 번호는 64비트 값이라 인자 형식을 적어 둔다 (적지 않으면 32비트 int 로 넘어간다)
+    for name in ("IsWindowVisible", "IsIconic", "SetForegroundWindow"):
+        getattr(user32, name).argtypes = (wintypes.HWND,)
+    user32.GetWindowTextW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+    user32.GetClassNameW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+    user32.GetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int)
+    try:
+        dwm = ctypes.windll.dwmapi
+    except OSError:
+        dwm = None
+    windows = []
+    hwnd = user32.GetForegroundWindow()
+    while hwnd and len(windows) < limit:
+        title = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, title, 256)
+        cls = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, cls, 256)
+        cloaked = wintypes.DWORD(0)
+        if dwm:  # 다른 가상 데스크톱의 창이나 숨은 스토어 앱 창은 보이는 것처럼 나와도 가려져 있다
+            dwm.DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+        windows.append({"hwnd": hwnd, "title": title.value, "cls": cls.value,
+                        "visible": bool(user32.IsWindowVisible(hwnd)), "iconic": bool(user32.IsIconic(hwnd)),
+                        "owned": bool(user32.GetWindow(hwnd, GW_OWNER)),
+                        "tool": bool(user32.GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW),
+                        "cloaked": bool(cloaked.value)})
+        hwnd = user32.GetWindow(hwnd, GW_HWNDNEXT)
+    return windows
+
+
+def _leave_mirror_windows() -> None:
+    """Windows: 앞 창이 미러링 창이면 (미러링 창을 눌러 받아쓰기·키워드를 시작했다) 그 바로 뒤 창을 앞으로 되돌린다.
+    그러지 않으면 글이 원래 쓰던 창이 아니라 미러링 창으로 간다 (Mac 은 _leave_own_window)."""
+    import ctypes
+
+    try:
+        user32 = ctypes.windll.user32
+        target = _pick_previous(_windows_zorder(user32))
+        if not target:
+            return
+        # 뒤에서 도는 프로그램은 창을 앞으로 못 띄우게 막혀 있다. Alt 키를 한 번 눌렀다 떼면 허용된다 (orca._front_windows)
+        user32.keybd_event(0x12, 0, 0, 0)
+        user32.keybd_event(0x12, 0, 2, 0)
+        user32.SetForegroundWindow(target)
+        # 그 창이 앞으로 와서 커서를 받을 때까지 (1.5초까지) 기다린다
+        until = time.monotonic() + 1.5
+        while time.monotonic() < until:
+            if user32.GetForegroundWindow() == target:
+                time.sleep(0.15)
+                break
+            time.sleep(0.05)
+        print("[type] 미러링 창이 앞에 있어 그 뒤 창으로 돌아가 입력합니다")
+    except Exception as e:  # 못 돌아가도 입력은 한다
+        print(f"[type] 앞에 있던 창으로 돌아가지 못했습니다: {e}")
+
+
 def _type_windows(text: str, enter: bool = True, tab: bool = False) -> str | None:
     import ctypes
     from ctypes import wintypes
@@ -177,6 +257,7 @@ def _type_windows(text: str, enter: bool = True, tab: bool = False) -> str | Non
     # 그다음 Tab, 마지막에 Enter (보통 키로: 유니코드 입력의 줄바꿈은 프로그램마다 다르게 받는다).
     # Tab 과 Enter 를 한꺼번에 보내면 붙여넣기로 받는 프로그램이 있어 사이를 조금 띄운다.
     batches = [inputs + key(VK_TAB)] if tab else [inputs]
+    _leave_mirror_windows()
     if enter:
         batches.append(key(VK_RETURN))
     for i, items in enumerate(b for b in batches if b):

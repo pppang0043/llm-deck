@@ -144,13 +144,22 @@ _RESTARTED_ENV = "LLMDECK_AUDIO_RESTART"
 RESTART_AGAIN_SECONDS = 3600
 # 소리가 늘 0 인 가상 장치. 마이크를 돌아가며 잡을 때 건너뛴다
 _VIRTUAL = ("blackhole", "cable output", "zoomaudio", "teams audio", "soundflower")
+# Windows 의 "기본 마이크" 별칭 장치 (MME 사운드 매퍼, DirectSound 주 캡처 드라이버). 진짜 기본 마이크를 알면 건너뛴다
+_ALIASES = ("sound mapper", "사운드 매퍼", "primary sound capture", "주 사운드 캡처")
 
 
 def _system_default_input() -> str | None:
-    """시스템 설정에서 지금 고른 기본 마이크 이름 (Mac). 다른 운영체제는 None.
+    """시스템 설정에서 지금 고른 기본 마이크 이름. 못 읽으면 None.
     PortAudio 는 처음 켤 때의 기본 마이크만 기억하고, 마이크를 연 뒤에는 다시 켤 수 없어서 (_refresh_devices) 직접 묻는다."""
-    if sys.platform != "darwin":
-        return None
+    if sys.platform == "darwin":
+        return _mac_default_input()
+    if sys.platform == "win32":
+        return _windows_default_input()
+    return None
+
+
+def _mac_default_input() -> str | None:
+    """Mac: 시스템 설정 > 사운드 > 입력 에서 고른 장치 (CoreAudio)."""
     import ctypes
     import ctypes.util
     from ctypes import POINTER, Structure, byref, c_char_p, c_long, c_uint32, c_void_p, sizeof
@@ -183,6 +192,72 @@ def _system_default_input() -> str | None:
         return buf.value.decode() if ok else None
     except Exception:
         return None
+
+
+def _windows_default_input() -> str | None:
+    """Windows: 소리 설정에서 고른 기본 녹음 장치 (Core Audio 의 IMMDeviceEnumerator, COM 을 ctypes 로 부른다)."""
+    import ctypes
+    from ctypes import POINTER, Structure, Union, byref, c_ubyte, c_ulong, c_ulonglong, c_ushort, c_void_p, c_wchar_p
+
+    class GUID(Structure):
+        _fields_ = [("d1", c_ulong), ("d2", c_ushort), ("d3", c_ushort), ("d4", c_ubyte * 8)]
+
+    class PROPERTYKEY(Structure):
+        _fields_ = [("fmtid", GUID), ("pid", c_ulong)]
+
+    class PROPVARIANT(Structure):
+        class _Value(Union):
+            _fields_ = [("pwszVal", c_wchar_p), ("pad", c_ulonglong * 2)]
+
+        _fields_ = [("vt", c_ushort), ("r1", c_ushort), ("r2", c_ushort), ("r3", c_ushort), ("value", _Value)]
+
+    def guid(text: str) -> GUID:
+        g = GUID()
+        ctypes.windll.ole32.CLSIDFromString(c_wchar_p(text), byref(g))
+        return g
+
+    def vtable(obj: c_void_p):
+        return ctypes.cast(obj, POINTER(POINTER(c_void_p))).contents
+
+    def call(obj: c_void_p, index: int, argtypes: tuple, *args) -> None:
+        """COM 함수 (vtable 의 index 번째). 실패하면 OSError (HRESULT)."""
+        ctypes.WINFUNCTYPE(ctypes.HRESULT, c_void_p, *argtypes)(vtable(obj)[index])(obj, *args)
+
+    try:
+        ole32 = ctypes.windll.ole32
+        ole32.CoCreateInstance.restype = ctypes.HRESULT
+        initialized = ole32.CoInitializeEx(None, 0) in (0, 1)  # COINIT_MULTITHREADED (이미 했으면 S_FALSE)
+    except Exception:
+        return None
+    enum, device, store = c_void_p(), c_void_p(), c_void_p()
+    try:
+        ole32.CoCreateInstance(byref(guid("{BCDE0395-E52F-467C-8E3D-C4579291692E}")), None, 23,  # MMDeviceEnumerator
+                               byref(guid("{A95664D2-9614-4F35-A746-DE8DB63617E6}")), byref(enum))
+        # IMMDeviceEnumerator::GetDefaultAudioEndpoint(eCapture, eConsole)
+        call(enum, 4, (c_ulong, c_ulong, POINTER(c_void_p)), 1, 0, byref(device))
+        call(device, 4, (c_ulong, POINTER(c_void_p)), 0, byref(store))  # IMMDevice::OpenPropertyStore(STGM_READ)
+        key = PROPERTYKEY(guid("{A45C254E-DF1C-4EFD-8020-67D146A850E0}"), 14)  # PKEY_Device_FriendlyName
+        value = PROPVARIANT()
+        call(store, 5, (POINTER(PROPERTYKEY), POINTER(PROPVARIANT)), byref(key), byref(value))  # GetValue
+        try:
+            return value.value.pwszVal if value.vt == 31 else None  # VT_LPWSTR
+        finally:
+            ole32.PropVariantClear(byref(value))
+    except Exception:  # 기본 녹음 장치가 없거나 (E_NOTFOUND) COM 을 못 쓰면 PortAudio 의 기본 마이크로
+        return None
+    finally:
+        for obj in (store, device, enum):
+            if obj:
+                ctypes.WINFUNCTYPE(c_ulong, c_void_p)(vtable(obj)[2])(obj)  # Release
+        if initialized:
+            ole32.CoUninitialize()
+
+
+def _match_input(full: str, names: list[str]) -> str | None:
+    """시스템이 알려 준 마이크 이름에 맞는 PortAudio 장치 이름. Windows MME 는 이름을 31자에서 자른다."""
+    if full in names:
+        return full
+    return next((n for n in names if len(n) >= 31 and full.startswith(n)), None)
 
 
 def _input_index(sd, name: str) -> int | None:
@@ -401,6 +476,7 @@ class Assistant:
         self._stream = None
         self._stream_name = ""  # 그 통로의 마이크 이름
         self._opened = False  # 이 도우미에서 마이크를 한 번이라도 열었는지 (_refresh_devices)
+        self._unmatched = ""  # 장치 목록을 다시 읽어도 찾지 못한 기본 마이크 이름 (또 다시 읽지 않는다)
         # 장치 목록을 새로 읽으려고 도우미를 다시 띄울 까닭과 다시 띄우는 함수 (main.restart, main.py 가 넣어 준다)
         self.restart_for: str | None = None
         self.restart = None
@@ -676,22 +752,30 @@ class Assistant:
         if wanted:
             first = next((n for n in names if wanted.lower() in n.lower()), None)
         else:
-            first = _system_default_input()
-            if first and first not in names:
+            full = _system_default_input()
+            first = _match_input(full, names) if full else None
+            if full and first is None and full != self._unmatched:
                 # 도우미를 켠 뒤 연결된 마이크다
-                if self._refresh_devices(sd, f"기본 마이크 '{first}'"):
+                if self._refresh_devices(sd, f"기본 마이크 '{full}'"):
                     names = input_names()
-                if first not in names:
-                    first = None
+                    first = _match_input(full, names)
+                    if first is None:
+                        # 다시 읽어도 없다 (이름이 PortAudio 와 다르게 나온다). 녹음마다 다시 읽지 않는다
+                        print(f"[assistant] 기본 마이크 '{full}' 를 장치 목록에서 찾지 못해 기본 장치로 엽니다")
+                        self._unmatched = full
             if first is None:
                 try:
                     first = str(sd.query_devices(kind="input")["name"])
                 except Exception:
                     first = None
         order = [first] if first else []
+        # 진짜 기본 마이크를 앞에 두었으면 그것을 가리키기만 하는 별칭 장치는 또 시도하지 않는다
+        real = bool(first) and not any(a in first.lower() for a in _ALIASES)
         for name in names:
-            if name not in order and not any(v in name.lower() for v in _VIRTUAL):
-                order.append(name)
+            lower = name.lower()
+            if name in order or any(v in lower for v in _VIRTUAL) or (real and any(a in lower for a in _ALIASES)):
+                continue
+            order.append(name)
         return order
 
     def _open_stream(self, sd, name: str):

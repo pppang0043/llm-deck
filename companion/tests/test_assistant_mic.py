@@ -150,3 +150,37 @@ def test_same_reason_does_not_restart_again_soon(fake, monkeypatch):
     a._opened = True
     a._refresh_devices(sd, "마이크 없음")
     assert a.restart_for is None
+
+
+def test_windows_mme_name_cut_at_31_chars_matches():
+    full = "Headset Microphone (WH-1000XM4 Hands-Free AG Audio)"
+    assert assistant._match_input(full, ["Microphone Array (Realtek(R) A", full[:31]]) == full[:31]
+    assert assistant._match_input("Mic", ["Microphone"]) is None
+
+
+def test_windows_order_uses_real_default_and_skips_aliases(monkeypatch):
+    sd = FakeSd(["Microsoft Sound Mapper - Input", "마이크 배열(Realtek(R) Audio)", "헤드셋 마이크(USB Audio)",
+                 "Primary Sound Capture Driver"], default=0, loud=[])
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: "헤드셋 마이크(USB Audio)")
+    a = assistant.Assistant({})
+    assert a._mic_order(sd) == ["헤드셋 마이크(USB Audio)", "마이크 배열(Realtek(R) Audio)"]
+
+
+def test_windows_order_falls_back_to_sound_mapper(monkeypatch):
+    sd = FakeSd(["Microsoft Sound Mapper - Input", "마이크 배열(Realtek(R) Audio)"], default=0, loud=[])
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: None)  # Core Audio 를 못 읽었다
+    a = assistant.Assistant({})
+    assert a._mic_order(sd) == ["Microsoft Sound Mapper - Input", "마이크 배열(Realtek(R) Audio)"]
+
+
+def test_windows_unmatched_default_reread_only_once(monkeypatch):
+    sd = FakeSd(["Microsoft Sound Mapper - Input", "마이크 배열(Realtek(R) Audio)"], default=0, loud=[])
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(assistant, "_system_default_input", lambda: "이름이 다르게 나오는 마이크")
+    a = assistant.Assistant({})
+    a._opened = True  # Windows 는 마이크를 연 뒤에도 그 자리에서 다시 읽는다
+    for _ in range(3):
+        assert a._mic_order(sd)[0] == "Microsoft Sound Mapper - Input"
+    assert sd.reinit == 1
