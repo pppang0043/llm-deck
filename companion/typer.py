@@ -15,12 +15,13 @@ import sys
 import time
 
 # 기본 키워드 (config.toml 에 [keywords] 가 없을 때). 이름(id)은 예전 펌웨어도 그대로 보낸다.
+# 글이 띄어쓰기로 끝나면 Enter 를 누르지 않는다 (/orchestration 은 뒤에 할 일을 이어 적는다)
 DEFAULT_KEYWORDS = [
     ("commit", "커밋", "커밋해줘"),
     ("deploy", "배포", "배포해줘"),
     ("push", "푸쉬", "푸쉬해줘"),
     ("error", "에러 확인", "에러 확인"),
-    ("orchestration", "/orchestration", "/orchestration"),
+    ("orchestration", "/orchestration", "/orchestration "),
     ("clear", "/clear", "/clear"),
     ("compact", "/compact", "/compact"),
 ]
@@ -53,9 +54,14 @@ def particle(word: str) -> str:
     return "을(를)"
 
 
+def wants_enter(text: str) -> bool:
+    """키워드 글 끝에 Enter 를 누를지. 띄어쓰기로 끝나면 이어 적도록 누르지 않는다."""
+    return not text.endswith(" ")
+
+
 def _item(kid: str, name: str, text: str) -> dict:
     # 알림에는 글을 보인다 (길면 버튼 이름)
-    shown = text if len(text) <= 14 else name
+    shown = text.strip() if len(text.strip()) <= 14 else name
     return {"id": kid, "name": name, "obj": f"\"{shown}\"{particle(shown)}"}
 
 
@@ -111,9 +117,9 @@ class Typer:
             print(f"[type] 모르는 키워드 버튼: {name}")
             self.pending_toast = "PC 도우미가 모르는 키워드입니다\n도우미를 새로 깔아 주세요"
             return
-        error = _type(text)
+        error = _type(text, enter=wants_enter(text))
         print(f"[type] \"{text}\" {'입력했습니다' if not error else '입력하지 못했습니다: ' + error}")
-        self.pending_toast = f"입력했습니다: {text}" if not error else f"입력하지 못했습니다\n{error}"
+        self.pending_toast = f"입력했습니다: {text.strip()}" if not error else f"입력하지 못했습니다\n{error}"
 
 
 def _type(text: str, enter: bool = True, tab: bool = False) -> str | None:

@@ -32,6 +32,16 @@ def test_other_names_not_typed(typed, event):
     assert typed == []
 
 
+def test_orchestration_types_space_without_enter(monkeypatch):
+    calls = []
+    monkeypatch.setattr(typer, "_type", lambda text, enter=True, tab=False: calls.append((text, enter)) or None)
+    t = typer.Typer()
+    t.on_event({"type": "orchestration"})  # 뒤에 할 일을 이어 적도록 띄어쓰기 하나만, Enter 는 없다
+    t.on_event({"type": "clear"})
+    assert calls == [("/orchestration ", False), ("/clear", True)]
+    assert t.pending_toast == "입력했습니다: /clear"
+
+
 def test_tab_enter_presses_keys_only(typed):
     t = typer.Typer()
     t.on_event({"type": "tab_enter"})
