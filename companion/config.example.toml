@@ -61,6 +61,7 @@ output = ""
 #   mic_on "띠링", mic_off "띠롱", limit_warn 한도 80%/90% 넘음 "삐삐삐", limit_reset 한도 초기화 "도미솔도"
 [sounds]
 enabled = true
+# 효과음 크기는 PC 를 따른다: Mac 은 시스템 설정 > 사운드의 "경고음 음량", Windows 는 PC 음량
 # 원하는 소리 파일(.wav)로 바꿀 수 있다. 비워 두면 기본 효과음을 쓴다.
 # mic_on = "/System/Library/Sounds/Tink.aiff"
 # mic_off = "/System/Library/Sounds/Pop.aiff"

@@ -4,6 +4,8 @@
     [sounds]
     enabled = true
     mic_on = "C:/Windows/Media/Speech On.wav"
+크기는 PC 를 따른다. Mac 은 다른 알림음처럼 시스템 설정 > 사운드의 "경고음 음량" (PC 음량 안에서 그 비율),
+Windows 는 PC 음량 그대로. 음소거면 나지 않는다.
 """
 
 import math
@@ -46,6 +48,16 @@ def _make_wav(path: Path, tones: list[tuple[int, float]]) -> None:
         w.writeframes(bytes(frames))
 
 
+def _alert_volume() -> float:
+    """Mac 의 경고음 음량 (0~1). 읽지 못하면 1 (PC 음량 그대로)."""
+    try:
+        out = subprocess.run(["osascript", "-e", "alert volume of (get volume settings)"],
+                             capture_output=True, text=True, timeout=3).stdout.strip()
+        return max(0, min(100, int(out))) / 100
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 1.0
+
+
 def _file_for(name: str, cfg: dict) -> Path | None:
     if cfg.get(name):
         return Path(cfg[name]).expanduser()
@@ -63,7 +75,7 @@ def _play_file(path: Path) -> None:
 
         winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
     elif sys.platform == "darwin":
-        subprocess.Popen(["afplay", str(path)])
+        subprocess.Popen(["afplay", "-v", f"{_alert_volume():.2f}", str(path)])
     elif shutil.which("aplay"):
         subprocess.Popen(["aplay", "-q", str(path)])
 
