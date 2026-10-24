@@ -163,9 +163,11 @@ mv "$NEW_APP" "$APP"
 NEW_REQ=$(codesign -dr - "$APP" 2>/dev/null | grep designated || true)
 if [ -n "$OLD_REQ" ] && [ "$OLD_REQ" != "$NEW_REQ" ]; then
   # 예전 서명에 묶인 허용은 macOS 가 묻지도 않고 막는다. 지워서 다시 묻게 한다
+  # (손쉬운 사용은 설정 화면에 켜진 채로 보여서 더 헷갈린다: 받아쓰기·키워드 입력이 막힌다)
   tccutil reset Microphone "$LABEL" >/dev/null 2>&1 || true
   tccutil reset BluetoothAlways "$LABEL" >/dev/null 2>&1 || true
-  echo "앱 서명이 바뀌었습니다. 마이크·블루투스 허용 창이 다시 뜨면 \"허용\"을 누르세요."
+  tccutil reset Accessibility "$LABEL" >/dev/null 2>&1 || true
+  echo "앱 서명이 바뀌었습니다. 마이크·블루투스·손쉬운 사용 허용 창이 다시 뜨면 \"허용\"을 누르세요."
 fi
 
 # 앱을 open 으로 거치지 않고 바로 띄운다. 그래야 bootout·kickstart -k 의 종료 신호가 앱에 닿는다
