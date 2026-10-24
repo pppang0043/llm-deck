@@ -25,6 +25,7 @@ import threading
 import time
 from pathlib import Path
 
+import chatgpt_stt
 import orca
 import speech
 import typer
@@ -66,6 +67,8 @@ MADE_UP = {"감사합니다", "고맙습니다", "시청해주셔서감사합니
            "다음영상에서만나요", "안녕히계세요", "thankyou", "thanksforwatching", "you"}
 # 이 정도보다 작은 소리만 녹음됐으면 알아듣지 못했을 때 마이크 가까이에서 말하라고 알린다
 QUIET_PEAK = 0.1
+# 가장 큰 소리가 이보다 작으면 말이 없는 녹음으로 보고 ChatGPT 로 보내지 않는다 (없는 말을 지어낸다)
+SILENT_PEAK = 0.01
 
 
 def _heard(no_speech: float, logprob: float) -> bool:
@@ -554,11 +557,15 @@ class Assistant:
     def _warm(self) -> None:
         try:
             with self.lock:
-                self._load_model()
+                if not self._chatgpt():  # ChatGPT 로 받아 적으면 Whisper 는 실패할 때만 불러온다
+                    self._load_model()
                 if not self.dictate:  # 받아쓰기는 Claude 를 쓰지 않는다
                     self._open_session()
         except Exception as e:
             print(f"[assistant] 준비 실패: {e}")
+
+    def _chatgpt(self) -> bool:
+        return self.cfg.get("stt", "local") == "chatgpt"
 
     def _load_model(self) -> None:
         if self.model is not None:
@@ -625,22 +632,30 @@ class Assistant:
             self._set("thinking", a="받아 적는 중")
             waited = time.monotonic()
             with self.lock:
-                self._load_model()
-                if time.monotonic() - waited > 2:
-                    print(f"[assistant] 모델 준비를 {time.monotonic() - waited:.1f}초 기다렸습니다")
-                start = time.monotonic()
-                # ORCA 세션에 받아쓰기할 때는 / 명령 이름을 영어로 알아듣게 돕는다
-                hints = self.orca.hotwords() if self.dictate and self.orca_pick and self.orca else None
                 language = self.cfg.get("language", "ko")
-                prompt = self.cfg.get("prompt", DEFAULT_PROMPT) or None
-                if isinstance(self.model, _MlxModel):
-                    question = self.model.text(pcm, language, prompt)
-                else:
-                    segments, _ = self.model.transcribe(pcm, language=language, beam_size=self.cfg.get("beam_size", 1),
-                                                        vad_filter=True, initial_prompt=prompt, hotwords=hints)
-                    question = "".join(s.text for s in segments if _heard(s.no_speech_prob, s.avg_logprob)).strip()
+                start = time.monotonic()
+                question = chatgpt_stt.text(pcm, SAMPLE_RATE, language) if self._chatgpt() and peak >= SILENT_PEAK else None
+                engine = "ChatGPT"
+                if question is None:
+                    engine = "Whisper"
+                    self._load_model()
+                    if time.monotonic() - waited > 2:
+                        print(f"[assistant] 모델 준비를 {time.monotonic() - waited:.1f}초 기다렸습니다")
+                    start = time.monotonic()
+                    # ORCA 세션에 받아쓰기할 때는 / 명령 이름을 영어로 알아듣게 돕는다
+                    hints = self.orca.hotwords() if self.dictate and self.orca_pick and self.orca else None
+                    prompt = self.cfg.get("prompt", DEFAULT_PROMPT) or None
+                    if isinstance(self.model, _MlxModel):
+                        question = self.model.text(pcm, language, prompt)
+                    else:
+                        segments, _ = self.model.transcribe(pcm, language=language,
+                                                            beam_size=self.cfg.get("beam_size", 1), vad_filter=True,
+                                                            initial_prompt=prompt, hotwords=hints)
+                        question = "".join(s.text for s in segments
+                                           if _heard(s.no_speech_prob, s.avg_logprob)).strip()
                 kind = "받아쓰기" if self.dictate else "질문"
-                print(f"[assistant] {kind} ({len(pcm) / SAMPLE_RATE:.1f}초 녹음, {time.monotonic() - start:.1f}초): {question}")
+                print(f"[assistant] {kind} ({engine}, {len(pcm) / SAMPLE_RATE:.1f}초 녹음, "
+                      f"{time.monotonic() - start:.1f}초): {question}")
                 if _drop_made_up(question) != question:
                     print(f"[assistant] 조용한 소리에서 지어낸 말로 보여 버립니다: {question}")
                     question = ""
