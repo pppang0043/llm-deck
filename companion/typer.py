@@ -19,8 +19,10 @@ DEFAULT_KEYWORDS = [
     ("push", "푸쉬", "푸쉬해줘"),
     ("error", "에러 확인", "에러 확인"),
     ("orchestration", "/orchestration", "/orchestration"),
+    ("clear", "/clear", "/clear"),
+    ("compact", "/compact", "/compact"),
 ]
-MAX_KEYWORDS = 5  # 기기 단축키 화면은 6칸 (마지막 칸은 Tab + Enter)
+MAX_KEYWORDS = 7  # 기기 단축키 화면은 8칸 (마지막 칸은 Tab + Enter)
 MAX_NAME = 12  # 버튼 이름 글자 수
 MAX_TEXT = 200  # 입력할 글 글자 수
 

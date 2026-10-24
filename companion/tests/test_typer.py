@@ -53,11 +53,13 @@ def restore():
 
 def test_defaults_keep_old_ids():
     typer.configure(None)
-    assert list(typer.KEYWORDS) == ["commit", "deploy", "push", "error", "orchestration"]
+    assert list(typer.KEYWORDS) == ["commit", "deploy", "push", "error", "orchestration", "clear", "compact"]
     assert typer.KEYWORDS["commit"] == "커밋해줘"
     assert typer.ITEMS[0] == {"id": "commit", "name": "커밋", "obj": "\"커밋해줘\"를"}
     assert typer.ITEMS[3]["obj"] == "\"에러 확인\"을"
     assert typer.ITEMS[4]["obj"] == "\"/orchestration\"을"
+    assert typer.ITEMS[5]["obj"] == "\"/clear\"를"
+    assert typer.ITEMS[6]["obj"] == "\"/compact\"을"
     # 기기에는 글을 보내지 않는다
     assert all(set(item) == {"id", "name", "obj"} for item in typer.ITEMS)
 
@@ -89,11 +91,11 @@ def test_bad_items_skipped(items, restore):
 
 
 def test_limits_and_long_text(restore):
-    items = [{"name": f"버튼{n}", "text": f"글{n}"} for n in range(7)]
+    items = [{"name": f"버튼{n}", "text": f"글{n}"} for n in range(9)]
     items.insert(1, {"name": "나쁜", "text": "\x1b[2J"})
     items.insert(2, {"name": "긴 글", "text": "가" * 200})
     typer.configure({"items": items})
-    assert list(typer.KEYWORDS) == ["k0", "k1", "k2", "k3", "k4"]
+    assert list(typer.KEYWORDS) == ["k0", "k1", "k2", "k3", "k4", "k5", "k6"]
     assert typer.KEYWORDS["k1"] == "가" * 200
     assert typer.ITEMS[1]["obj"] == "\"긴 글\"을"  # 글이 길면 알림에는 버튼 이름
 

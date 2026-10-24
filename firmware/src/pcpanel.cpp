@@ -6,7 +6,7 @@
 #include "orcapanel.h"
 
 #define COUNT(a) (sizeof(a) / sizeof(a[0]))
-#define MAX_BUTTONS 6
+#define MAX_BUTTONS 8
 #define MAX_BUTTONS_KW (KW_MAX + 1)
 #include "ui.h"
 
@@ -38,18 +38,21 @@ static const Shortcut PROGRAMS[] = {
 // 입력되는 글은 PC 에만 있다 (companion/typer.py). 받은 목록은 NVS 에 두어 PC 가 없을 때도 같은 버튼이 보인다.
 // 글을 입력하는 버튼은 한 색으로 (ORCA 상태 색과 겹치지 않는 보라)
 #define KW_COLOR 0x6A4FB0
-#define KW_MAX 5  // + 맨 끝 Tab + Enter = 6칸 (MAX_BUTTONS)
+#define KW_SLASH_COLOR 0x16808C  // / 명령 (/clear 같은 것) 은 청록으로 따로
+#define KW_MAX 7  // + 맨 끝 Tab + Enter = 8칸 (MAX_BUTTONS)
 static const Shortcut DEFAULT_KEYWORDS[] = {
     {"commit", "커밋", "\"커밋해줘\"를", nullptr, KW_COLOR},
     {"deploy", "배포", "\"배포해줘\"를", nullptr, KW_COLOR},
     {"push", "푸쉬", "\"푸쉬해줘\"를", nullptr, KW_COLOR},
     {"error", "에러 확인", "\"에러 확인\"을", nullptr, KW_COLOR},
-    {"orchestration", "/orchestration", "\"/orchestration\"을", nullptr, KW_COLOR},
+    {"orchestration", "/orchestration", "\"/orchestration\"을", nullptr, KW_SLASH_COLOR},
+    {"clear", "/clear", "\"/clear\"를", nullptr, KW_SLASH_COLOR},
+    {"compact", "/compact", "\"/compact\"을", nullptr, KW_SLASH_COLOR},
 };
 // 글 대신 Tab 을 누르고 Enter: Claude Code 의 추천 문장을 받아서 보낸다
 static const Shortcut TAB_ENTER = {"tab_enter", "Tab + Enter", "Tab + Enter를", nullptr, 0x5B6573};
 // 받은 목록 (NVS 에 이대로 저장한다. 모양을 바꾸면 KW_VERSION 을 올린다)
-#define KW_VERSION 1
+#define KW_VERSION 2
 struct KwSlot {
   char id[16];
   char name[52];  // 12글자 (한글 3바이트, 그림 글자 4바이트)
@@ -178,7 +181,7 @@ static void kw_fill() {
   if (kw_store.count) {
     for (; n < kw_store.count; n++) {
       const KwSlot &k = kw_store.slot[n];
-      KEYWORDS[n] = {k.id, k.name, k.obj, nullptr, KW_COLOR};
+      KEYWORDS[n] = {k.id, k.name, k.obj, nullptr, k.name[0] == '/' ? KW_SLASH_COLOR : KW_COLOR};
     }
   } else {
     for (; n < COUNT(DEFAULT_KEYWORDS); n++) KEYWORDS[n] = DEFAULT_KEYWORDS[n];
@@ -304,7 +307,7 @@ static int text_width(lv_obj_t *label, const lv_font_t *font) {
   return size.x;
 }
 
-// 버튼 배치: 가로 화면은 3개 이하면 나란히, 많으면 2열. 세로 화면은 한 줄에 하나.
+// 버튼 배치: 가로 화면은 3개 이하면 나란히, 6개까지 2열, 더 많으면 3줄. 세로 화면은 한 줄에 하나, 6개보다 많으면 2열.
 static void layout_page(ButtonPage &page, int x, int w, int h) {
   lv_obj_set_size(page.area, w, h);
   lv_obj_set_pos(page.area, x, 0);
@@ -313,7 +316,7 @@ static void layout_page(ButtonPage &page, int x, int w, int h) {
   lv_obj_set_width(page.note_lbl, inner_w);
   lv_obj_set_pos(page.note_lbl, 0, 0);
   int n = page.count;
-  int cols = screen_wide ? (n <= 3 ? n : 2) : 1;
+  int cols = screen_wide ? (n <= 3 ? n : n <= 6 ? 2 : (n + 2) / 3) : (n <= 6 ? 1 : 2);
   int rows = (n + cols - 1) / cols;
   int top = 24, gap = 6;
   int bw = (inner_w - gap * (cols - 1)) / cols;

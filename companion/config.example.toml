@@ -89,7 +89,7 @@ dir = ""
 
 [keywords]
 # 단축키 화면 "키워드" 와 ORCA 세션 팝업의 버튼. 누르면 PC 커서 자리에 text 를 입력하고 Enter 를 누른다.
-# 5개까지 (마지막 칸 Tab + Enter 는 늘 있다). name 은 버튼 이름 12자까지, text 는 200자까지 (줄바꿈·탭은 안 됩니다).
+# 7개까지 (마지막 칸 Tab + Enter 는 늘 있다). name 은 버튼 이름 12자까지, text 는 200자까지 (줄바꿈·탭은 안 됩니다).
 # 이 부분을 지우거나 주석으로 두면 아래와 같은 기본 목록을 씁니다. 바꾼 뒤에는 PC 도우미를 다시 켜세요.
 # items = [
 #   { name = "커밋", text = "커밋해줘" },
@@ -97,6 +97,8 @@ dir = ""
 #   { name = "푸쉬", text = "푸쉬해줘" },
 #   { name = "에러 확인", text = "에러 확인" },
 #   { name = "/orchestration", text = "/orchestration" },
+#   { name = "/clear", text = "/clear" },
+#   { name = "/compact", text = "/compact" },
 # ]
 
 [orca]
