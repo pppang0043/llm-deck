@@ -7,6 +7,7 @@
 #include "askpanel.h"
 #include "display.h"
 #include "history.h"
+#include "mirror.h"
 #include "orcapanel.h"
 #include "pcpanel.h"
 #include "settings.h"
@@ -79,14 +80,75 @@ static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *
   return lbl;
 }
 
-// 왼쪽과 오른쪽에 글자가 하나씩 있는 한 줄
-static void add_row(lv_obj_t *parent, const char *left, const lv_font_t *left_font, lv_color_t left_color,
-                    const char *right, const lv_font_t *right_font, lv_color_t right_color) {
+// 왼쪽과 오른쪽에 글자가 하나씩 있는 한 줄. 왼쪽 글자를 돌려준다.
+static lv_obj_t *add_row(lv_obj_t *parent, const char *left, const lv_font_t *left_font, lv_color_t left_color,
+                         const char *right, const lv_font_t *right_font, lv_color_t right_color) {
   lv_obj_t *row = lv_obj_create(parent);
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-  lv_obj_align(add_label(row, left, left_font, left_color), LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_t *lbl = add_label(row, left, left_font, left_color);
+  lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
   lv_obj_align(add_label(row, right, right_font, right_color), LV_ALIGN_RIGHT_MID, 0, 0);
+  return lbl;
+}
+
+// ---- 미러링 나눠 쓰기 버튼 ----
+// 구독제 화면(원래 화면)과 기기 화면에 하나씩. 지워지면 자리를 비운다.
+static lv_obj_t *split_btns[2];
+
+static void split_btn_event(lv_event_t *e) {
+  mirror_set_split(!mirror_split());
+}
+
+static void split_btn_deleted(lv_event_t *e) {
+  for (lv_obj_t *&b : split_btns) {
+    if (b == lv_event_get_target(e)) b = nullptr;
+  }
+}
+
+static void update_split_btn(lv_obj_t *btn) {
+  bool split = mirror_split();
+  if (mirror_active()) {
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_obj_set_style_bg_color(btn, split ? COLOR_ACCENT : COLOR_MIC_OFF, 0);
+  lv_label_set_text(lv_obj_get_child(btn, 0), split ? "합치기" : "분리");
+}
+
+lv_obj_t *ui_split_button(lv_obj_t *parent) {
+  lv_obj_t *btn = lv_btn_create(parent);
+  lv_obj_set_size(btn, LV_SIZE_CONTENT, 24);
+  lv_obj_set_style_pad_hor(btn, 8, 0);
+  lv_obj_set_style_pad_ver(btn, 0, 0);
+  lv_obj_set_style_radius(btn, 6, 0);
+  lv_obj_set_style_shadow_width(btn, 0, 0);
+  lv_obj_set_ext_click_area(btn, 8);  // 작은 버튼이라 누르는 자리는 조금 넓게
+  lv_obj_center(add_label(btn, "", &font_ko_14, lv_color_white()));
+  lv_obj_add_event_cb(btn, split_btn_event, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(btn, split_btn_deleted, LV_EVENT_DELETE, NULL);
+  for (lv_obj_t *&b : split_btns) {
+    if (!b) {
+      b = btn;
+      break;
+    }
+  }
+  update_split_btn(btn);
+  return btn;
+}
+
+void ui_mirror_changed() {
+  for (lv_obj_t *b : split_btns) {
+    if (b) update_split_btn(b);
+  }
+}
+
+// 첫 사용량 페이지 제목 옆에 나눠 쓰기 버튼
+static void add_title_split_btn(lv_obj_t *title) {
+  lv_obj_t *btn = ui_split_button(lv_obj_get_parent(title));
+  lv_obj_update_layout(title);  // 제목 폭을 알아야 바로 옆에 둔다
+  lv_obj_align_to(btn, title, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
 }
 
 // 표: 첫 줄은 열 제목, 나머지는 [줄 이름, 값, 값, ...]. 여러 회사의 청구액을 한 화면에 나란히 보여준다
@@ -354,7 +416,7 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
   lv_obj_align(add_label(row, bar["label"] | "", &font_ko_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
   lv_obj_align(add_label(row, bar["note"] | "", &font_ko_14, COLOR_DIM), LV_ALIGN_BOTTOM_LEFT, 0, 0);
   lv_obj_align(add_label(row, bar["text"] | "", &lv_font_montserrat_48, color), LV_ALIGN_RIGHT_MID, 0, 0);
-  if (gauge_count < MAX_GAUGES) {
+  if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
     strlcpy(k.service, service, sizeof(k.service));
     strlcpy(k.label, bar["label"] | "", sizeof(k.label));
@@ -469,9 +531,9 @@ static void add_limits_table(lv_obj_t *page, JsonArrayConst services) {
   }
 }
 
-static lv_obj_t *add_page(uint8_t index, uint8_t col = 0) {
+static lv_obj_t *add_page(lv_obj_t *tv, uint8_t index, uint8_t col = 0) {
   // 서비스 페이지는 위아래로 넘긴다 (오른쪽으로 밀기는 홈으로 가기에 쓴다). 옆 페이지(col 1)는 왼쪽으로만 돌아간다.
-  lv_obj_t *page = lv_tileview_add_tile(tiles, col, index, col ? LV_DIR_LEFT : LV_DIR_VER);
+  lv_obj_t *page = lv_tileview_add_tile(tv, col, index, col ? LV_DIR_LEFT : LV_DIR_VER);
   lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(page, 10, 0);
   lv_obj_set_style_pad_row(page, 6, 0);
@@ -489,7 +551,7 @@ static void add_pc_tile(uint8_t index) {
 static void show_placeholder(const char *title, const char *body) {
   pcpanel_status_detach();
   lv_obj_clean(tiles);
-  lv_obj_t *page = add_page(0);
+  lv_obj_t *page = add_page(tiles, 0);
   add_label(page, title, &font_ko_20, COLOR_ACCENT);
   lv_obj_t *lbl = add_label(page, body, &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
@@ -975,58 +1037,42 @@ void ui_set_usage(JsonArrayConst services) {
   lv_timer_resume(usage_timer);
 }
 
-static void render_usage() {
-  if (usage_timer) lv_timer_pause(usage_timer);
-  JsonArrayConst services = last_usage.as<JsonArrayConst>();
-
-  // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다
-  lv_obj_t *active = lv_tileview_get_tile_act(tiles);
-  int tile_h = lv_obj_get_height(tiles);
-  uint8_t keep = active && tile_h > 0 ? lv_obj_get_y(active) / tile_h : 0;
-  int tile_w = lv_obj_get_width(tiles);
-  uint8_t keep_col = active && tile_w > 0 ? lv_obj_get_x(active) / tile_w : 0;
-  // PC 상태를 보고 있었으면 페이지 수가 바뀌어도 PC 상태(맨 끝)에 머문다
-  bool keep_pc = keep == pc_tile;
-
-  size_t count = services.size();
-  if (count == 0) {
-    show_placeholder("표시할 내용 없음", "PC 도우미가 보낸 사용량이 없습니다.");
-    return;
-  }
-
-  pcpanel_status_detach();
-  lv_obj_clean(tiles);
-  gauge_count = 0;
+// 서비스 페이지들을 tv 에 만든다. 페이지 수(줄)를 돌려주고, 옆 페이지가 있는 줄을 side_rows 에 표시한다.
+// 원래 화면이면 첫 페이지 제목 옆에 나눠 쓰기 버튼을 둔다 (기기 화면은 위쪽 줄에 따로 있다).
+static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool main_screen, uint32_t *side_rows) {
   uint8_t index = 0;
   // 구독 한도 페이지가 둘 이상이면 처음 것 자리에 "구독제" 한 페이지로 모은다
   int limits = 0;
   for (JsonObjectConst svc : services) limits += is_limits_page(svc);
   bool limits_done = false;
   lv_obj_t *prev = nullptr;  // 바로 앞 페이지 (옆 페이지가 오면 오른쪽으로도 넘기게 한다)
-  uint32_t side_rows = 0;  // 옆 페이지가 있는 줄
+  *side_rows = 0;
   for (JsonObjectConst svc : services) {
     if (limits >= 2 && is_limits_page(svc)) {
       if (limits_done) continue;
       limits_done = true;
-      lv_obj_t *page = prev = add_page(index++);
-      add_row(page, "구독제", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14, COLOR_DIM);
+      bool first = index == 0;
+      lv_obj_t *page = prev = add_page(tv, index++);
+      lv_obj_t *title = add_row(page, "구독제", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14, COLOR_DIM);
+      if (first && main_screen) add_title_split_btn(title);
       add_limits_table(page, services);
       continue;
     }
     // 옆 페이지: 앞 페이지 오른쪽에 둔다
-    bool side = svc["side"] == true && prev && index > 0 && !(side_rows & (1u << (index - 1)));
+    bool side = svc["side"] == true && prev && index > 0 && !(*side_rows & (1u << (index - 1)));
     lv_obj_t *page;
     if (side) {
       ((lv_tileview_tile_t *)prev)->dir = (lv_dir_t)(LV_DIR_VER | LV_DIR_RIGHT);
-      side_rows |= 1u << (index - 1);
-      page = add_page(index - 1, 1);
+      *side_rows |= 1u << (index - 1);
+      page = add_page(tv, index - 1, 1);
     } else {
-      page = prev = add_page(index);
+      page = prev = add_page(tv, index);
     }
 
     // 제목 오른쪽의 작은 글자는 이 값이 언제 것인지(시각)를 나타낸다
-    add_row(page, svc["name"] | "?", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14,
-            COLOR_DIM);
+    lv_obj_t *title = add_row(page, svc["name"] | "?", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14,
+                              COLOR_DIM);
+    if (index == 0 && !side && main_screen) add_title_split_btn(title);
 
     if (svc["headline"].is<const char *>()) {
       add_label(page, svc["headline"], &lv_font_montserrat_48, lv_color_white());
@@ -1049,6 +1095,38 @@ static void render_usage() {
     }
     if (!side) index++;
   }
+  return index;
+}
+
+// 보고 있던 페이지 (줄, 칸). 다시 만들어도 그 자리에 머물게 한다.
+static void tile_pos(lv_obj_t *tv, uint8_t *row, uint8_t *col) {
+  lv_obj_t *active = lv_tileview_get_tile_act(tv);
+  int tile_h = lv_obj_get_height(tv), tile_w = lv_obj_get_width(tv);
+  *row = active && tile_h > 0 ? lv_obj_get_y(active) / tile_h : 0;
+  *col = active && tile_w > 0 ? lv_obj_get_x(active) / tile_w : 0;
+}
+
+static void render_usage() {
+  if (usage_timer) lv_timer_pause(usage_timer);
+  JsonArrayConst services = last_usage.as<JsonArrayConst>();
+
+  // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다
+  uint8_t keep, keep_col;
+  tile_pos(tiles, &keep, &keep_col);
+  // PC 상태를 보고 있었으면 페이지 수가 바뀌어도 PC 상태(맨 끝)에 머문다
+  bool keep_pc = keep == pc_tile;
+
+  size_t count = services.size();
+  if (count == 0) {
+    show_placeholder("표시할 내용 없음", "PC 도우미가 보낸 사용량이 없습니다.");
+    return;
+  }
+
+  pcpanel_status_detach();
+  lv_obj_clean(tiles);
+  gauge_count = 0;
+  uint32_t side_rows;
+  uint8_t index = build_usage_pages(tiles, services, true, &side_rows);
   add_pc_tile(index);
 
   uint8_t row = keep_pc || keep > index ? index : keep;
@@ -1068,27 +1146,35 @@ uint32_t ui_usage_version() {
   return usage_version;
 }
 
-void ui_usage_compact(lv_obj_t *parent) {
+void ui_usage_pages(lv_obj_t *tv) {
   JsonArrayConst services = last_usage.as<JsonArrayConst>();
-  JsonObjectConst first;
-  for (JsonObjectConst svc : services) {
-    if (is_limits_page(svc)) {
-      first = svc;
-      break;
-    }
-  }
-  if (first.isNull()) {
-    char text[160];
-    ui_usage_summary(text, sizeof(text));
-    lv_obj_t *lbl = add_label(parent, text[0] ? text : "PC 도우미가 보낸 사용량이 없습니다.", &font_ko_20, COLOR_DIM);
+  uint8_t keep, keep_col;
+  tile_pos(tv, &keep, &keep_col);
+  lv_obj_clean(tv);
+  if (services.size() == 0) {
+    lv_obj_t *page = add_page(tv, 0);
+    lv_obj_t *lbl = add_label(page, "PC 도우미가 보낸 사용량이 없습니다.", &font_ko_20, COLOR_DIM);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(lbl, lv_pct(100));
     return;
   }
-  add_row(parent, "구독제", &font_ko_28, COLOR_ACCENT, first["note"] | "", &font_ko_14, COLOR_DIM);
+  // 그래프는 원래 화면에 열리므로 기기 화면에서는 눌러도 열지 않는다
   no_history = true;
-  add_limits_table(parent, services);
+  uint32_t side_rows;
+  uint8_t count = build_usage_pages(tv, services, false, &side_rows);
   no_history = false;
+  // 맨 끝은 원래 화면처럼 PC 상태
+  lv_obj_t *tile = lv_tileview_add_tile(tv, 0, count, LV_DIR_VER);
+  lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+  pcpanel_device_status(tile, lv_obj_get_width(tv), lv_obj_get_height(tv));
+  uint8_t row = keep > count ? count : keep;
+  lv_obj_set_tile_id(tv, keep_col && (side_rows & (1u << row)) ? 1 : 0, row, LV_ANIM_OFF);
+}
+
+bool ui_usage_pages_on_pc(lv_obj_t *tv) {
+  lv_obj_t *active = lv_tileview_get_tile_act(tv);
+  uint32_t n = lv_obj_get_child_cnt(tv);
+  return active && n && active == lv_obj_get_child(tv, n - 1);
 }
 
 void ui_usage_summary(char *out, size_t size) {

@@ -88,15 +88,19 @@ static bool screen_wide = true;
 static bool pc_mac = false;  // 사용 중인 PC 가 Mac (모르면 Windows 로 본다)
 static int short_x, short_y, short_w, short_h;  // 마지막 배치 (PC 가 바뀌면 다시 배치한다)
 
-static lv_obj_t *stat_panel, *stat_host, *stat_age, *stat_none;
 struct Meter {
   lv_obj_t *row, *name, *value, *bar;
 };
-static Meter cpu, ram, disk;
-static lv_obj_t *net_lbl, *bat_lbl;
+// PC 상태 화면 하나. 원래 화면에 하나, 미러링을 나눠 쓰는 동안 기기 화면에 하나 (mirror.cpp).
+struct StatusView {
+  lv_obj_t *panel, *host, *age, *none;
+  Meter cpu, ram, disk;
+  lv_obj_t *net, *bat;
+  bool watching;  // 화면에 보이는 중 (ui.cpp, mirror.cpp 가 알려 준다)
+};
+static StatusView main_stat, device_stat;
 static uint32_t stat_ms = 0;  // 마지막으로 받은 시각
 static uint32_t drawn_ms = 0;  // 마지막으로 "몇 초 전" 을 고친 시각
-static bool watching = false;  // PC 상태 페이지가 화면에 보이는 중 (ui.cpp 가 알려 준다)
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
@@ -447,8 +451,8 @@ static Meter add_meter(lv_obj_t *parent, const char *name) {
 }
 
 // 안내 글을 보이는 동안은 숫자 줄을 숨긴다 (안내가 가운데에서 줄과 겹치지 않게, 오래된 숫자를 지금 것으로 보지 않게)
-static void show_data(bool on) {
-  for (lv_obj_t *o : {cpu.row, ram.row, disk.row, net_lbl, bat_lbl, stat_age}) {
+static void show_data(StatusView &v, bool on) {
+  for (lv_obj_t *o : {v.cpu.row, v.ram.row, v.disk.row, v.net, v.bat, v.age}) {
     if (on) {
       lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -456,52 +460,52 @@ static void show_data(bool on) {
     }
   }
   if (on) {
-    lv_obj_add_flag(stat_none, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(v.none, LV_OBJ_FLAG_HIDDEN);
   } else {
-    lv_obj_clear_flag(stat_none, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(v.none, LV_OBJ_FLAG_HIDDEN);
   }
 }
 
-static void build_status(lv_obj_t *parent) {
-  stat_panel = add_panel(parent, "PC 상태");
-  stat_host = add_label(stat_panel, "", &font_ko_14, lv_color_white());
-  stat_age = add_label(stat_panel, "", &font_ko_14, COLOR_DIM);
-  cpu = add_meter(stat_panel, "CPU");
-  ram = add_meter(stat_panel, "메모리");
-  disk = add_meter(stat_panel, "디스크");
-  net_lbl = add_label(stat_panel, "", &font_ko_14, COLOR_DIM);
-  bat_lbl = add_label(stat_panel, "", &font_ko_14, COLOR_DIM);
-  stat_none = add_label(stat_panel, "PC 도우미에서 받는 중...", &font_ko_14, COLOR_DIM);
-  lv_obj_set_style_text_align(stat_none, LV_TEXT_ALIGN_CENTER, 0);
-  show_data(false);
+static void build_status(StatusView &v, lv_obj_t *parent) {
+  v.panel = add_panel(parent, "PC 상태");
+  v.host = add_label(v.panel, "", &font_ko_14, lv_color_white());
+  v.age = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
+  v.cpu = add_meter(v.panel, "CPU");
+  v.ram = add_meter(v.panel, "메모리");
+  v.disk = add_meter(v.panel, "디스크");
+  v.net = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
+  v.bat = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
+  v.none = add_label(v.panel, "PC 도우미에서 받는 중...", &font_ko_14, COLOR_DIM);
+  lv_obj_set_style_text_align(v.none, LV_TEXT_ALIGN_CENTER, 0);
+  show_data(v, false);
 }
 
 void pcpanel_build(lv_obj_t *parent) {
   kw_load();
   build_shortcuts(parent);
-  build_status(parent);
+  build_status(main_stat, parent);
 }
 
-static void layout_status(int w, int h) {
-  lv_obj_set_size(stat_panel, w, h);
-  lv_obj_set_pos(stat_panel, 0, 0);
+static void layout_status(StatusView &v, int w, int h) {
+  lv_obj_set_size(v.panel, w, h);
+  lv_obj_set_pos(v.panel, 0, 0);
   int inner_w = w - 20;
 
   // PC 상태: 위에서부터 차례로
-  lv_obj_align(stat_host, LV_ALIGN_TOP_RIGHT, 0, 4);
+  lv_obj_align(v.host, LV_ALIGN_TOP_RIGHT, 0, 4);
   int yy = 30;
-  lv_obj_set_pos(stat_age, 0, yy);
+  lv_obj_set_pos(v.age, 0, yy);
   yy += 22;
-  for (Meter *m : {&cpu, &ram, &disk}) {
+  for (Meter *m : {&v.cpu, &v.ram, &v.disk}) {
     lv_obj_set_size(m->row, inner_w, 30);
     lv_obj_set_width(m->bar, inner_w);
     lv_obj_set_pos(m->row, 0, yy);
     yy += 36;
   }
-  lv_obj_set_pos(net_lbl, 0, yy);
+  lv_obj_set_pos(v.net, 0, yy);
   yy += 20;
-  lv_obj_set_pos(bat_lbl, 0, yy);
-  lv_obj_align(stat_none, LV_ALIGN_CENTER, 0, 10);
+  lv_obj_set_pos(v.bat, 0, yy);
+  lv_obj_align(v.none, LV_ALIGN_CENTER, 0, 10);
 }
 
 void pcpanel_layout(int x, int y, int w, int h) {
@@ -509,27 +513,63 @@ void pcpanel_layout(int x, int y, int w, int h) {
 }
 
 void pcpanel_status_attach(lv_obj_t *tile, int w, int h) {
-  lv_obj_set_parent(stat_panel, tile);
-  lv_obj_clear_flag(stat_panel, LV_OBJ_FLAG_HIDDEN);
-  layout_status(w, h);
+  lv_obj_set_parent(main_stat.panel, tile);
+  lv_obj_clear_flag(main_stat.panel, LV_OBJ_FLAG_HIDDEN);
+  layout_status(main_stat, w, h);
 }
 
 void pcpanel_status_detach() {
-  lv_obj_set_parent(stat_panel, lv_scr_act());
-  lv_obj_add_flag(stat_panel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_parent(main_stat.panel, lv_scr_act());
+  lv_obj_add_flag(main_stat.panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void start_watch() {
+  drawn_ms = 0;
+  pcpanel_loop();
 }
 
 void pcpanel_show_status(bool on) {
-  if (on == watching) return;
-  watching = on;
-  if (on) {
-    drawn_ms = 0;
-    pcpanel_loop();
-  }
+  if (on == main_stat.watching) return;
+  main_stat.watching = on;
+  if (on) start_watch();
 }
 
 bool pcpanel_status_visible() {
-  return watching;
+  return main_stat.watching || (device_stat.panel && device_stat.watching);
+}
+
+// 기기 화면의 PC 상태는 페이지를 다시 만들 때 같이 지워진다
+static void device_status_deleted(lv_event_t *e) {
+  device_stat.panel = nullptr;
+  device_stat.watching = false;
+}
+
+static void copy_meter(Meter &to, const Meter &from) {
+  lv_label_set_text(to.value, lv_label_get_text(from.value));
+  lv_bar_set_value(to.bar, lv_bar_get_value(from.bar), LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(to.bar, lv_obj_get_style_bg_color(from.bar, LV_PART_INDICATOR), LV_PART_INDICATOR);
+}
+
+void pcpanel_device_status(lv_obj_t *tile, int w, int h) {
+  build_status(device_stat, tile);
+  lv_obj_add_event_cb(device_stat.panel, device_status_deleted, LV_EVENT_DELETE, NULL);
+  layout_status(device_stat, w, h);
+  // 지금까지 받은 값은 원래 화면의 것을 그대로 옮긴다
+  lv_label_set_text(device_stat.host, lv_label_get_text(main_stat.host));
+  lv_label_set_text(device_stat.age, lv_label_get_text(main_stat.age));
+  lv_label_set_text(device_stat.none, lv_label_get_text(main_stat.none));
+  lv_label_set_text(device_stat.net, lv_label_get_text(main_stat.net));
+  lv_label_set_text(device_stat.bat, lv_label_get_text(main_stat.bat));
+  copy_meter(device_stat.cpu, main_stat.cpu);
+  copy_meter(device_stat.ram, main_stat.ram);
+  copy_meter(device_stat.disk, main_stat.disk);
+  show_data(device_stat, lv_obj_has_flag(main_stat.none, LV_OBJ_FLAG_HIDDEN));
+}
+
+void pcpanel_device_watch(bool on) {
+  if (!device_stat.panel || on == device_stat.watching) return;
+  device_stat.watching = on;
+  if (on) start_watch();
 }
 
 static void set_meter(Meter &m, int pct, const char *text) {
@@ -540,26 +580,38 @@ static void set_meter(Meter &m, int pct, const char *text) {
   lv_label_set_text(m.value, text);
 }
 
-void pcpanel_set_status(JsonObjectConst pc, const char *host) {
-  stat_ms = millis();
+// 원래 화면과 (있으면) 기기 화면에 같은 것을 쓴다
+static void for_views(void (*fn)(StatusView &v, void *arg), void *arg) {
+  fn(main_stat, arg);
+  if (device_stat.panel) fn(device_stat, arg);
+}
+
+static void apply_status(StatusView &v, void *arg) {
+  JsonObjectConst &pc = *(JsonObjectConst *)arg;
   char buf[64];
-  lv_label_set_text(stat_host, host && host[0] ? host : "");
   snprintf(buf, sizeof(buf), "%d%%", (int)(pc["cpu"] | 0));
-  set_meter(cpu, pc["cpu"] | 0, buf);
+  set_meter(v.cpu, pc["cpu"] | 0, buf);
   snprintf(buf, sizeof(buf), "%d%%  %s", (int)(pc["ram"] | 0), pc["ram_text"] | "");
-  set_meter(ram, pc["ram"] | 0, buf);
+  set_meter(v.ram, pc["ram"] | 0, buf);
   snprintf(buf, sizeof(buf), "%d%%  %s", (int)(pc["disk"] | 0), pc["disk_text"] | "");
-  set_meter(disk, pc["disk"] | 0, buf);
+  set_meter(v.disk, pc["disk"] | 0, buf);
   snprintf(buf, sizeof(buf), "네트워크  받기 %s  보내기 %s", pc["down"] | "-", pc["up"] | "-");
-  lv_label_set_text(net_lbl, buf);
+  lv_label_set_text(v.net, buf);
   int bat = pc["battery"] | -1;
   if (bat >= 0) {
     snprintf(buf, sizeof(buf), "배터리  %d%%%s", bat, pc["plugged"] == true ? " (충전기 연결)" : "");
-    lv_label_set_text(bat_lbl, buf);
+    lv_label_set_text(v.bat, buf);
   } else {
-    lv_label_set_text(bat_lbl, "");
+    lv_label_set_text(v.bat, "");
   }
-  show_data(true);
+  show_data(v, true);
+}
+
+void pcpanel_set_status(JsonObjectConst pc, const char *host) {
+  stat_ms = millis();
+  for_views([](StatusView &v, void *arg) { lv_label_set_text(v.host, (const char *)arg); },
+            (void *)(host && host[0] ? host : ""));
+  for_views(apply_status, &pc);
 }
 
 void pcpanel_loop() {
@@ -570,17 +622,22 @@ void pcpanel_loop() {
   // 받은 적이 없거나 오래되었으면 숫자 대신 이유를 알린다
   bool have_pc = link_active() != LINK_NONE && link_active() != LINK_CLOUD;
   uint32_t age = stat_ms ? (millis() - stat_ms) / 1000 : 0;
+  const char *why = nullptr;
   if (!have_pc) {
-    lv_label_set_text(stat_none, "연결된 PC가 없습니다");
-    show_data(false);
+    why = "연결된 PC가 없습니다";
   } else if (!stat_ms || age > 15) {
-    lv_label_set_text(stat_none, "PC 도우미에서 받는 중...\n(도우미를 새로 깔았는지 확인)");
-    show_data(false);
+    why = "PC 도우미에서 받는 중...\n(도우미를 새로 깔았는지 확인)";
+  }
+  if (why) {
+    for_views([](StatusView &v, void *arg) {
+      lv_label_set_text(v.none, (const char *)arg);
+      show_data(v, false);
+    }, (void *)why);
   }
   char buf[32];
   if (stat_ms) {
     snprintf(buf, sizeof(buf), "%lu초 전", (unsigned long)age);
-    lv_label_set_text(stat_age, buf);
+    for_views([](StatusView &v, void *arg) { lv_label_set_text(v.age, (const char *)arg); }, buf);
   }
   // 보이는 동안 5초마다 "계속 보내 줘" (PC 는 15초 동안 3초마다 보낸다)
   if (have_pc && (!asked_ms || millis() - asked_ms > 5000)) {

@@ -29,13 +29,17 @@ static lv_disp_draw_buf_t device_draw_buf;
 static lv_disp_drv_t device_drv;
 static lv_disp_t *device_disp;
 static bool split = false;
-static volatile uint32_t finger_ms = 0;  // 기기 화면을 손가락으로 마지막으로 만진 시각 (PC 에서 누른 것은 빼고)
 static lv_indev_drv_t indev_drv;
+static lv_indev_drv_t device_indev_drv;  // 나눠 쓰는 동안 기기 화면을 만진 것
+// 지난번에 읽은 손가락 (PC 에서 누른 것은 빼고)
+static bool finger_down = false;
+static lv_point_t finger_at;
 static uint8_t rotation = 0;
 static volatile uint32_t touched_ms = 0;
 // 화면이 꺼져(어두워져) 있을 때의 첫 터치는 깨우기만 하고 버튼으로 넘기지 않는다
 static volatile bool sleeping = false;
 static bool swallow = false;
+static bool device_swallow = false;
 
 // 미러링: 화면에 보낸 그림을 PSRAM 에 똑같이 모아 둔다 (켜 둔 동안만. 다시 그리지 않으므로 화면이 느려지지 않는다)
 static uint16_t *shadow = nullptr;
@@ -154,17 +158,42 @@ void display_i2c_test() {
   digitalWrite(TP_SDA, LOW);
 }
 
+// 터치 칩은 항상 세로(돌리지 않은) 기준 좌표를 주므로, 화면을 돌린 만큼 바꿔 준다
+static void finger_point(const uint8_t *raw, lv_point_t *pt) {
+  int px = ((raw[1] & 0x0F) << 8) | raw[2];
+  int py = ((raw[3] & 0x0F) << 8) | raw[4];
+  switch (rotation) {
+    case 1:
+      pt->x = py;
+      pt->y = LCD_W - 1 - px;
+      break;
+    case 2:
+      pt->x = LCD_W - 1 - px;
+      pt->y = LCD_H - 1 - py;
+      break;
+    case 3:
+      pt->x = LCD_H - 1 - py;
+      pt->y = px;
+      break;
+    default:
+      pt->x = px;
+      pt->y = py;
+      break;
+  }
+}
+
 static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   // [0]=손가락 수, [1..2]=X, [3..4]=Y
   uint8_t raw[5];
   bool read_ok = touch_read_reg(CST816_REG_TOUCH, raw, sizeof(raw));
   watch_bus(read_ok);
-  bool down = read_ok && raw[0] > 0;
-  if (down) {
-    finger_ms = millis();
-    // 기기가 미러링 중 화면을 보여 주는 동안의 터치는 원래 화면으로 돌아오기만 한다 (안 보이는 버튼을 누르지 않게)
-    if (split) swallow = true;
+  finger_down = read_ok && raw[0] > 0;
+  if (finger_down) {
+    finger_point(raw, &finger_at);
+    touched_ms = millis();
   }
+  // 나눠 쓰는 동안 손가락은 기기 화면(device_touch_cb)으로 가고, 원래 화면은 PC 에서 누른 것만 받는다
+  bool down = finger_down && !split;
   // 손가락이 없으면 PC 에서 누른 것을 쓴다 (좌표는 이미 지금 화면 방향 기준)
   bool remote = false;
   if (!down) {
@@ -200,31 +229,24 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     data->point.y = remote_now.y;
     data->state = down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
   } else if (down) {
-    // 터치 칩은 항상 세로(돌리지 않은) 기준 좌표를 주므로, 화면을 돌린 만큼 바꿔 준다
-    int px = ((raw[1] & 0x0F) << 8) | raw[2];
-    int py = ((raw[3] & 0x0F) << 8) | raw[4];
-    switch (rotation) {
-      case 1:
-        data->point.x = py;
-        data->point.y = LCD_W - 1 - px;
-        break;
-      case 2:
-        data->point.x = LCD_W - 1 - px;
-        data->point.y = LCD_H - 1 - py;
-        break;
-      case 3:
-        data->point.x = LCD_H - 1 - py;
-        data->point.y = px;
-        break;
-      default:
-        data->point.x = px;
-        data->point.y = py;
-        break;
-    }
+    data->point = finger_at;
     data->state = LV_INDEV_STATE_PRESSED;
   } else {
     data->state = LV_INDEV_STATE_RELEASED;
   }
+}
+
+// 나눠 쓰는 동안의 기기 화면 터치. 칩은 touch_cb 가 읽고 (같은 주기로 먼저 돈다), 여기서는 그 값을 쓴다.
+static void device_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+  bool down = split && finger_down;
+  if (down && sleeping) device_swallow = true;
+  if (device_swallow) {
+    if (!down) device_swallow = false;
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+  data->point = finger_at;
+  data->state = down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
 void display_init() {
@@ -273,6 +295,12 @@ void display_init() {
   indev_drv.read_cb = touch_cb;
   indev_drv.disp = main_disp;
   lv_indev_drv_register(&indev_drv);
+
+  lv_indev_drv_init(&device_indev_drv);
+  device_indev_drv.type = LV_INDEV_TYPE_POINTER;
+  device_indev_drv.read_cb = device_touch_cb;
+  device_indev_drv.disp = device_disp;
+  lv_indev_drv_register(&device_indev_drv);
 }
 
 void display_set_rotation(uint8_t value) {
@@ -365,8 +393,14 @@ void display_remote_touch(int x, int y, bool down) {
 void display_split(bool on) {
   if (on == split) return;
   split = on;
+  // 누르고 있던 손가락은 뗄 때까지 어느 쪽도 누르지 않는다 (바뀐 화면의 버튼이 눌리지 않게)
+  if (finger_down) swallow = device_swallow = true;
   // 기기 LCD 에 새로 보일 쪽을 처음부터 다시 그린다
   lv_obj_invalidate(lv_disp_get_scr_act(on ? device_disp : main_disp));
+}
+
+bool display_device_pressed() {
+  return split && finger_down;
 }
 
 bool display_split_on() {
@@ -375,8 +409,4 @@ bool display_split_on() {
 
 lv_obj_t *display_device_screen() {
   return lv_disp_get_scr_act(device_disp);
-}
-
-uint32_t display_last_finger_ms() {
-  return finger_ms;
 }

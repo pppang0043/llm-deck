@@ -8,6 +8,7 @@
 #include "link.h"
 #include "mic.h"
 #include "net.h"
+#include "pcpanel.h"
 #include "ui.h"
 #include "usb_link.h"
 #include "video.h"
@@ -32,9 +33,9 @@ static uint8_t *packed = nullptr;  // 줄인 화면 (PSRAM)
 static int grab_w, grab_h;
 static volatile bool busy = false;  // 줄이기·보내는 중
 static uint32_t until_ms = 0;
-// 미러링이 시작된 때. 그 뒤로 기기를 한 번도 안 만졌으면 기기 LCD 에 사용량을 보여 준다.
-// 한 번 만지면 그 뒤로는 기기와 PC 창을 따로 쓴다 (다음 연결 때까지 사용량으로 돌아가지 않음).
-static uint32_t started_ms = 0;
+// 나눠 쓰기: 켜면 기기 LCD 에는 사용량을 따로 보여 주고, PC 창은 원래 화면을 혼자 쓴다.
+// 구독제 화면의 작은 "분리" 버튼으로 켜고 끈다. 껐다 켤 때까지 (미러링이 다시 시작돼도) 그대로 둔다.
+static bool split_on = false;
 static uint32_t last_ms = 0;
 static uint32_t frame_no = 0;
 static TaskHandle_t task = nullptr;
@@ -134,7 +135,7 @@ static void send_task(void *) {
 
 // ---- 미러링 중 기기 화면 (display_device_screen) ----
 
-static lv_obj_t *dev_clock, *dev_body;
+static lv_obj_t *dev_clock, *dev_body, *dev_btn;
 static uint32_t dev_version = 0;
 static int dev_w = 0, dev_h = 0;
 
@@ -152,17 +153,15 @@ static void device_build() {
   lv_label_set_text(dev_clock, "");
   lv_obj_set_style_text_font(dev_clock, &font_ko_14, 0);
   lv_obj_set_style_text_color(dev_clock, lv_color_hex(0x8A939E), 0);
-  lv_obj_align(dev_clock, LV_ALIGN_TOP_RIGHT, -8, 8);
-  dev_body = lv_obj_create(scr);
-  lv_obj_remove_style_all(dev_body);
+  dev_btn = ui_split_button(scr);
+  lv_obj_align(dev_btn, LV_ALIGN_TOP_RIGHT, -6, 4);
+  // 사용량 페이지들 (위아래로 넘긴다)
+  dev_body = lv_tileview_create(scr);
+  lv_obj_set_style_bg_color(dev_body, lv_color_hex(0x101418), 0);
   lv_obj_set_pos(dev_body, 0, DEVICE_STATUS_H);
-  lv_obj_set_flex_flow(dev_body, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_all(dev_body, 10, 0);
-  lv_obj_set_style_pad_row(dev_body, 6, 0);
-  lv_obj_clear_flag(dev_body, LV_OBJ_FLAG_SCROLLABLE);
 }
 
-// 1초마다: 시각, 그리고 사용량이나 화면 방향이 바뀌었으면 표를 새로 만든다
+// 1초마다: 시각, 그리고 사용량이나 화면 방향이 바뀌었으면 페이지를 새로 만든다
 static void device_refresh() {
   static uint32_t refreshed_ms = 0;
   if (dev_body && millis() - refreshed_ms < 1000) return;
@@ -176,12 +175,16 @@ static void device_refresh() {
   }
   int w = display_width(), h = display_height();
   if (dev_version == ui_usage_version() && dev_w == w && dev_h == h && lv_obj_get_child_cnt(dev_body)) return;
+  // 넘기는 중에 다시 만들면 손 밑의 페이지가 사라지므로 다음 번으로 미룬다
+  if (display_device_pressed() || lv_anim_get(dev_body, NULL)) return;
   dev_version = ui_usage_version();
   dev_w = w;
   dev_h = h;
   lv_obj_set_size(dev_body, w, h - DEVICE_STATUS_H);
-  lv_obj_clean(dev_body);
-  ui_usage_compact(dev_body);
+  // 화면 방향이 바뀌면 버튼 자리도 바뀌므로 시계를 다시 버튼 왼쪽에 둔다
+  lv_obj_update_layout(dev_btn);
+  lv_obj_align_to(dev_clock, dev_btn, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+  ui_usage_pages(dev_body);
 }
 
 void mirror_init() {
@@ -193,14 +196,30 @@ void mirror_init() {
 
 void mirror_keep(bool on) {
   if (!task) return;
-  if (on && !until_ms) {
-    Serial.println("[mirror] on");
-    started_ms = millis();
-  }
-  if (!on && until_ms) Serial.println("[mirror] off");
+  bool changed = on != (until_ms != 0);
+  if (changed) Serial.printf("[mirror] %s\n", on ? "on" : "off");
   until_ms = on ? millis() + KEEP_MS : 0;
   display_mirror(on);
-  if (!on) display_split(false);
+  if (!on) {
+    display_split(false);
+    pcpanel_device_watch(false);
+  }
+  if (changed) ui_mirror_changed();
+}
+
+bool mirror_active() {
+  return until_ms != 0;
+}
+
+bool mirror_split() {
+  return split_on;
+}
+
+void mirror_set_split(bool on) {
+  if (on == split_on) return;
+  split_on = on;
+  Serial.printf("[mirror] split %s\n", on ? "on" : "off");
+  ui_mirror_changed();
 }
 
 void mirror_loop() {
@@ -210,10 +229,10 @@ void mirror_loop() {
     mirror_keep(false);
     return;
   }
-  uint32_t finger = display_last_finger_ms();
-  bool device = !finger || (int32_t)(finger - started_ms) < 0;
-  if (device) device_refresh();
-  display_split(device);
+  if (split_on) device_refresh();
+  display_split(split_on);
+  // 기기 화면에서 PC 상태를 보는 동안만 PC 에 계속 보내 달라고 한다
+  pcpanel_device_watch(split_on && dev_body && ui_usage_pages_on_pc(dev_body));
   if (busy || millis() - last_ms < MIN_GAP_MS) return;
   if (!display_mirror_take(grab, &grab_w, &grab_h)) return;
   last_ms = millis();

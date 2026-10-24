@@ -51,8 +51,15 @@ bool ui_screenshot(uint16_t **pixels, int *w, int *h);
 void ui_set_info(const char *text);
 // 화면 보호기에 띄울 짧은 사용률 요약 (서비스마다 한 줄). 받은 사용량이 없으면 빈 글자.
 void ui_usage_summary(char *out, size_t size);
-// 미러링 중 기기 화면에 그릴 구독 한도 표 (parent 는 세로로 쌓는 flex). 눌러도 아무 일 없다.
-void ui_usage_compact(lv_obj_t *parent);
+// 나눠 쓰는 동안 기기 화면의 사용량 페이지들 (tv 는 tileview). 위아래로 넘길 수 있고, 보던 페이지에 머문다.
+// 눌러도 그래프는 열지 않는다. 맨 끝은 원래 화면처럼 PC 상태 페이지다.
+void ui_usage_pages(lv_obj_t *tv);
+// 그 기기 화면이 지금 PC 상태 페이지를 보이는지
+bool ui_usage_pages_on_pc(lv_obj_t *tv);
+// 미러링 나눠 쓰기 버튼 (작은 "분리" / "합치기"). 미러링 중에만 보인다. 구독제 화면 제목 옆과 기기 화면 위에 둔다.
+lv_obj_t *ui_split_button(lv_obj_t *parent);
+// 미러링이 켜지고 꺼지거나 나눠 쓰기가 바뀌었을 때 (mirror.cpp)
+void ui_mirror_changed();
 // 받은 사용량이 바뀔 때마다 느는 번호
 uint32_t ui_usage_version();
 void ui_set_level(uint8_t pct);

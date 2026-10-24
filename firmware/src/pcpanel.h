@@ -24,6 +24,10 @@ void pcpanel_status_detach();
 // PC 상태 페이지가 지금 보이는지 (보이는 동안만 PC 에 계속 보내 달라고 한다)
 void pcpanel_show_status(bool on);
 bool pcpanel_status_visible();
+// 미러링을 나눠 쓰는 동안 기기 화면의 PC 상태 페이지 (mirror.cpp 의 사용량 페이지 맨 끝). tile 이 지워지면 같이 없어진다.
+void pcpanel_device_status(lv_obj_t *tile, int w, int h);
+// 기기 화면의 PC 상태 페이지가 지금 보이는지
+void pcpanel_device_watch(bool on);
 
 // 키워드 단축키 목록 (ORCA 화면의 세션 팝업도 같은 목록을 쓴다). 없는 번호면 false.
 bool pcpanel_keyword(int i, const char **id, const char **name, uint32_t *color);
