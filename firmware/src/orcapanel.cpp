@@ -484,8 +484,11 @@ static void pop_event(lv_event_t *e) {
   char json[96];
   snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"%s\"}", active_id, key);
   link_send_event(json);
-  // Tab, 지우기, Esc 만 빼면 모두 끝에 Enter 를 친다 (companion/orca.py 의 KEYS, 키워드): 보냈으니 닫는다
-  if (strcmp(key, "tab") != 0 && strcmp(key, "erase") != 0 && strcmp(key, "esc") != 0) close_pop();
+  // Tab, 지우기, Esc 만 빼면 모두 끝에 Enter 를 친다 (companion/orca.py 의 KEYS, 키워드): 보냈으니 닫는다.
+  // /orchestration 은 Enter 없이 띄어쓰기만 넣으니 (companion/typer.py) 뒤에 할 일을 이어 넣도록 그대로 둔다
+  if (strcmp(key, "tab") != 0 && strcmp(key, "erase") != 0 && strcmp(key, "esc") != 0 &&
+      strcmp(key, "orchestration") != 0)
+    close_pop();
 }
 
 static lv_obj_t *add_pop_btn(int row, const char *key, const char *name, uint32_t color) {
