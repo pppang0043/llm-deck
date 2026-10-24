@@ -1,9 +1,12 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 #include <time.h>
 
 #include "battery.h"
+#include "ble_hid.h"
 #include "ble_link.h"
 #include "camera.h"
 #include "camera_ui.h"
@@ -143,6 +146,34 @@ static void follow_tilt() {
 #define SAVER_BRIGHTNESS 20
 // 전원이 연결돼 있을 때 안 만지면 낮추는 밝기. 화면이 그대로라 보호기보다 밝게 둔다.
 #define IDLE_BRIGHTNESS 30
+// 칩 절전 (배터리 절약을 켜고 배터리로만 쓸 때): 화면이 꺼졌거나 보호기면 CPU 를 낮추고(발열·전력),
+// 이만큼 안 만지면 깊은 잠에 든다. 깨우기는 BOOT 버튼 (깨면 처음부터 켜진다)
+#define CPU_FULL_MHZ 240
+#define CPU_SAVE_MHZ 80
+#define DEEP_SLEEP_AFTER_MS (20 * 60 * 1000UL)
+
+static void deep_sleep() {
+  Serial.println("[power] deep sleep (BOOT button wakes)");
+  Serial.flush();
+  display_set_brightness(0);
+  camera_stop();
+  // BOOT 버튼(GPIO0, 누르면 LOW)으로 깨운다. 잠자는 동안에도 끌어올려 둔다
+  rtc_gpio_pullup_en((gpio_num_t)BTN_BOOT);
+  rtc_gpio_pulldown_dis((gpio_num_t)BTN_BOOT);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_BOOT, 0);
+  delay(50);
+  esp_deep_sleep_start();
+}
+
+static void cpu_save(bool save) {
+  static int mhz = CPU_FULL_MHZ;
+  int want = save ? CPU_SAVE_MHZ : CPU_FULL_MHZ;
+  if (want == mhz) return;
+  if (setCpuFrequencyMhz(want)) {
+    mhz = want;
+    Serial.printf("[power] cpu %d MHz\n", mhz);
+  }
+}
 
 static void power_save() {
   static uint8_t shown = 255;
@@ -162,6 +193,10 @@ static void power_save() {
   }
   if (saver && level > 0) level = min(level, (uint8_t)SAVER_BRIGHTNESS);
   if (idle_long && powered && level > 0) level = min(level, (uint8_t)IDLE_BRIGHTNESS);
+  // 사진·동영상을 보내거나 카드에 쓰는 중에는 잠들지 않는다
+  bool transferring = photo_sending() || photo_streaming() || sd_video_active();
+  cpu_save(!powered && !busy && (level == 0 || saver));
+  if (battery_only && !transferring && idle > DEEP_SLEEP_AFTER_MS) deep_sleep();
   if (level == shown && saver == shown_saver) return;
   bool first = shown == 255;
   shown = level;
@@ -269,6 +304,10 @@ static void mem_log(const char *tag) {
 void setup() {
   usb_link_init();
   Serial.begin(115200);
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("[power] woke from deep sleep (BOOT button)");
+    rtc_gpio_deinit((gpio_num_t)BTN_BOOT);  // 잠들 때 깨우기용(RTC)으로 바꾼 핀을 다시 보통 입력으로
+  }
   pinMode(BTN_BOOT, INPUT_PULLUP);
   health_init();
   mem_log("start");
@@ -310,7 +349,12 @@ void setup() {
   mem_log("mic");
   net_init();
   mem_log("net");
-  ble_link_init();
+  // 블루투스는 PC 도우미 연결 또는 키보드 모드 중 하나로 (ble_hid.h)
+  if (ble_hid_mode()) {
+    ble_hid_init();
+  } else {
+    ble_link_init();
+  }
   mem_log("ble");
   cloud_init();
   mem_log("cloud");

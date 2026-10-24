@@ -4,6 +4,7 @@
 #include <WiFi.h>
 
 #include "battery.h"
+#include "ble_hid.h"
 #include "ble_link.h"
 #include "camera.h"
 #include "display.h"
@@ -719,6 +720,9 @@ static void build_wifi(lv_obj_t *parent) {
 static void build_ble(lv_obj_t *parent) {
   lv_obj_t *p = add_sub_page(parent, PAGE_BLE, "블루투스");
   add_link_switch(add_row(p, "블루투스", "끄면 PC가 찾지 못함"), LINK_BLE);
+  // 키보드 모드: 바꾸면 다시 시작한다 (ble_hid.h)
+  add_switch(add_row(p, "키보드 모드", "도우미 없이 리모컨으로 (재시작)"), ble_hid_mode(),
+             [](lv_event_t *e) { ble_hid_set_mode(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED)); });
   lv_label_set_text(add_info(p, "기기 이름"), BLE_NAME);
   ble_status = add_info(p, "상태");
 

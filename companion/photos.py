@@ -231,7 +231,8 @@ class PhotoReceiver:
                 return
             if not found:
                 if locate:
-                    roi = scanner.locate_bytes(data)
+                    fake = os.environ.get("LLMDECK_SCAN_ROI")  # 진단용: 바코드 없이 확대 위치를 시험한다 ("x0,y0,x1,y1")
+                    roi = [int(v) for v in fake.split(",")] if fake else scanner.locate_bytes(data)
                     print(f"[scan] {name}: 자리 {roi}")
                     self.pending_roi = roi or []
                 else:

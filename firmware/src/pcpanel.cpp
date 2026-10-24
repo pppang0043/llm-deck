@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 
+#include "ble_hid.h"
 #include "link.h"
 #include "orcapanel.h"
 
@@ -49,6 +50,15 @@ static const Shortcut DEFAULT_KEYWORDS[] = {
     {"clear", "/clear", "\"/clear\"를", nullptr, KW_SLASH_COLOR},
     {"compact", "/compact", "\"/compact\"을", nullptr, KW_SLASH_COLOR},
 };
+// 리모컨 (블루투스 키보드 모드, ble_hid.h): PC 도우미 없이 발표 슬라이드·영상 등을 다룬다.
+// id 는 아래 remote_send 가 키로 바꾼다
+#define RC_COLOR 0x3A6EA5
+static const Shortcut REMOTE[] = {
+    {"left", "< 이전", "이전을", nullptr, RC_COLOR},      {"right", "다음 >", "다음을", nullptr, RC_COLOR},
+    {"space", "스페이스", "스페이스를", nullptr, RC_COLOR}, {"enter", "Enter", "Enter를", nullptr, RC_COLOR},
+    {"esc", "Esc", "Esc를", nullptr, 0x5B6573},           {"tab", "Tab", "Tab을", nullptr, 0x5B6573},
+    {"vol_down", "소리 -", "소리 줄이기를", nullptr, 0x2E8B5E}, {"vol_up", "소리 +", "소리 키우기를", nullptr, 0x2E8B5E},
+};
 // 글 대신 Tab 을 누르고 Enter: Claude Code 의 추천 문장을 받아서 보낸다
 static const Shortcut TAB_ENTER = {"tab_enter", "Tab + Enter", "Tab + Enter를", nullptr, 0x5B6573};
 // 받은 목록 (NVS 에 이대로 저장한다. 모양을 바꾸면 KW_VERSION 을 올린다)
@@ -81,7 +91,29 @@ static ButtonPage programs = {"프로그램", "사용 중인 PC에서 엽니다"
                               COUNT(PROGRAMS)};
 static ButtonPage keywords = {"키워드", "PC의 커서 자리에 입력하고 Enter", "type", "PC에 %s 입력합니다",
                               KEYWORDS, 0};
-static ButtonPage *const PAGES[] = {&programs, &keywords};
+static ButtonPage remote = {"리모컨", "블루투스 키보드로 (설정 > 블루투스)", "hid", "%s 보냈습니다", REMOTE,
+                            COUNT(REMOTE)};
+static ButtonPage *const PAGES[] = {&programs, &keywords, &remote};
+
+// 리모컨 버튼을 블루투스 키보드 키로 보낸다
+static void remote_send(const Shortcut &s) {
+  if (!ble_hid_mode()) {
+    ui_toast("설정 > 블루투스 에서\n키보드 모드를 켜 주세요", 3000);
+    return;
+  }
+  static const struct {
+    const char *id;
+    uint8_t key;
+    uint16_t media;
+  } MAP[] = {{"left", 0x50, 0}, {"right", 0x4F, 0}, {"space", 0x2C, 0}, {"enter", 0x28, 0},
+             {"esc", 0x29, 0},  {"tab", 0x2B, 0},   {"vol_down", 0, 0xEA}, {"vol_up", 0, 0xE9}};
+  for (const auto &m : MAP) {
+    if (strcmp(m.id, s.id) != 0) continue;
+    bool ok = m.key ? ble_hid_key(m.key) : ble_hid_media(m.media);
+    if (!ok) ui_toast("블루투스 키보드로 연결된 기기가 없습니다\nPC·휴대폰에서 \"LLM Deck Keys\"를 페어링하세요", 4000);
+    return;
+  }
+}
 static lv_obj_t *short_panel, *rail;
 static int selected = 0;
 static bool screen_wide = true;
@@ -131,6 +163,10 @@ static void button_clicked(lv_event_t *e) {
   while (i < page->count && page->btns[i] != btn) i++;
   if (i >= page->count) return;
   const Shortcut &s = page->items[i];
+  if (page == &remote) {
+    remote_send(s);
+    return;
+  }
   if (link_active() == LINK_NONE || link_active() == LINK_CLOUD) {
     ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
     return;

@@ -1416,6 +1416,9 @@ void ui_show(const char *name) {
   } else if (strcmp(name, "keywords") == 0) {
     view = VIEW_SHORTCUTS;
     pcpanel_select_shortcuts(1);
+  } else if (strcmp(name, "remote") == 0) {
+    view = VIEW_SHORTCUTS;
+    pcpanel_select_shortcuts(2);
   } else if (strncmp(name, "usage_", 6) == 0) {
     // 진단용: 사용량 화면의 N 번째 페이지 (0 부터)
     view = VIEW_USAGE;
