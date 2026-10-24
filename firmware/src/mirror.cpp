@@ -34,8 +34,8 @@ static int grab_w, grab_h;
 static volatile bool busy = false;  // 줄이기·보내는 중
 static uint32_t until_ms = 0;
 // 나눠 쓰기: 켜면 기기 LCD 에는 사용량을 따로 보여 주고, PC 창은 원래 화면을 혼자 쓴다.
-// 구독제 화면의 작은 "분리" 버튼으로 켜고 끈다. 껐다 켤 때까지 (미러링이 다시 시작돼도) 그대로 둔다.
-static bool split_on = false;
+// 미러링이 시작될 때마다 켜진 채로 시작하고, 구독제 화면의 작은 "합치기"/"분리" 버튼으로 켜고 끈다.
+static bool split_on = true;
 static uint32_t last_ms = 0;
 static uint32_t frame_no = 0;
 static TaskHandle_t task = nullptr;
@@ -198,6 +198,8 @@ void mirror_keep(bool on) {
   if (!task) return;
   bool changed = on != (until_ms != 0);
   if (changed) Serial.printf("[mirror] %s\n", on ? "on" : "off");
+  // 새로 연결되면 기본은 나눠 쓰기 (기기 LCD 에는 사용량)
+  if (changed && on) split_on = true;
   until_ms = on ? millis() + KEEP_MS : 0;
   display_mirror(on);
   if (!on) {
