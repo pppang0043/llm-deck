@@ -23,6 +23,7 @@ LV_FONT_DECLARE(font_ko_20);
 #define POP_MAX 13  // 키워드 7개 (pcpanel 의 KW_MAX) + 지우기 + 맨 아래 줄 5개
 #define POP_ROWS 3  // 키워드 두 줄 (둘째 줄 끝에 지우기), 맨 아래 줄: 녹음, Tab, Tab + Enter, Enter, Esc
 #define POP_BTN_MIN_W 52  // 버튼이 이보다 좁아지지 않는다. 줄에 다 안 들어가면 그 줄을 옆으로 밀어 본다
+#define POP_FIT_MAX 4     // 버튼이 이만큼 이하인 줄은 밀지 않고 한 화면에 다 넣는다 (넘치면 버튼을 줄인다)
 #define POP_DICTATE_COLOR 0x7A2E2A
 #define POP_DRAG_START 10  // 이만큼 내려야 끌기 (그 전에는 버튼 누르기)
 #define POP_DRAG_CLOSE 40  // 놓을 때 이만큼 내렸으면 닫는다
@@ -590,8 +591,9 @@ static void place_pop() {
   int list_w = pw - 12 - 2;
   lv_obj_set_size(pop_list, list_w, ph - 12 - 2 - 28);
   lv_obj_set_pos(pop_list, 0, 28);
-  // 버튼은 글자가 다 보이는 폭 (POP_BTN_MIN_W 보다 좁지 않게). 줄이 남으면 남는 폭을 나눠 줄 끝까지 늘리고,
-  // 넘치면 그대로 두어 그 줄만 옆으로 밀어 본다
+  // 버튼은 글자가 다 보이는 폭 (POP_BTN_MIN_W 보다 좁지 않게). 줄이 남으면 남는 폭을 나눠 줄 끝까지 늘린다.
+  // 넘치면 버튼이 POP_FIT_MAX 개 이하인 줄은 글자 폭에 비례해 줄여 한 화면에 넣고 (긴 이름은 끝이 ...),
+  // 그보다 많은 줄은 그대로 두어 그 줄만 옆으로 밀어 본다
   for (lv_obj_t *r : pop_rows) {
     int n = lv_obj_get_child_cnt(r);
     if (n == 0) {
@@ -608,11 +610,21 @@ static void place_pop() {
       want[k] = LV_MAX(lv_txt_get_width(text, strlen(text), &font_ko_14, 0, LV_TEXT_FLAG_NONE) + 16, POP_BTN_MIN_W);
       total += want[k];
     }
+    if (!pop_open) lv_obj_scroll_to_x(r, 0, LV_ANIM_OFF);  // 다시 열면 줄 처음부터
+    if (total > list_w && n <= POP_FIT_MAX) {
+      int gaps = (n - 1) * 4, sum = total - gaps, room = list_w - gaps, acc = 0, used = 0;
+      for (int k = 0; k < n; k++) {
+        acc += want[k];
+        int end = acc * room / sum;  // 앞에서부터 쌓아 나눠서 반올림 오차 없이 줄 끝에 딱 맞춘다
+        lv_obj_set_size(lv_obj_get_child(r, k), end - used, POP_BTN_H);
+        used = end;
+      }
+      continue;
+    }
     int extra = total < list_w ? list_w - total : 0;
     for (int k = 0; k < n; k++) {
       lv_obj_set_size(lv_obj_get_child(r, k), want[k] + extra / n + (k < extra % n), POP_BTN_H);
     }
-    if (!pop_open) lv_obj_scroll_to_x(r, 0, LV_ANIM_OFF);  // 다시 열면 줄 처음부터
   }
   if (pop_open) {
     lv_obj_clear_flag(pop, LV_OBJ_FLAG_HIDDEN);
