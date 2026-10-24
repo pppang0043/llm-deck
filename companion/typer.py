@@ -9,6 +9,8 @@
 결과는 기기 화면에 짧은 알림으로 보낸다 (pending_toast).
 """
 
+import re
+import subprocess
 import sys
 import time
 
@@ -215,6 +217,40 @@ def _mac_trusted(cg, cf) -> bool:
     return False
 
 
+OWN_BUNDLE = "com.llmdeck.companion"  # 이 도우미의 Mac 앱 (미러링 창)
+
+
+def _bundle(asn: str) -> str:
+    out = subprocess.run(["lsappinfo", "info", "-only", "bundleid", asn], capture_output=True, text=True, timeout=3).stdout
+    match = re.search(r'="(.*)"', out)
+    return match.group(1) if match else ""
+
+
+def _leave_own_window() -> None:
+    """앞 앱이 LLM Deck 이면 (미러링 창을 눌러 받아쓰기·키워드를 시작했다) 바로 뒤에 있던 앱을 앞으로 되돌린다.
+    그러지 않으면 글이 원래 쓰던 창이 아니라 미러링 창으로 간다. 앞 앱 순서는 lsappinfo 가 앞에서부터 알려 준다."""
+    try:
+        out = subprocess.run(["lsappinfo", "visibleProcessList"], capture_output=True, text=True, timeout=3).stdout
+        apps = re.findall(r"ASN:0x[0-9a-f]+-0x[0-9a-f]+", out)
+        if len(apps) < 2 or _bundle(apps[0]) != OWN_BUNDLE:
+            return
+        target = next((b for b in map(_bundle, apps[1:]) if b and b != OWN_BUNDLE), "")
+        if not target:
+            return
+        subprocess.run(["open", "-b", target], capture_output=True, timeout=5)
+        # 그 앱이 앞으로 와서 커서를 받을 때까지 (1.5초까지) 기다린다
+        until = time.monotonic() + 1.5
+        while time.monotonic() < until:
+            front = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=3).stdout.strip()
+            if front and _bundle(front.rstrip(":")) == target:
+                time.sleep(0.15)
+                break
+            time.sleep(0.05)
+        print(f"[type] 미러링 창이 앞에 있어 {target} 로 돌아가 입력합니다")
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"[type] 앞에 있던 앱으로 돌아가지 못했습니다: {e}")
+
+
 def _type_mac(text: str, enter: bool = True, tab: bool = False) -> str | None:
     """키보드 입력을 직접 만들어 보낸다 (CoreGraphics). 글자는 유니코드로 넣어 한/영 상태와 상관없고 클립보드도 쓰지 않는다.
 
@@ -227,6 +263,7 @@ def _type_mac(text: str, enter: bool = True, tab: bool = False) -> str | None:
     cf = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
     if not _mac_trusted(cg, cf):
         return "손쉬운 사용 권한이 필요합니다\n시스템 설정 > 개인정보 보호 및 보안\n> 손쉬운 사용에서 LLM Deck 켜기"
+    _leave_own_window()
 
     cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
     cg.CGEventCreateKeyboardEvent.argtypes = (ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool)

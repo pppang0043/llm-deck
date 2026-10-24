@@ -106,3 +106,41 @@ def test_limits_and_long_text(restore):
 ])
 def test_particle(word, josa):
     assert typer.particle(word) == josa
+
+
+class _FakeLsappinfo:
+    """lsappinfo / open 흉내. order 는 앞에서부터의 앱 (bundle id)."""
+
+    def __init__(self, order):
+        self.order, self.opened = list(order), []
+
+    def __call__(self, args, **kw):
+        import subprocess
+
+        out = ""
+        if args[:2] == ["lsappinfo", "visibleProcessList"]:
+            out = " ".join(f'ASN:0x0-0x{i + 1:x}-"app{i}":' for i in range(len(self.order)))
+        elif args[:2] == ["lsappinfo", "front"]:
+            out = "ASN:0x0-0x1:"
+        elif args[:2] == ["lsappinfo", "info"]:
+            index = int(args[-1].rsplit("0x", 1)[1], 16) - 1
+            out = f'"CFBundleIdentifier"="{self.order[index]}"'
+        elif args[:2] == ["open", "-b"]:
+            self.opened.append(args[2])
+            self.order.remove(args[2])
+            self.order.insert(0, args[2])
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+
+def test_mirror_window_in_front_returns_to_previous_app(monkeypatch):
+    fake = _FakeLsappinfo([typer.OWN_BUNDLE, "com.stablyai.orca", "com.apple.finder"])
+    monkeypatch.setattr(typer.subprocess, "run", fake)
+    typer._leave_own_window()
+    assert fake.opened == ["com.stablyai.orca"]
+
+
+def test_other_app_in_front_is_left_alone(monkeypatch):
+    fake = _FakeLsappinfo(["com.stablyai.orca", typer.OWN_BUNDLE])
+    monkeypatch.setattr(typer.subprocess, "run", fake)
+    typer._leave_own_window()
+    assert fake.opened == []
