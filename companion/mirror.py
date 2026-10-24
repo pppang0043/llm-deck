@@ -29,6 +29,10 @@ VIEWER_SECONDS = 3
 # 이보다 오래 끊겼다가 다시 붙으면 새로 연결한 것으로 보고 미러링 창을 띄운다 (잠깐 끊겼다 붙은 것은 그대로 둔다)
 REJOIN_SECONDS = 60
 KEEP_SECONDS = 2
+# 화면이 그대로여도 상태줄 시계가 1분마다 바뀌어 한 장은 오고, USB 면 배터리 기록도 1분마다 온다.
+# 미러링 중 이만큼 기기에서 아무것도 오지 않으면 기기가 멈춘 것으로 보고 창에 알린다
+# (펌웨어 올리기가 중간에 끊겨 기기가 반쯤 써진 채 멈췄을 때 창이 마지막 화면 그대로 먹통처럼 보였다)
+SILENT_SECONDS = 75
 
 PAGE = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><title>LLM Deck 미러링</title>
@@ -170,6 +174,7 @@ class Mirror:
         self.last_poll = 0.0
         self.app_poll = 0.0  # 브라우저가 아닌 미러링 앱 창이 마지막으로 화면을 받아 간 시각
         self.sent_on = 0.0  # 마지막으로 {"mirror": true} 를 보낸 시각 (0 = 꺼짐)
+        self.alive_at = 0.0  # 미러링을 켠 시각이나 마지막으로 화면을 받은 시각
         self._buf = None
         self._no = -1
         self._got = 0
@@ -232,6 +237,7 @@ class Mirror:
             with self.cond:
                 self.frame, self.size = bytes(self._buf), (w, h)
                 self.seq += 1
+                self.alive_at = time.time()
                 self.cond.notify_all()
             self._buf = None
 
@@ -245,12 +251,22 @@ class Mirror:
         """메인 루프가 0.5초마다 묻는다: 기기에 보낼 미러링 켜기·끄기"""
         if self.watching():
             if time.time() - self.sent_on >= KEEP_SECONDS:
+                if not self.sent_on:
+                    self.alive_at = time.time()
                 self.sent_on = time.time()
                 return {"mirror": True}
         elif self.sent_on:
             self.sent_on = 0.0
             return {"mirror": False}
         return None
+
+    def silent(self) -> bool:
+        """미러링 중인데 기기에서 화면도 (USB 면) 다른 것도 오래 오지 않는다"""
+        if not self.sent_on:
+            return False
+        transport = self._link()
+        heard = max(self.alive_at, getattr(transport, "last_rx", 0.0))
+        return time.time() - heard > SILENT_SECONDS
 
     def _link(self):
         """미러링에 쓸 연결 (블루투스는 너무 느려서 쓰지 않는다)"""
@@ -323,6 +339,10 @@ class Mirror:
                     mirror.cond.wait_for(lambda: mirror.seq != after and mirror.frame, timeout=1.5)
                     frame, (w, h), seq = mirror.frame, mirror.size, mirror.seq
                 if seq == after or not frame:
+                    if mirror.silent():
+                        self._reply(503, ("기기가 응답하지 않습니다. 기기가 멈췄거나 펌웨어 올리기가 중간에 끊겼을 수 있습니다. "
+                                          "기기를 다시 켜거나 펌웨어를 다시 올리세요.").encode(), "text/plain; charset=utf-8")
+                        return
                     self._reply(204, b"", "text/plain")
                     return
                 self._reply(200, frame, "application/octet-stream", {"X-Seq": str(seq), "X-Width": str(w), "X-Height": str(h)})

@@ -66,3 +66,22 @@ def test_ble_close_frees_event_loop():
     t.close()
     assert t.loop.is_closed()
     assert not t._thread.is_alive()
+
+
+def test_usb_stays_off_the_port_while_flashing(tmp_path, monkeypatch):
+    # 올리기 도구와 같이 포트를 읽으면 올리기가 중간에 끊겨 기기가 반쯤 써진 채 멈춘다
+    from transports import usb
+
+    flag = tmp_path / "flashing"
+    monkeypatch.setattr(usb, "FLASHING_FILE", flag)
+    assert not usb.flashing()
+    flag.touch()
+    assert usb.flashing()
+    opened = []
+    monkeypatch.setattr(usb, "find_port", lambda fixed="": opened.append(1) or ("/dev/x", "AA"))
+    assert not usb.UsbTransport({}, lambda seq, pcm: None).open()
+    assert opened == []
+    old = usb.time.time() - usb.FLASHING_MAX_SECONDS - 1
+    import os
+    os.utime(flag, (old, old))  # 올리기가 죽어 남은 표시
+    assert not usb.flashing()

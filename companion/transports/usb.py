@@ -26,6 +26,17 @@ SILENT_SECONDS = 150
 # 다시 켜도 안 살아나면 되풀이하지 않게, 다시 켜는 것은 이 간격에 한 번까지
 RESET_GAP_SECONDS = 600
 _last_reset = 0.0
+# 펌웨어를 올리는 동안 (firmware/flash.sh 가 만들고 지운다) 포트를 열지 않는다. 올리기 도구와 같이 읽으면
+# 올리기가 중간에 끊겨 기기가 반쯤 써진 채 멈춘다. 올리기가 죽어 남은 표시는 이 시간이 지나면 무시한다.
+FLASHING_FILE = Path.home() / ".llm-deck" / "flashing"
+FLASHING_MAX_SECONDS = 600
+
+
+def flashing() -> bool:
+    try:
+        return time.time() - FLASHING_FILE.stat().st_mtime < FLASHING_MAX_SECONDS
+    except OSError:
+        return False
 
 
 def _known_serial() -> str:
@@ -87,6 +98,8 @@ class UsbTransport:
         return found[0] if found else None
 
     def open(self) -> bool:
+        if flashing():
+            return False
         found = find_port(self.port_name)
         if not found:
             return False
@@ -94,7 +107,9 @@ class UsbTransport:
         try:
             # DTR/RTS 신호는 기본값(켜짐)으로 둔다. 끄고 열면 보드가 재시작된다.
             # 기기가 멈춰 받아 가지 않으면 쓰기가 끝없이 기다리므로 5초에서 끊고 다시 연결한다
-            ser = serial.Serial(port, 115200, timeout=0.5, write_timeout=5)
+            # 혼자 쓴다 (exclusive): 올리기 도구(esptool)도 그렇게 열므로, 올리는 중이면 여기서 열리지 않고
+            # 도우미가 쓰는 중이면 올리기가 쓰기 전에 실패한다 (둘이 같이 읽어 올리기가 중간에 끊기지 않게)
+            ser = serial.Serial(port, 115200, timeout=0.5, write_timeout=5, exclusive=True)
         except serial.SerialException:
             return False
         self.ser = ser
@@ -126,6 +141,10 @@ class UsbTransport:
         # 케이블을 뽑으면 읽는 쪽이 오류로 끝나며 포트가 닫히거나, 포트 자체가 사라진다
         if not self.ser or not self.ser.is_open:
             return False
+        if flashing():
+            print("[USB] 펌웨어를 올리는 중이라 포트를 놓아줍니다.")
+            self.close()
+            return False
         if self._silent():
             self._reset_device()
             return False
@@ -147,6 +166,7 @@ class UsbTransport:
             ser = serial.Serial()
             ser.port, ser.baudrate = port, 115200
             ser.dtr = ser.rts = False  # 열 때 신호가 바뀌지 않게 먼저 정한다
+            ser.exclusive = True
             ser.open()
             ser.rts = True
             time.sleep(0.1)
