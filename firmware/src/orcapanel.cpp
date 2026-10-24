@@ -20,7 +20,11 @@ LV_FONT_DECLARE(font_ko_20);
 #define GAP 6
 // 세션을 띄우면 아래에서 세션 버튼 위에 겹쳐 뜨는 단축키 팝업 (버튼을 여러 칸으로)
 #define POP_BTN_H 32
-#define POP_MAX 10
+#define POP_MAX 11  // 키워드 7개 (pcpanel 의 KW_MAX) + 맨 아래 줄 4개
+#define POP_KEYS 4  // 맨 아래 줄: 받아쓰기, Tab, Tab + Enter, Enter
+#define POP_DICTATE_COLOR 0x7A2E2A
+#define POP_DRAG_START 10  // 이만큼 내려야 끌기 (그 전에는 버튼 누르기)
+#define POP_DRAG_CLOSE 40  // 놓을 때 이만큼 내렸으면 닫는다
 #define KEEP_ORDER_MS 15000  // 누른 뒤 이만큼은 순서를 바꾸지 않는다 (누르려던 자리에 다른 세션이 오지 않게)
 #define ALERT_QUIET_MS 60000  // 한 세션의 같은 알림은 이만큼 안에 다시 내지 않는다 (상태가 오락가락할 때)
 
@@ -52,6 +56,7 @@ static int cols = 3, rows = 2;
 // 오른쪽 팝업: 띄운 세션(active_id)에 보낼 키워드와 키. 닫으면 다음에 세션을 띄울 때 다시 뜬다.
 static lv_obj_t *pop, *pop_title, *pop_list;
 static lv_obj_t *pop_btns[POP_MAX];
+static lv_obj_t *pop_dictate;  // 받아쓰기 버튼 (받아쓰는 중이면 빨갛게, 글자가 바뀐다)
 static int pop_count = 0;
 static bool pop_open = false;
 static int area_w, area_h;  // 마지막 배치 (팝업 자리를 정한다)
@@ -109,6 +114,23 @@ static bool is_waiting(const char *state) {
   return strcmp(state, "waiting") == 0 || strcmp(state, "awaiting-input") == 0 || strcmp(state, "done") == 0;
 }
 
+// 받아쓰기: 그 세션에 받아 적기 시작, 받아쓰는 중이면 끝내고 넣는다 (세션 버튼을 다시 누르기, 팝업의 받아쓰기 버튼)
+static void dictate(const char *id) {
+  if (askpanel_dictating()) {
+    if (strcmp(askpanel_dictate_target(), id) == 0) {
+      askpanel_release();
+    } else {
+      ui_toast("받아쓰기 중입니다\n빨간 버튼을 눌러 끝내 주세요", 2500);
+    }
+    return;
+  }
+  if (askpanel_dictate_step() == DICTATE_WRITING) {
+    ui_toast("앞의 받아쓰기를 넣는 중입니다", 2000);
+    return;
+  }
+  if (askpanel_press_orca(id)) orcapanel_refresh();
+}
+
 // 처음 누르면 그 세션을 ORCA 에서 앞으로 띄우기만 한다. 띄운 세션을 다시 누르면 받아쓰기, 또 누르면 넣는다.
 static void btn_event(lv_event_t *e) {
   int i = (intptr_t)lv_obj_get_user_data(lv_event_get_current_target(e));
@@ -134,20 +156,7 @@ static void btn_event(lv_event_t *e) {
     orcapanel_refresh();
     return;
   }
-  if (askpanel_dictating()) {
-    // 같은 세션을 다시 누르면 끝내고 그 세션에 넣는다
-    if (strcmp(askpanel_dictate_target(), s.id) == 0) {
-      askpanel_release();
-    } else {
-      ui_toast("받아쓰기 중입니다\n빨간 버튼을 눌러 끝내 주세요", 2500);
-    }
-    return;
-  }
-  if (askpanel_dictate_step() == DICTATE_WRITING) {
-    ui_toast("앞의 받아쓰기를 넣는 중입니다", 2000);
-    return;
-  }
-  if (askpanel_press_orca(s.id)) orcapanel_refresh();
+  dictate(s.id);
 }
 
 // 길게 누르면 빠른 답 창 (누르기는 그대로: 띄우기, 받아쓰기)
@@ -294,6 +303,15 @@ void orcapanel_refresh() {
   while (active < count && strcmp(sessions[active].id, active_id) != 0) active++;
   if (pop_open && (problem || active == count)) set_pop(false);
   if (pop_open) lv_label_set_text(pop_title, sessions[active].title);
+  if (pop_open && pop_dictate) {
+    bool mine = strcmp(askpanel_dictate_target(), active_id) == 0;
+    int step = askpanel_dictate_step();
+    lv_label_set_text(lv_obj_get_child(pop_dictate, 0), !mine || step == DICTATE_IDLE ? "받아쓰기"
+                                                        : !askpanel_dictating()     ? "넣는 중..."
+                                                        : step == DICTATE_PREPARING ? "준비 중..."
+                                                                                    : "입력");
+    lv_obj_set_style_bg_color(pop_dictate, askpanel_dictating() && mine ? COLOR_TALKING : lv_color_hex(POP_DICTATE_COLOR), 0);
+  }
   // 빠른 답 창: 세션이 사라졌거나 더는 그 답을 받을 상태가 아니면 닫는다
   if (qr_id[0]) {
     int q = 0;
@@ -351,21 +369,93 @@ void orcapanel_refresh() {
   }
 }
 
+// 닫으면 띄운 세션도 잊는다: 다시 누르면 받아쓰기가 아니라 다시 띄우고 팝업을 연다
+static void close_pop() {
+  active_id[0] = 0;
+  set_pop(false);
+  orcapanel_refresh();
+}
+
+// 아래로 끌어 닫기: 팝업이 손가락을 따라 내려가고, 놓을 때 POP_DRAG_CLOSE 보다 내렸으면 마저 내려가며 닫힌다.
+// 빠르기가 아니라 끈 거리로 정해서 미러링 창에서 마우스로 천천히 끌어도 된다 (LVGL 밀기 제스처는 빨라야 잡힌다).
+static int drag_y0 = 0, drag_dy = 0;
+static bool dragged = false;  // 이번 누르기가 끌기였다: 손을 뗄 때 오는 버튼 CLICKED 는 무시한다
+
+static void pop_translate(void *obj, int32_t v) {
+  lv_obj_set_style_translate_y((lv_obj_t *)obj, v, 0);
+}
+
+static void pop_slide(int to, lv_anim_ready_cb_t done) {
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, pop);
+  lv_anim_set_exec_cb(&a, pop_translate);
+  lv_anim_set_values(&a, lv_obj_get_style_translate_y(pop, 0), to);
+  lv_anim_set_time(&a, 150);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  if (done) lv_anim_set_ready_cb(&a, done);
+  lv_anim_start(&a);
+}
+
+static void pop_drag(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_indev_t *indev = lv_indev_get_act();
+  if (!indev) return;
+  lv_point_t p;
+  lv_indev_get_point(indev, &p);
+  if (code == LV_EVENT_PRESSED) {
+    lv_anim_del(pop, pop_translate);
+    drag_y0 = p.y, drag_dy = 0;
+    dragged = false;
+    return;
+  }
+  int dy = LV_MAX(p.y - drag_y0, 0);
+  if (code == LV_EVENT_PRESSING) {
+    if (!dragged && dy < POP_DRAG_START) return;  // 누르다 조금 흔들린 것은 그냥 누르기
+    if (!dragged) lv_obj_clear_state(lv_event_get_target(e), LV_STATE_PRESSED);  // 끌기가 되면 버튼 눌림 표시를 뗀다
+    dragged = true;
+    drag_dy = dy;
+    lv_obj_set_style_translate_y(pop, dy, 0);
+    return;
+  }
+  // 놓음 (RELEASED / PRESS_LOST)
+  if (!dragged) return;
+  if (drag_dy >= POP_DRAG_CLOSE) {
+    pop_slide(lv_obj_get_height(pop) + 8, [](lv_anim_t *a) { close_pop(); });
+  } else {
+    pop_slide(0, nullptr);
+  }
+}
+
+static void add_pop_drag(lv_obj_t *obj) {
+  lv_obj_add_event_cb(obj, pop_drag, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(obj, pop_drag, LV_EVENT_PRESSING, NULL);
+  lv_obj_add_event_cb(obj, pop_drag, LV_EVENT_RELEASED, NULL);
+  lv_obj_add_event_cb(obj, pop_drag, LV_EVENT_PRESS_LOST, NULL);
+}
+
 // 팝업 버튼: 띄운 세션에만 보낸다 (PC 의 앞 창이 아니라 ORCA 로, companion/orca.py)
 static void pop_event(lv_event_t *e) {
   const char *key = (const char *)lv_event_get_user_data(e);
+  if (dragged) return;  // 끌어서 닫는 중이었다
   if (!pc_connected()) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
   touched_at = lv_tick_get();
+  if (strcmp(key, "dictate") == 0) {
+    dictate(active_id);  // 팝업은 그대로: 받아 적은 글이 들어가면 이어서 Enter 를 누른다
+    return;
+  }
   char json[96];
   snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"%s\"}", active_id, key);
   link_send_event(json);
+  // Tab 만 빼면 모두 끝에 Enter 를 친다 (companion/orca.py 의 KEYS, 키워드): 보냈으니 닫는다
+  if (strcmp(key, "tab") != 0) close_pop();
 }
 
-static void add_pop_btn(const char *key, const char *name, uint32_t color) {
-  if (pop_count >= POP_MAX) return;
+static lv_obj_t *add_pop_btn(const char *key, const char *name, uint32_t color) {
+  if (pop_count >= POP_MAX) return nullptr;
   lv_obj_t *b = lv_btn_create(pop_list);
   pop_btns[pop_count++] = b;
   lv_obj_set_style_radius(b, 8, 0);
@@ -373,11 +463,13 @@ static void add_pop_btn(const char *key, const char *name, uint32_t color) {
   lv_obj_set_style_pad_all(b, 2, 0);
   lv_obj_set_style_bg_color(b, lv_color_hex(color), 0);
   lv_obj_add_event_cb(b, pop_event, LV_EVENT_CLICKED, (void *)key);
+  add_pop_drag(b);
   lv_obj_t *lbl = add_label(b, name, &font_ko_14, lv_color_white());
   lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);  // 한 줄로, 넘치면 ...
   lv_obj_set_size(lbl, LV_PCT(100), lv_font_get_line_height(&font_ko_14));
   lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(lbl);
+  return b;
 }
 
 // 키워드 버튼 (PC 가 보낸 목록이면 그 이름), 그 아래 키
@@ -387,6 +479,7 @@ static void fill_pop() {
   for (int i = 0; pcpanel_keyword(i, &id, &name, &color); i++) {
     if (strcmp(id, "tab_enter") != 0) add_pop_btn(id, name, color);  // 아래 키 버튼과 겹친다
   }
+  pop_dictate = add_pop_btn("dictate", "받아쓰기", POP_DICTATE_COLOR);
   add_pop_btn("tab", "Tab", 0x3A4350);
   add_pop_btn("tab_enter", "Tab + Enter", 0x5B6573);
   add_pop_btn("enter", "Enter", 0x3A4350);
@@ -408,25 +501,13 @@ static void build_pop() {
   lv_obj_set_style_shadow_color(pop, lv_color_black(), 0);
   lv_obj_set_style_shadow_opa(pop, LV_OPA_80, 0);
   lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLL_CHAIN);  // 팝업 위에서 끌면 뒤의 화면이 아니라 아래 밀기가 된다
   lv_obj_add_flag(pop, LV_OBJ_FLAG_HIDDEN);
-  // 맨 위: 보낼 세션 이름과 닫기
+  add_pop_drag(pop);  // 팝업 어디서든(버튼 위 포함) 아래로 끌면 닫는다
+  // 맨 위: 보낼 세션 이름
   pop_title = add_label(pop, "", &font_ko_14, COLOR_ACCENT);
   lv_label_set_long_mode(pop_title, LV_LABEL_LONG_DOT);
   lv_obj_align(pop_title, LV_ALIGN_TOP_LEFT, 0, 2);
-  lv_obj_t *close = lv_btn_create(pop);
-  lv_obj_set_size(close, 24, 22);
-  lv_obj_set_style_bg_opa(close, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_shadow_width(close, 0, 0);
-  lv_obj_set_style_pad_all(close, 0, 0);
-  lv_obj_set_ext_click_area(close, 8);
-  lv_obj_align(close, LV_ALIGN_TOP_RIGHT, 0, 0);
-  // 닫으면 띄운 세션도 잊는다: 다시 누르면 받아쓰기가 아니라 다시 띄우고 팝업을 연다
-  lv_obj_add_event_cb(close, [](lv_event_t *e) {
-    active_id[0] = 0;
-    set_pop(false);
-    orcapanel_refresh();
-  }, LV_EVENT_CLICKED, NULL);
-  lv_obj_center(add_label(close, LV_SYMBOL_CLOSE, &lv_font_montserrat_14, COLOR_DIM));
   // 단축키 화면의 키워드 (단축키 설정과 같은 목록), 그 아래 키
   pop_list = lv_obj_create(pop);
   lv_obj_remove_style_all(pop_list);
@@ -434,6 +515,7 @@ static void build_pop() {
   lv_obj_set_style_pad_row(pop_list, 4, 0);
   lv_obj_set_style_pad_column(pop_list, 4, 0);
   lv_obj_clear_flag(pop_list, LV_OBJ_FLAG_SCROLLABLE);
+  add_pop_drag(pop_list);  // 버튼 사이 틈
   fill_pop();
 }
 
@@ -447,21 +529,23 @@ void orcapanel_keywords_changed() {
 
 // 세션 버튼은 그대로 두고 그 위에 겹친다
 static void place_pop() {
-  int cols = area_w > 280 ? 4 : 3;
-  int rows = (pop_count + cols - 1) / cols;
+  // 3줄: 키워드를 두 줄로 나누고 (윗줄이 하나 더 많게), 맨 아래는 받아쓰기 / Tab / Tab + Enter / Enter (fill_pop 의 끝 4개)
+  int kw = pop_count - POP_KEYS;
+  int row_n[3] = {(kw + 1) / 2, kw / 2, POP_KEYS};
+  int rows = 0;
+  for (int n : row_n) rows += n > 0;
   int pw = area_w - 8;
   int ph = 12 + 28 + rows * POP_BTN_H + (rows - 1) * 4 + 2;
   lv_obj_set_pos(pop, 4, area_h - ph - 4);
   lv_obj_set_size(pop, pw, ph);
-  lv_obj_set_width(pop_title, pw - 12 - 26);
+  lv_obj_set_width(pop_title, pw - 12);
   int list_w = pw - 12 - 2;
   lv_obj_set_size(pop_list, list_w, ph - 12 - 2 - 28);
   lv_obj_set_pos(pop_list, 0, 28);
-  // 덜 찬 줄(Tab 줄)의 버튼은 줄 끝까지 늘린다
-  int last = pop_count - (pop_count - 1) / cols * cols;  // 마지막 줄의 버튼 수
-  for (int i = 0; i < pop_count; i++) {
-    int n = i >= pop_count - last ? last : cols;
-    lv_obj_set_size(pop_btns[i], (list_w - (n - 1) * 4) / n, POP_BTN_H);
+  // 줄마다 버튼을 줄 끝까지 늘린다 (한 줄이 꽉 차서 다음 버튼은 저절로 다음 줄로 간다)
+  int i = 0;
+  for (int n : row_n) {
+    for (int k = 0; k < n; k++) lv_obj_set_size(pop_btns[i++], (list_w - (n - 1) * 4) / n, POP_BTN_H);
   }
   if (pop_open) {
     lv_obj_clear_flag(pop, LV_OBJ_FLAG_HIDDEN);
@@ -498,6 +582,9 @@ static void reveal_active() {
 static void set_pop(bool open) {
   if (open != pop_open) {
     pop_open = open;
+    // 끌던 중이나 닫히며 내려간 자리에서 다시 열리지 않게
+    lv_anim_del(pop, pop_translate);
+    lv_obj_set_style_translate_y(pop, 0, 0);
     place_pop();
   }
   reveal_active();
