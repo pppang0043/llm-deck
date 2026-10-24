@@ -21,7 +21,7 @@ LV_FONT_DECLARE(font_ko_20);
 // 세션을 띄우면 아래에서 세션 버튼 위에 겹쳐 뜨는 단축키 팝업 (버튼을 여러 칸으로)
 #define POP_BTN_H 32
 #define POP_MAX 13  // 키워드 7개 (pcpanel 의 KW_MAX) + 지우기 + 맨 아래 줄 5개
-#define POP_ROWS 3  // 키워드 두 줄 (둘째 줄 끝에 지우기), 맨 아래 줄: 녹음, Esc, Tab, Tab + Enter, Enter
+#define POP_ROWS 3  // 키워드 두 줄 (둘째 줄 끝에 지우기), 맨 아래 줄: 녹음, Tab, Tab + Enter, Enter, Esc
 #define POP_BTN_MIN_W 52  // 버튼이 이보다 좁아지지 않는다. 줄에 다 안 들어가면 그 줄을 옆으로 밀어 본다
 #define POP_DICTATE_COLOR 0x7A2E2A
 #define POP_DRAG_START 10  // 이만큼 내려야 끌기 (그 전에는 버튼 누르기)
@@ -484,7 +484,7 @@ static void pop_event(lv_event_t *e) {
   snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"%s\"}", active_id, key);
   link_send_event(json);
   // Tab, 지우기, Esc 만 빼면 모두 끝에 Enter 를 친다 (companion/orca.py 의 KEYS, 키워드): 보냈으니 닫는다
-  if (strcmp(key, "tab") != 0 && strcmp(key, "clear") != 0 && strcmp(key, "esc") != 0) close_pop();
+  if (strcmp(key, "tab") != 0 && strcmp(key, "erase") != 0 && strcmp(key, "esc") != 0) close_pop();
 }
 
 static lv_obj_t *add_pop_btn(int row, const char *key, const char *name, uint32_t color) {
@@ -518,12 +518,12 @@ static void fill_pop() {
     add_pop_btn(n++ < (kw + 1) / 2 ? 0 : 1, id, name, color);
   }
   // 입력칸에 쓴 글을 지운다 (Ctrl+U). / 명령이 아니지만 옆의 /clear 들과 같은 모양으로 (pcpanel 의 KW_SLASH_COLOR)
-  add_pop_btn(1, "clear", "/지우기", 0x16808C);
+  add_pop_btn(1, "erase", "/지우기", 0x16808C);
   pop_dictate = add_pop_btn(2, "dictate", "녹음", POP_DICTATE_COLOR);
-  add_pop_btn(2, "esc", "Esc", 0x3A4350);
   add_pop_btn(2, "tab", "Tab", 0x3A4350);
   add_pop_btn(2, "tab_enter", "Tab + Enter", 0x5B6573);
   add_pop_btn(2, "enter", "Enter", 0x3A4350);
+  add_pop_btn(2, "esc", "Esc", 0x3A4350);
 }
 
 static void place_pop();
@@ -579,7 +579,7 @@ void orcapanel_keywords_changed() {
 
 // 세션 버튼은 그대로 두고 그 위에 겹친다
 static void place_pop() {
-  // 3줄: 키워드 두 줄 (둘째 줄 끝에 지우기), 맨 아래는 녹음 / Esc / Tab / Tab + Enter / Enter (fill_pop)
+  // 3줄: 키워드 두 줄 (둘째 줄 끝에 지우기), 맨 아래는 녹음 / Tab / Tab + Enter / Enter / Esc (fill_pop)
   int rows = 0;
   for (lv_obj_t *r : pop_rows) rows += lv_obj_get_child_cnt(r) > 0;
   int pw = area_w - 8;

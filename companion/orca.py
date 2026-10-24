@@ -36,7 +36,8 @@ BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
 # 지우기는 Ctrl+E (줄 끝으로) 뒤 Ctrl+U (줄 처음까지 지우기): 입력칸이 비어 있어도, Claude 가 일하는 중이어도 아무 일 없다.
 # Esc 두 번 / Ctrl+C 도 입력칸을 비우지만, 빈 칸이면 되감기(/rewind) 창을 열거나 일하는 Claude 를 멈추므로 쓰지 않는다.
 KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": ("Tab + Enter", "\t", True),
-        "clear": ("지우기", "\x05\x15", False),
+        # 이름이 "clear" 면 /clear 키워드(typer.KEYWORDS)와 겹쳐 /clear 를 눌러도 지우기가 됐다
+        "erase": ("지우기", "\x05\x15", False),
         # Esc 한 번: 일하는 Claude 를 멈추거나 열린 고르기 창을 닫는다 (사용자가 Esc 버튼을 직접 누를 때만)
         "esc": ("Esc", "\x1b", False)}
 # 빠른 답 (이름 -> 알림에 쓰는 이름, 보낼 글, 끝에 Enter, 보내도 되는 상태). 기기는 이름만 보낸다.

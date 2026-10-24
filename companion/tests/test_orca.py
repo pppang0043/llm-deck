@@ -78,8 +78,12 @@ def test_send_key_keyword_and_unknown(o):
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\t"),
                            ("terminal", "send", "--terminal", "term_abc", "--enter")]
     o.sent_cmds.clear()
-    o.send_key("abc", "clear")  # 입력칸 비우기: Enter 는 치지 않는다
+    o.send_key("abc", "erase")  # 입력칸 비우기: Enter 는 치지 않는다
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\x05\x15")]
+    o.sent_cmds.clear()
+    o.send_key("abc", "clear")  # /clear 키워드는 지우기와 다르다: /clear 를 치고 Enter
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/clear"),
+                           ("terminal", "send", "--terminal", "term_abc", "--enter")]
 
 
 def test_session_order_follows_orca_screen(o, monkeypatch):
