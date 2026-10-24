@@ -814,7 +814,7 @@ static void build_battery(lv_obj_t *parent) {
   bat_state = add_info(p, "전원");
   bat_left = add_info(p, "남은 시간");
   dim_sw = add_switch(add_row(p, "배터리 절약", "1분 어둡게, 3분 끄기"), auto_dim, dim_changed);
-  add_note(p, "배터리 절약은 배터리로만 쓸 때 동작합니다. 잔량은 전압으로 짐작하며, 충전이 끝난 채 USB에 20분 꽂혀 있으면 스스로 보정합니다.");
+  add_note(p, "배터리 절약은 배터리로만 쓸 때 동작합니다. 잔량은 전압으로 짐작하며, 충전이 끝난 채 USB에 20분 꽂혀 있으면 스스로 보정합니다. 배터리로 쓸 때는 잔량이 줄기만 하고, 충전 중에는 늘기만 합니다.");
 }
 
 static void build_camera(lv_obj_t *parent) {
