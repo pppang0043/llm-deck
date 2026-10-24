@@ -117,7 +117,12 @@ bool askpanel_release() {
   if (!talking) return false;
   link_send_event(voice && !dictating ? "{\"ask\":\"stop\",\"voice\":true}" : "{\"ask\":\"stop\"}");
   talking = false;
-  if (dictating) dictate_step = DICTATE_WRITING;
+  if (dictating) {
+    dictate_step = DICTATE_WRITING;
+  } else {
+    // PC 가 앞 녹음을 처리하는 중이면 그 상태가 먼저 온다 (이 녹음은 줄을 서서 기다린다)
+    lv_label_set_text(state_lbl, "받아 적는 중...");
+  }
   askpanel_refresh();
   return true;
 }
@@ -283,11 +288,17 @@ void askpanel_set(JsonObjectConst ask) {
     ui_refresh_talk();
     return;
   }
-  busy_ms = (ask["done"] | false) ? 0 : millis();
+  int queued = ask["queued"] | 0;
+  // 기다리는 녹음이 있으면 PC 가 아직 일하는 중이다
+  busy_ms = (ask["done"] | false) && !queued ? 0 : millis();
   if (strcmp(state, "preparing") == 0) {
     lv_label_set_text(state_lbl, "마이크 준비 중...");
   } else if (strcmp(state, "listening") == 0) {
     lv_label_set_text(state_lbl, "듣는 중... 말하세요");
+  } else if (queued > 0) {
+    // 녹음을 마치고 처리를 기다리는 것이 더 있다
+    lv_label_set_text_fmt(state_lbl, "%s (+%d 대기)", strcmp(state, "thinking") == 0 ? "답 받는 중..." : "다음 것 처리 중...",
+                          queued);
   } else if (strcmp(state, "thinking") == 0) {
     lv_label_set_text(state_lbl, "답 받는 중...");
   } else {

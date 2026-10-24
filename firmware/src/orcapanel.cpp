@@ -124,10 +124,7 @@ static void dictate(const char *id) {
     }
     return;
   }
-  if (askpanel_dictate_step() == DICTATE_WRITING) {
-    ui_toast("앞의 받아쓰기를 넣는 중입니다", 2000);
-    return;
-  }
+  // 앞의 받아쓰기를 넣는 중이어도 된다 (PC 가 줄을 세워 차례대로 넣는다)
   if (askpanel_press_orca(id)) orcapanel_refresh();
 }
 
@@ -142,8 +139,7 @@ static void btn_event(lv_event_t *e) {
   if (i < 0 || i >= count) return;
   touched_at = lv_tick_get();
   const Session &s = sessions[i];
-  bool busy = askpanel_dictating() || askpanel_dictate_step() == DICTATE_WRITING;
-  if (!busy && strcmp(active_id, s.id) != 0) {
+  if (!askpanel_dictating() && strcmp(active_id, s.id) != 0) {
     if (!pc_connected()) {
       ui_toast("연결된 PC가 없습니다", 2000);
       return;

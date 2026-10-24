@@ -1,6 +1,6 @@
 """기기에서 말로 묻고 글로 답받기 (Claude Code CLI 를 구독 계정으로 쓴다).
 
-흐름: 기기 {"ask": "start"} -> 이 PC 마이크로 녹음 -> {"ask": "stop"} -> 이 PC 안에서 글자로 바꾸기(faster-whisper)
+흐름: 기기 {"ask": "start"} -> 이 PC 마이크로 녹음 -> {"ask": "stop"} -> 글자로 바꾸기 (아래 "받아 적기")
       -> 미리 띄워 둔 CLI 에 질문 -> 답을 나오는 대로 기기로 보낸다 {"ask": {"state", "q", "a", "done"}}
       {"ask": "cancel"} 녹음 버리기, {"ask": "new"} 새 대화 (앞 대화를 잊는다)
       {"ask": "stop", "voice": true} 면 답이 다 나온 뒤 이 PC 스피커로 읽어 준다 (speech.py). {"ask": "mute"} 읽기 멈춤
@@ -10,7 +10,13 @@
       "orca": 세션 id 가 있으면 그 ORCA 세션을 앞으로 띄우고 그 세션 터미널에 넣는다 (orca.py, 기기의 ORCA 화면).
       "슬래시 커밋" 처럼 말하면 "/commit" 으로 바꿔 넣는다.
 
-CLI 는 소리를 받지 못하므로 음성은 먼저 글자로 바꾼다. 소리는 인터넷으로 나가지 않는다.
+받아 적기: CLI 는 소리를 받지 못하므로 음성은 먼저 글자로 바꾼다. 말소리가 없는 녹음은 어느 쪽으로도 넘기지 않는다 (VAD).
+      기본은 이 PC 안의 Whisper (Apple Silicon Mac 은 GPU 의 mlx-whisper, 그 밖은 CPU 의 faster-whisper) 라서
+      소리가 인터넷으로 나가지 않는다. stt = "chatgpt" 면 ChatGPT 로 보내고 (chatgpt_stt.py), 실패할 때만 Whisper 를 쓴다.
+      Whisper 에는 자주 쓰는 말(prompt)과 ORCA 세션의 / 명령 이름을 알려 준다. ChatGPT 로는 보낼 자리가 없다.
+녹음과 처리는 따로 돈다: 앞 녹음을 받아 적거나 답을 기다리는 동안에도 새로 녹음할 수 있고,
+      다 녹음한 것은 줄을 서서 (_Take) 하나씩 차례대로 받아 적고 묻는다. 기기에는 녹음 중이면 녹음 상태를,
+      아니면 처리 상태를 보낸다 ("queued": 줄 서서 기다리는 녹음 수).
 CLI 는 질문마다 새로 켜면 2~3초가 더 걸려서, 한 번 띄워 두고(stream-json) 계속 묻는다. 같은 프로세스라 대화도 이어진다.
 30분 동안 질문이 없으면 CLI 와 음성 인식 모델을 내려 메모리를 돌려준다 (다음 질문 때 다시 띄운다).
 회사 PC 는 명령 이름이 다를 수 있어서 claude-test 를 먼저 찾고, 없으면 claude 를 쓴다.
@@ -18,6 +24,7 @@ CLI 는 질문마다 새로 켜면 2~3초가 더 걸려서, 한 번 띄워 두�
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -45,6 +52,8 @@ SYSTEM_PROMPT = (
 LONG_WORDS = ("길게", "자세히", "자세하게", "전부", "전체", "다 읽어", "풀어서", "길게 말")
 SAMPLE_RATE = 16000
 MAX_RECORD_SECONDS = 60
+# 처리를 기다리며 줄 설 수 있는 녹음 수. 넘으면 새로 누른 것은 받지 않는다
+MAX_QUEUED_TAKES = 5
 # 기기 화면에 보낼 답의 최대 글자 수 (넘으면 뒤를 자른다)
 MAX_ANSWER_CHARS = 1500
 # 답을 기다리는 한계시간. 넘으면 CLI 를 끄고 기기에 실패로 알린다 (다음 질문은 새로 띄운 CLI 로)
@@ -67,8 +76,13 @@ MADE_UP = {"감사합니다", "고맙습니다", "시청해주셔서감사합니
            "다음영상에서만나요", "안녕히계세요", "thankyou", "thanksforwatching", "you"}
 # 이 정도보다 작은 소리만 녹음됐으면 알아듣지 못했을 때 마이크 가까이에서 말하라고 알린다
 QUIET_PEAK = 0.1
-# 가장 큰 소리가 이보다 작으면 말이 없는 녹음으로 보고 ChatGPT 로 보내지 않는다 (없는 말을 지어낸다)
-SILENT_PEAK = 0.01
+
+
+def _has_speech(pcm) -> bool:
+    """녹음에 말소리가 있는지 (faster-whisper 의 VAD). 말이 없는 녹음을 넘기면 어느 엔진이든 없는 말을 지어낸다."""
+    from faster_whisper.vad import get_speech_timestamps
+
+    return bool(get_speech_timestamps(pcm))
 
 
 def _heard(no_speech: float, logprob: float) -> bool:
@@ -124,6 +138,62 @@ _NO_AUDIO_REASON = (
     if sys.platform == "darwin" else
     "PC 마이크 소리가 오지 않습니다\n설정 > 개인 정보 > 마이크를\n확인해 주세요")
 _LID_CLOSED_REASON = "맥북 덮개가 닫혀\n내장 마이크가 꺼져 있습니다\n덮개를 열거나 다른 마이크를 쓰세요"
+# 장치 목록을 새로 읽으려고 도우미를 다시 띄운 시각과 까닭 (다시 띄운 도우미가 물려받는다)
+_RESTARTED_ENV = "LLMDECK_AUDIO_RESTART"
+# 같은 까닭으로는 이만큼 지나야 또 다시 띄운다
+RESTART_AGAIN_SECONDS = 3600
+# 소리가 늘 0 인 가상 장치. 마이크를 돌아가며 잡을 때 건너뛴다
+_VIRTUAL = ("blackhole", "cable output", "zoomaudio", "teams audio", "soundflower")
+
+
+def _system_default_input() -> str | None:
+    """시스템 설정에서 지금 고른 기본 마이크 이름 (Mac). 다른 운영체제는 None.
+    PortAudio 는 처음 켤 때의 기본 마이크만 기억하고, 마이크를 연 뒤에는 다시 켤 수 없어서 (_refresh_devices) 직접 묻는다."""
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+    import ctypes.util
+    from ctypes import POINTER, Structure, byref, c_char_p, c_long, c_uint32, c_void_p, sizeof
+
+    class Address(Structure):
+        _fields_ = [("selector", c_uint32), ("scope", c_uint32), ("element", c_uint32)]
+
+    def code(text: str) -> int:
+        return int.from_bytes(text.encode(), "big")
+
+    try:
+        ca = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreAudio"))
+        cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+        ca.AudioObjectGetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p,
+                                                  POINTER(c_uint32), c_void_p]
+        cf.CFStringGetCString.argtypes = [c_void_p, c_char_p, c_long, c_uint32]
+        cf.CFRelease.argtypes = [c_void_p]
+        device, size = c_uint32(0), c_uint32(sizeof(c_uint32))
+        # 시스템(1)의 기본 입력 장치 ('dIn ')
+        if ca.AudioObjectGetPropertyData(1, byref(Address(code("dIn "), code("glob"), 0)), 0, None,
+                                         byref(size), byref(device)) or not device.value:
+            return None
+        name, size = c_void_p(), c_uint32(sizeof(c_void_p))
+        if ca.AudioObjectGetPropertyData(device.value, byref(Address(code("lnam"), code("glob"), 0)), 0, None,
+                                         byref(size), byref(name)) or not name.value:
+            return None
+        buf = ctypes.create_string_buffer(512)
+        ok = cf.CFStringGetCString(name, buf, 512, 0x08000100)  # UTF-8
+        cf.CFRelease(name)
+        return buf.value.decode() if ok else None
+    except Exception:
+        return None
+
+
+def _input_index(sd, name: str) -> int | None:
+    """이름이 같은 마이크의 장치 번호. Windows 는 같은 마이크가 여러 방식(MME, WASAPI ...)으로 보여서 기본 방식 것을 고른다."""
+    try:
+        hostapi = sd.query_devices(kind="input")["hostapi"]
+    except Exception:
+        hostapi = None
+    found = [i for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0 and d["name"] == name]
+    same = [i for i in found if sd.query_devices(i)["hostapi"] == hostapi]
+    return (same or found or [None])[0]
 
 
 def _lid_closed() -> bool:
@@ -174,7 +244,7 @@ def _mlx_ready() -> bool:
 class _MlxModel:
     """mlx-whisper (Apple GPU). 5초 말을 large-v3-turbo 로 1초 안쪽에 받아 적는다 (CPU 는 4초쯤)."""
 
-    def __init__(self, repo: str, cache_dir: str | None):
+    def __init__(self, repo: str, cache_dir: str | None, language: str | None):
         import numpy as np
         from huggingface_hub import snapshot_download
 
@@ -183,15 +253,12 @@ class _MlxModel:
             self.path = snapshot_download(repo, cache_dir=cache_dir, local_files_only=True)
         except Exception:
             self.path = snapshot_download(repo, cache_dir=cache_dir)
-        self.text(np.zeros(SAMPLE_RATE, dtype=np.float32), "ko", None)  # 무게를 GPU 에 올려 둔다
+        self.text(np.zeros(SAMPLE_RATE, dtype=np.float32), language, None)  # 무게를 GPU 에 올려 둔다
 
-    def text(self, pcm, language: str, prompt: str | None) -> str:
+    def text(self, pcm, language: str | None, prompt: str | None) -> str:
+        """말소리가 있는지는 부르는 쪽이 먼저 본다 (_has_speech)."""
         import mlx_whisper
-        from faster_whisper.vad import get_speech_timestamps
 
-        # 말이 없는 녹음은 넘기지 않는다 (조용한 소리에서 없는 말을 지어낸다)
-        if len(pcm) > SAMPLE_RATE and not get_speech_timestamps(pcm):
-            return ""
         result = mlx_whisper.transcribe(pcm, path_or_hf_repo=self.path, language=language, initial_prompt=prompt,
                                         condition_on_previous_text=False)
         return "".join(s["text"] for s in result["segments"] if _heard(s["no_speech_prob"], s["avg_logprob"])).strip()
@@ -288,6 +355,25 @@ class Session:
                 self.proc.kill()
 
 
+class _Take:
+    """녹음 하나. 녹음이 끝나면 줄에 넣고 처리 스레드가 차례대로 받아 적는다 (녹음할 때의 설정을 같이 가진다)."""
+
+    def __init__(self, dictate: bool = False, voice: bool = False, orca_pick: bool = False):
+        self.dictate = dictate  # 받아쓰기 (Claude 에 묻지 않고 PC 에 입력만 한다)
+        self.voice = voice  # 답을 소리로 읽어 줄지 (끝낼 때 다시 받는다)
+        self.orca_pick = orca_pick  # ORCA 세션으로 가는 받아쓰기인지
+        self.orca_target: str | None = None  # 그 세션의 터미널 handle (말하는 동안 따로 찾는다)
+        self.chunks: list = []
+        self.recording = threading.Event()  # 녹음마다 따로 둔다 (앞 녹음 스레드가 다음 녹음까지 이어 받지 않게)
+        self.recording.set()
+        self.recorder: threading.Thread | None = None
+        self.failed = False  # 녹음이 실패해 _record 가 이미 알렸다
+
+    @property
+    def mode(self) -> str:
+        return "dictate" if self.dictate else "ask"
+
+
 class Assistant:
     def __init__(self, cfg: dict, model_dir: str = ""):
         self.cfg = cfg
@@ -299,10 +385,10 @@ class Assistant:
         self.model = None  # 음성 인식 모델 (처음 녹음할 때 불러온다)
         self.lock = threading.Lock()  # session / model 을 다루는 동안
         self.last_used = 0.0
-        self.recording = threading.Event()
-        self.chunks: list = []
-        self.recorder: threading.Thread | None = None
-        self.busy = False  # 받아 적기·답 받기 중
+        self.take: _Take | None = None  # 지금 녹음 중인 것
+        self.takes: queue.Queue[_Take] = queue.Queue()  # 녹음을 마치고 처리를 기다리는 것
+        self.busy = False  # 받아 적기·답 받기 중 (처리 스레드)
+        threading.Thread(target=self._work, daemon=True).start()
         # PC 마이크를 쓸 수 있는지 (mic_available, _record 가 고친다). 기기는 false 면 말하기 버튼을 끈다.
         self.mic = True
         self.mic_reason = ""
@@ -313,17 +399,20 @@ class Assistant:
         # 마이크 입력 통로. 처음 여는 데 10초 넘게 걸릴 때가 있어서 한 번 열어 두고 다시 쓴다
         # (녹음하지 않는 동안은 멈춰 둔다. 멈춘 동안은 마이크를 쓰지 않는다). 오래 안 쓰면 닫는다.
         self._stream = None
+        self._stream_name = ""  # 그 통로의 마이크 이름
+        self._opened = False  # 이 도우미에서 마이크를 한 번이라도 열었는지 (_refresh_devices)
+        # 장치 목록을 새로 읽으려고 도우미를 다시 띄울 까닭과 다시 띄우는 함수 (main.restart, main.py 가 넣어 준다)
+        self.restart_for: str | None = None
+        self.restart = None
         # 답을 소리로 읽어 줄지 (기기 질문 화면의 음소거 버튼, 기본은 음소거). PC 음량은 건드리지 않는다.
-        self.voice = False
         self.speaker = speech.Speaker(cfg)
-        # 이번 녹음이 받아쓰기인지 (사용량 화면 버튼). 받아쓰기는 Claude 에 묻지 않고 PC 에 입력만 한다.
-        self.dictate = False
-        # ORCA 세션에 받아쓰기할 때: orca.Orca (main.py 가 넣어 준다)와 이번에 넣을 세션의 터미널 handle
+        # 녹음하는 동안 나온 답은 마이크에 들어가지 않게 녹음이 끝난 뒤 읽는다
+        self.spoken_later: str | None = None
+        # ORCA 세션에 받아쓰기할 때 쓴다 (main.py 가 넣어 준다)
         self.orca: orca.Orca | None = None
-        self.orca_target: str | None = None
-        self.orca_pick = False  # 이번 받아쓰기가 ORCA 세션으로 가는지
         self.pending_toast: str | None = None  # main.py 가 기기 알림으로 보낸다
-        self.state: dict | None = None  # 기기로 보낼 최신 상태
+        self.state: dict | None = None  # 기기로 보낼 최신 처리 상태 (받아 적는 중·답·오류)
+        self.rec_state: dict | None = None  # 녹음 중이면 그 상태 (준비 중·듣는 중). 처리 상태보다 먼저 보낸다
         self.sent: dict | None = None
         self.sent_at = 0.0
 
@@ -334,33 +423,43 @@ class Assistant:
         if action in ("start", "cancel", "new", "mute"):
             # 새로 말하기 시작하면 읽던 답은 끊는다 (마이크에 PC 소리가 들어가지 않게)
             self.speaker.stop()
+        if action in ("start", "cancel", "new", "mute"):
+            self.spoken_later = None
         if action == "start":
-            if self.busy or self.recording.is_set():
-                # 앞의 것을 받아 적는 중에 또 누르면 무시한다 (받아쓰기/질문 구분이 바뀌면 안 된다)
-                print("[assistant] 앞의 것을 처리하는 중이라 새로 누른 것은 무시합니다")
+            if self.recording:
+                # 녹음 중에 또 누르면 무시한다 (받아쓰기/질문 구분이 바뀌면 안 된다)
+                print("[assistant] 녹음 중이라 새로 누른 것은 무시합니다")
                 self.sent = None  # 기기에 지금 상태를 다시 보낸다
                 return
-            self.dictate = event.get("mode") == "dictate"
-            self.voice = bool(event.get("voice"))  # 60초가 넘어 스스로 끝낼 때 쓴다 (끝낼 때 다시 받는다)
-            target = event.get("orca") if self.dictate else None
-            self.orca_target = None
-            self.orca_pick = isinstance(target, str) and self.orca is not None
-            if self.orca_pick:
+            if self.takes.qsize() >= MAX_QUEUED_TAKES:
+                print(f"[assistant] 처리를 기다리는 녹음이 {MAX_QUEUED_TAKES}개라 새로 누른 것은 받지 않습니다")
+                self.pending_toast = f"앞의 녹음 {MAX_QUEUED_TAKES}개를 처리하는 중입니다\n잠시 뒤 다시 눌러 주세요"
+                self.sent = None
+                return
+            dictate = event.get("mode") == "dictate"
+            target = event.get("orca") if dictate else None
+            # voice: 60초가 넘어 스스로 끝낼 때 쓴다 (끝낼 때 다시 받는다)
+            take = _Take(dictate, bool(event.get("voice")), isinstance(target, str) and self.orca is not None)
+            if take.orca_pick:
                 # 말하는 동안 그 세션 탭으로 바꿔 둔다 (끝나면 그 세션에 넣는다)
                 def activate() -> None:
-                    self.orca_target = self.orca.activate(target)
+                    take.orca_target = self.orca.activate(target)
                 threading.Thread(target=activate, daemon=True).start()
-            self._start()
+            self._start(take)
         elif action == "stop":
-            self.voice = bool(event.get("voice"))
+            if self.take:
+                self.take.voice = bool(event.get("voice"))
             self._stop()
         elif action == "mute":
-            self.voice = False
+            for take in [self.take, *list(self.takes.queue)]:
+                if take:
+                    take.voice = False
         elif action == "cancel":
-            self.recording.clear()
-            self._set("idle")
+            self._end_take()
+            if not self.busy and self.takes.empty():
+                self._set("idle")
         elif action == "new":
-            self.recording.clear()
+            self._end_take()
             with self.lock:
                 if self.session:
                     self.session.close()
@@ -368,18 +467,34 @@ class Assistant:
             print("[assistant] 새 대화")
             self._set("idle", a="새 대화를 시작합니다")
 
-    def _start(self) -> None:
-        if self.busy or self.recording.is_set():
+    @property
+    def recording(self) -> bool:
+        take = self.take
+        return take is not None and take.recording.is_set()
+
+    def _start(self, take: _Take) -> None:
+        if self.recording:
             return
-        self.chunks = []
-        self.recording.set()
+        self.take = take
         self.last_used = time.monotonic()  # 녹음을 취소해도 열어 둔 마이크·모델을 나중에 내리게
-        self.recorder = threading.Thread(target=self._record, daemon=True)
-        self.recorder.start()
         # 마이크가 실제로 소리를 받기 시작하면 _record 가 "listening" 으로 바꾼다 (그때부터 말하면 된다)
-        self._set("preparing")
+        self._set_rec(take, "preparing")
+        take.recorder = threading.Thread(target=self._record, args=(take,), daemon=True)
+        take.recorder.start()
         # 녹음하는 동안 모델과 CLI 를 미리 준비해 둔다 (처음이면 몇 초 걸린다)
-        threading.Thread(target=self._warm, daemon=True).start()
+        threading.Thread(target=self._warm, args=(take,), daemon=True).start()
+
+    def _end_take(self, take: _Take | None = None) -> None:
+        """녹음을 끝낸다 (줄에 넣지는 않는다). take 를 주면 그것이 지금 녹음일 때만. 미뤄 둔 답 읽기를 이제 읽는다."""
+        current = self.take
+        if current is None or (take is not None and take is not current):
+            return
+        current.recording.clear()
+        self.take = None
+        self.rec_state = None
+        later, self.spoken_later = self.spoken_later, None
+        if later:
+            self.speaker.speak(later)
 
     # --- PC 마이크 ---
 
@@ -405,13 +520,9 @@ class Assistant:
         if self._mic_privacy_blocked():
             return False, "Windows 가 마이크를 막았습니다\n설정 > 개인 정보 > 마이크에서\n데스크톱 앱 허용을 켜 주세요"
         # 마이크가 없던 때만 다시 읽어 새로 꽂은 것을 찾는다. 있던 마이크가 빠지면 녹음할 때 실패로 알게 된다.
-        if refresh and not self.mic and not self.other_audio() and self._stream is None:
+        if refresh and not self.mic and self._stream is None:
             # PortAudio 는 처음 켤 때 본 장치만 기억한다. 나중에 꽂거나 뺀 마이크를 알도록 다시 읽는다
-            try:
-                sd._terminate()
-                sd._initialize()
-            except Exception as e:
-                print(f"[assistant] 오디오 장치 목록을 다시 읽지 못했습니다: {e}")
+            self._refresh_devices(sd, "마이크 없음")
         name = self.cfg.get("input") or None
         try:
             info = sd.query_devices(name, kind="input")
@@ -440,17 +551,22 @@ class Assistant:
                 continue
         return False
 
-    def _record(self) -> None:
+    def _record(self, take: _Take) -> None:
         import numpy as np
         import sounddevice as sd
 
         def fail(reason: str, no_mic: bool) -> None:
             print(f"[assistant] 녹음 실패: {reason}".replace("\n", " "))
-            self.recording.clear()
-            self.chunks = []
+            take.failed = True
+            take.chunks = []
+            self._end_take(take)
             if no_mic:
                 self.mic, self.mic_reason = False, reason
-            self._set("error", a=reason)
+            if self.busy or not self.takes.empty():
+                # 앞 녹음의 답을 받는 중이면 그 화면을 덮지 않고 알림으로
+                self.pending_toast = reason
+            else:
+                self._set("error", a=reason, mode=take.mode)
 
         if not self._audio_lock.acquire(timeout=3):
             # 앞 녹음의 마이크가 아직 닫히지 않았다
@@ -462,63 +578,154 @@ class Assistant:
                 fail(reason, True)
                 return
             self.mic, self.mic_reason = True, ""
-            try:
-                if self._stream is None:
-                    opened = time.monotonic()
-                    self._stream = self._open_stream(sd)
-                    print(f"[assistant] 마이크를 열었습니다 ({time.monotonic() - opened:.1f}초)")
-                stream = self._stream
-                stream.start()
-                try:
-                    if self.recording.is_set():
-                        self._set("listening")
-                    start = time.monotonic()
-                    heard = False
-                    while self.recording.is_set() and time.monotonic() - start < MAX_RECORD_SECONDS:
-                        # 기다리지 않고 읽는다: 마이크 권한을 묻는 중이거나 막혀 있으면 소리가 아예 오지 않아
-                        # read() 가 멈춰 버리고, 그러면 아무 말 없이 빈 녹음이 된다
-                        if stream.read_available < SAMPLE_RATE // 10:
-                            if not self.chunks and time.monotonic() - start > 2.0:
-                                fail(_NO_AUDIO_REASON, False)
-                                return
-                            time.sleep(0.02)
-                            continue
-                        data, _ = stream.read(SAMPLE_RATE // 10)
-                        self.chunks.append(data.copy())
-                        heard = heard or bool(np.any(data))
-                        # 진짜 마이크는 조용해도 잡음이 있다. 1.5초 동안 완전히 0 이면 음소거됐거나 막힌 것이다
-                        if not heard and time.monotonic() - start > 1.5:
-                            # 외장 마이크라면 덮개와 상관없다
-                            builtin = "macbook" in str(sd.query_devices(stream.device, "input")["name"]).lower()
-                            if builtin and _lid_closed():
-                                fail(_LID_CLOSED_REASON, False)
-                            else:
-                                fail("마이크 소리가 들어오지 않습니다\n음소거나 마이크 권한을\n확인해 주세요", False)
-                            return
-                    if self.recording.is_set():
-                        # 끝 버튼을 잊었다: 60초에서 스스로 끝내고 받아 적는다
-                        print(f"[assistant] {MAX_RECORD_SECONDS}초가 지나 녹음을 끝냅니다")
-                        threading.Thread(target=self._stop, daemon=True).start()
-                finally:
-                    self._halt(stream)
-            except Exception as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
-                self._close_stream()
+            order = self._mic_order(sd)
+            silent: list[str] = []  # 열렸지만 소리가 오지 않은 마이크
+            error = None  # 열지 못한 마이크의 마지막 오류
+            lid = False  # 덮개가 닫혀 내장 마이크가 0 만 보냈다
+            for retry in (False, True):
+                if retry:
+                    if silent or not take.recording.is_set():
+                        break
+                    # 하나도 열지 못했다. PortAudio 는 처음 켤 때 본 장치만 기억해서, 그 뒤 덮개를 여닫거나
+                    # 에어팟·아이폰 마이크가 붙고 빠지면 열리지 않는다 (Mac: Invalid Property Value). 목록을 다시 읽는다
+                    print(f"[assistant] 마이크를 열지 못했습니다: {str(error)[:80]}")
+                    self._close_stream()
+                    if not self._refresh_devices(sd, "마이크를 열지 못함"):
+                        break
+                    order = self._mic_order(sd)
+                for i, name in enumerate(order):
+                    if not take.recording.is_set():
+                        return
+                    if i and order[i - 1] in silent:
+                        # 앞 마이크가 조용했다: 다음 마이크로 처음부터 다시 녹음한다
+                        self.pending_toast = f"'{order[i - 1][:16]}' 마이크가 조용해서\n'{name[:16]}' 로 바꿉니다"
+                        self._set_rec(take, "preparing")
+                        take.chunks = []
+                    try:
+                        if self._stream is None or self._stream_name != name:
+                            self._close_stream()
+                            opened = time.monotonic()
+                            self._stream = self._open_stream(sd, name)
+                            self._stream_name = name
+                            print(f"[assistant] 마이크를 열었습니다 ({name}, {time.monotonic() - opened:.1f}초)")
+                        stream = self._stream
+                        stream.start()
+                    except Exception as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
+                        print(f"[assistant] '{name}' 마이크를 열지 못했습니다: {str(e)[:80]}")
+                        self._close_stream()
+                        error = e
+                        continue
+                    quiet = False
+                    try:
+                        if take.recording.is_set():
+                            self._set_rec(take, "listening")
+                        start = time.monotonic()
+                        heard = False
+                        while take.recording.is_set() and time.monotonic() - start < MAX_RECORD_SECONDS:
+                            # 기다리지 않고 읽는다: 마이크 권한을 묻는 중이거나 막혀 있으면 소리가 아예 오지 않아
+                            # read() 가 멈춰 버리고, 그러면 아무 말 없이 빈 녹음이 된다
+                            if stream.read_available < SAMPLE_RATE // 10:
+                                if not take.chunks and time.monotonic() - start > 2.0:
+                                    quiet = True
+                                    break
+                                time.sleep(0.02)
+                                continue
+                            data, _ = stream.read(SAMPLE_RATE // 10)
+                            take.chunks.append(data.copy())
+                            heard = heard or bool(np.any(data))
+                            # 진짜 마이크는 조용해도 잡음이 있다. 1.5초 동안 완전히 0 이면 음소거됐거나 막힌 것이다
+                            if not heard and time.monotonic() - start > 1.5:
+                                # 외장 마이크라면 덮개와 상관없다
+                                lid = lid or ("macbook" in name.lower() and _lid_closed())
+                                quiet = True
+                                break
+                        if not quiet and take.recording.is_set():
+                            # 끝 버튼을 잊었다: 60초에서 스스로 끝내고 받아 적는다
+                            print(f"[assistant] {MAX_RECORD_SECONDS}초가 지나 녹음을 끝냅니다")
+                            threading.Thread(target=self._stop, daemon=True).start()
+                    finally:
+                        self._halt(stream)
+                    if not quiet:
+                        return
+                    print(f"[assistant] '{name}' 에서 소리가 오지 않습니다")
+                    silent.append(name)
+                    # 조용한 마이크는 닫는다 (다음 녹음은 다시 시스템 기본 마이크부터)
+                    self._close_stream()
+            if silent:
+                reason = _LID_CLOSED_REASON if lid and len(silent) == 1 else _NO_AUDIO_REASON
+                if len(silent) > 1:
+                    reason = f"마이크 {len(silent)}개를 모두 써 봤지만\n" + reason
+                fail(reason, False)
+            elif take.recording.is_set():
                 self._mic_failed_until = time.monotonic() + 300
-                fail(f"PC 마이크를 열지 못했습니다\n{str(e)[:60]}", True)
+                fail(f"PC 마이크를 열지 못했습니다\n{str(error or '마이크가 없습니다')[:60]}", True)
 
-    def _open_stream(self, sd):
-        device = self.cfg.get("input") or None
-        try:
-            return sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=device)
-        except Exception as e:
-            if self.other_audio():
-                raise
-            # PortAudio 는 처음 켤 때 본 장치만 기억한다. 그 뒤 덮개를 여닫거나 에어팟·아이폰 마이크가 붙고 빠지면
-            # 기억한 장치가 사라져 열리지 않는다 (Mac: Invalid Property Value). 목록을 다시 읽고 한 번 더 연다
-            print(f"[assistant] 마이크를 열지 못해 장치 목록을 다시 읽습니다: {str(e)[:80]}")
-            sd._terminate()
-            sd._initialize()
-            return sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=device)
+    def _mic_order(self, sd) -> list[str]:
+        """녹음할 마이크 순서: config 의 input (없으면 시스템 기본 마이크), 그다음 이 PC 의 다른 마이크 모두."""
+        def input_names() -> list[str]:
+            devices = [d for d in sd.query_devices() if d["max_input_channels"] > 0]
+            try:
+                hostapi = sd.query_devices(kind="input")["hostapi"]
+                devices = [d for d in devices if d["hostapi"] == hostapi] or devices
+            except Exception:
+                pass
+            return [str(d["name"]) for d in devices]
+
+        names = input_names()
+        wanted = self.cfg.get("input", "")
+        if wanted:
+            first = next((n for n in names if wanted.lower() in n.lower()), None)
+        else:
+            first = _system_default_input()
+            if first and first not in names:
+                # 도우미를 켠 뒤 연결된 마이크다
+                if self._refresh_devices(sd, f"기본 마이크 '{first}'"):
+                    names = input_names()
+                if first not in names:
+                    first = None
+            if first is None:
+                try:
+                    first = str(sd.query_devices(kind="input")["name"])
+                except Exception:
+                    first = None
+        order = [first] if first else []
+        for name in names:
+            if name not in order and not any(v in name.lower() for v in _VIRTUAL):
+                order.append(name)
+        return order
+
+    def _open_stream(self, sd, name: str):
+        index = _input_index(sd, name)
+        if index is None:  # None 을 넘기면 PortAudio 가 다른 마이크(처음 본 기본 마이크)를 연다
+            raise OSError(f"'{name}' 마이크가 장치 목록에 없습니다")
+        stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=index)
+        self._opened = True
+        return stream
+
+    def _refresh_devices(self, sd, why: str) -> bool:
+        """PortAudio 의 장치 목록을 새로 읽는다. 읽었으면 True.
+        마이크를 한 번이라도 연 뒤에 다시 읽으면 도우미가 끝날 때까지 어느 마이크에서도 소리가 오지 않는다
+        (Mac 에서 확인). 그때는 바로 읽지 않고, 녹음하지 않는 틈에 도우미를 다시 띄운다 (pending).
+        Windows 는 그런 일을 본 적이 없고 다시 띄우면 트레이 앱이 도우미를 놓치므로 전처럼 바로 읽는다."""
+        if self.other_audio():  # 다시 읽으면 열린 소리 스트림이 끊긴다
+            return False
+        if not self._opened or sys.platform != "darwin":
+            self._close_stream()
+            try:
+                sd._terminate()
+                sd._initialize()
+                return True
+            except Exception as e:
+                print(f"[assistant] 오디오 장치 목록을 다시 읽지 못했습니다: {e}")
+                return False
+        # 같은 까닭으로 다시 띄운 지 얼마 안 됐으면 또 띄우지 않는다 (다시 띄워도 그대로인 장치)
+        at, _, before = os.environ.get(_RESTARTED_ENV, "").partition("|")
+        if before == why and time.time() - float(at or 0) < RESTART_AGAIN_SECONDS:
+            return False
+        if self.restart_for is None:
+            print(f"[assistant] 장치 목록을 새로 읽어야 합니다 ({why}). 녹음하지 않는 틈에 도우미를 다시 띄웁니다")
+            self.restart_for = why
+        return False
 
     def _halt(self, stream) -> None:
         """녹음을 멈춘다. Mac 에서 stream.stop() 이 돌아오지 않아 다음 녹음이 모두 막힌 적이 있다.
@@ -546,26 +753,44 @@ class Assistant:
                 pass
 
     def _stop(self) -> None:
-        if not self.recording.is_set():
+        """녹음을 끝내고 줄에 넣는다. 처리는 _work 가 차례대로 한다 (그동안 새로 녹음할 수 있다)."""
+        take = self.take
+        if take is None or not take.recording.is_set():
             return
-        self.recording.clear()
-        self.busy = True
-        threading.Thread(target=self._answer, daemon=True).start()
+        if not self.busy and self.takes.empty():
+            self._set("thinking", a="받아 적는 중", mode=take.mode)
+        self.takes.put(take)
+        self._end_take(take)
 
     # --- 받아 적기와 묻기 ---
 
-    def _warm(self) -> None:
+    def _work(self) -> None:
+        """처리 스레드: 녹음을 마친 순서대로 받아 적고 묻는다 (CLI 대화가 질문 순서대로 이어지게 하나씩)."""
+        while True:
+            take = self.takes.get()
+            self.busy = True
+            try:
+                self._answer(take)
+            finally:
+                self.busy = False
+
+    def _warm(self, take: _Take) -> None:
         try:
             with self.lock:
                 if not self._chatgpt():  # ChatGPT 로 받아 적으면 Whisper 는 실패할 때만 불러온다
                     self._load_model()
-                if not self.dictate:  # 받아쓰기는 Claude 를 쓰지 않는다
+                if not take.dictate:  # 받아쓰기는 Claude 를 쓰지 않는다
                     self._open_session()
         except Exception as e:
             print(f"[assistant] 준비 실패: {e}")
 
     def _chatgpt(self) -> bool:
         return self.cfg.get("stt", "local") == "chatgpt"
+
+    def _language(self) -> str | None:
+        """Whisper 에 줄 언어. "auto" 면 None (Whisper 가 알아본다)."""
+        language = self.cfg.get("language", "ko")
+        return None if language == "auto" else language
 
     def _load_model(self) -> None:
         if self.model is not None:
@@ -575,7 +800,7 @@ class Assistant:
             print(f"[assistant] 음성 인식 모델 불러오는 중 ({name}, GPU)")
             loading = time.monotonic()
             try:
-                self.model = _MlxModel(MLX_MODELS[name], self.model_dir)
+                self.model = _MlxModel(MLX_MODELS[name], self.model_dir, self._language())
                 print(f"[assistant] 음성 인식 모델을 불러왔습니다 ({time.monotonic() - loading:.1f}초)")
                 return
             except Exception as e:
@@ -614,46 +839,57 @@ class Assistant:
         print(f"[assistant] {self.command[0]} 를 백그라운드에 띄웁니다")
         self.session = Session(self.command[1], self.cfg)
 
-    def _answer(self) -> None:
+    def _answer(self, take: _Take) -> None:
         import numpy as np
 
+        mode = take.mode
         try:
-            if self.recorder:
-                self.recorder.join(2)
-            if not self.chunks:
+            if take.recorder:
+                take.recorder.join(2)
+            if not take.chunks:
                 # 녹음이 실패했으면 _record 가 이미 오류를 보냈다. 아니면 너무 짧게 눌렀다
-                if self.state is None or self.state.get("state") != "error":
+                if not take.failed:
                     print("[assistant] 녹음된 소리가 없습니다 (너무 짧게 눌렀거나 마이크가 열리지 않음)")
-                    self._set("error", a="소리가 녹음되지 않았습니다\n버튼을 누르고 말한 뒤\n다시 눌러 주세요")
+                    self._set("error", a="소리가 녹음되지 않았습니다\n버튼을 누르고 말한 뒤\n다시 눌러 주세요", mode=mode)
+                elif self.state and self.state["state"] == "thinking" and not self.state["q"]:
+                    # 끝을 누를 때 넣어 둔 "받아 적는 중" 을 지운다 (오류는 이미 알림으로 나갔다)
+                    self._set("idle", mode=mode)
                 return
-            pcm = np.concatenate(self.chunks)[:, 0].astype(np.float32) / 32768
+            pcm = np.concatenate(take.chunks)[:, 0].astype(np.float32) / 32768
             peak = float(np.abs(pcm).max())
             print(f"[assistant] 녹음 {len(pcm) / SAMPLE_RATE:.1f}초, 가장 큰 소리 {peak:.3f}")
-            self._set("thinking", a="받아 적는 중")
+            self._set("thinking", a="받아 적는 중", mode=mode)
             waited = time.monotonic()
             with self.lock:
-                language = self.cfg.get("language", "ko")
                 start = time.monotonic()
-                question = chatgpt_stt.text(pcm, SAMPLE_RATE, language) if self._chatgpt() and peak >= SILENT_PEAK else None
+                question = None
                 engine = "ChatGPT"
+                if not _has_speech(pcm):
+                    # 어느 엔진이든 말이 없는 녹음에서는 없는 말을 지어낸다
+                    question, engine = "", "말소리 없음"
+                elif self._chatgpt():
+                    question = chatgpt_stt.text(pcm, SAMPLE_RATE, self.cfg.get("language", "ko"))
                 if question is None:
                     engine = "Whisper"
                     self._load_model()
                     if time.monotonic() - waited > 2:
                         print(f"[assistant] 모델 준비를 {time.monotonic() - waited:.1f}초 기다렸습니다")
                     start = time.monotonic()
+                    language = self._language()
                     # ORCA 세션에 받아쓰기할 때는 / 명령 이름을 영어로 알아듣게 돕는다
-                    hints = self.orca.hotwords() if self.dictate and self.orca_pick and self.orca else None
+                    hints = self.orca.hotwords() if take.dictate and take.orca_pick and self.orca else None
                     prompt = self.cfg.get("prompt", DEFAULT_PROMPT) or None
                     if isinstance(self.model, _MlxModel):
-                        question = self.model.text(pcm, language, prompt)
+                        # mlx-whisper 는 hotwords 가 없어서 앞 문맥에 붙인다. 앞 문맥이 길면 앞쪽이 잘리므로
+                        # 자주 쓰는 말이 남도록 / 명령 이름을 앞에 둔다
+                        question = self.model.text(pcm, language, " ".join(p for p in (hints, prompt) if p) or None)
                     else:
                         segments, _ = self.model.transcribe(pcm, language=language,
                                                             beam_size=self.cfg.get("beam_size", 1), vad_filter=True,
                                                             initial_prompt=prompt, hotwords=hints)
                         question = "".join(s.text for s in segments
                                            if _heard(s.no_speech_prob, s.avg_logprob)).strip()
-                kind = "받아쓰기" if self.dictate else "질문"
+                kind = "받아쓰기" if take.dictate else "질문"
                 print(f"[assistant] {kind} ({engine}, {len(pcm) / SAMPLE_RATE:.1f}초 녹음, "
                       f"{time.monotonic() - start:.1f}초): {question}")
                 if _drop_made_up(question) != question:
@@ -661,15 +897,14 @@ class Assistant:
                     question = ""
                 if not question:
                     hint = "마이크 가까이에서\n다시 말해 주세요" if peak < QUIET_PEAK else "다시 말해 주세요"
-                    if self.dictate:
+                    if take.dictate:
                         self._set("idle", mode="dictate")
-                        self.orca_target = None
                         self.pending_toast = f"알아듣지 못했습니다\n{hint}"
                     else:
                         self._set("error", a=f"알아듣지 못했습니다\n{hint}")
                     return
-                if self.dictate:
-                    self._finish_dictation(question)
+                if take.dictate:
+                    self._finish_dictation(take, question)
                     return
                 self._set("thinking", q=question, a="")
                 self._open_session()
@@ -684,28 +919,30 @@ class Assistant:
                     answer = self.session.ask(question, lambda text: self._set("thinking", q=question, a=text))
                 print(f"[assistant] 답 ({time.monotonic() - start:.1f}초): {answer[:80]}")
                 self._set("done", q=question, a=answer)
-                if self.voice:
-                    self.speaker.speak(spoken_text(question, answer))
+                if take.voice:
+                    if self.recording:
+                        self.spoken_later = spoken_text(question, answer)
+                    else:
+                        self.speaker.speak(spoken_text(question, answer))
         except Exception as e:
             print(f"[assistant] 실패: {e}")
-            self._set("error", a=f"답을 받지 못했습니다\n{str(e)[:80]}")
+            self._set("error", a=f"답을 받지 못했습니다\n{str(e)[:80]}", mode=mode)
         finally:
             # 받아쓰기만 했거나 묻다가 실패해도 모델·CLI·마이크는 올라와 있으므로, 오래 안 쓰면 내리도록 시각을 남긴다
             self.last_used = time.monotonic()
-            self.busy = False
 
-    def _finish_dictation(self, text: str) -> None:
+    def _finish_dictation(self, take: _Take, text: str) -> None:
         """받아 적은 글을 PC 의 커서 자리에 입력한다. 결과는 기기 알림으로. (빈 글은 부르는 쪽이 먼저 걸러 낸다)"""
         if self.orca:
             fixed = orca.fix_slash(text, self.orca.commands(), self.orca.aliases)
             if fixed != text:
                 print(f"[assistant] / 명령으로 바꿈: {fixed}")
             text = fixed
-        target, self.orca_target = self.orca_target, None
+        target = take.orca_target
         if target:
             error = self.orca.send_text(target, text)
             where = "ORCA에 "
-        elif self.orca_pick:
+        elif take.orca_pick:
             # 고른 세션이 그사이 닫혔으면 엉뚱한 창에 치지 않는다
             error, where = "ORCA 세션을 찾지 못했습니다", ""
         else:
@@ -716,16 +953,22 @@ class Assistant:
 
     # --- PC -> 기기 ---
 
-    def _set(self, state: str, q: str = "", a: str = "", mode: str | None = None) -> None:
-        busy = state in ("preparing", "listening", "thinking")
-        mode = mode or ("dictate" if self.dictate else "ask")
+    def _set(self, state: str, q: str = "", a: str = "", mode: str = "ask") -> None:
+        """처리 상태 (받아 적는 중·답·오류). 받아쓰기는 mode="dictate"."""
+        busy = state == "thinking"
         # 받아쓰기는 질문 화면의 질문·답을 바꾸지 않는다 (기기는 mode 를 보고 사용량 화면 버튼에만 보여 준다)
         self.state = {"state": state, "q": q[:200], "a": a[:MAX_ANSWER_CHARS], "done": not busy, "mode": mode}
+
+    def _set_rec(self, take: _Take, state: str) -> None:
+        """녹음 상태 (preparing, listening). 지금 녹음 중인 것만 (끝난 녹음의 스레드가 늦게 바꾸지 않게)."""
+        if take is self.take and take.recording.is_set():
+            self.rec_state = {"state": state, "q": "", "a": "", "done": False, "mode": take.mode}
 
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다. 오래 안 쓰면 CLI 를 내린다."""
         self._unload_if_idle()
-        state = self.state
+        self._restart_if_wanted()
+        state = self._outgoing()
         if state is None or state == self.sent:
             return None
         # 답이 나오는 중에는 너무 자주 보내지 않는다 (끝·상태 바뀜은 바로)
@@ -735,8 +978,26 @@ class Assistant:
         self.sent, self.sent_at = state, time.monotonic()
         return state
 
+    def _outgoing(self) -> dict | None:
+        """기기에 보일 상태. 녹음 중이면 녹음 상태 (기기는 녹음 상태가 아닌 것을 받으면 녹음 버튼을 푼다).
+        그동안 앞 녹음의 답은 PC 에서 계속 받아 두고, 녹음이 끝나면 보낸다."""
+        if self.rec_state:
+            return self.rec_state
+        waiting = self.takes.qsize()
+        return {**self.state, "queued": waiting} if self.state and waiting else self.state
+
+    def _restart_if_wanted(self) -> None:
+        """장치 목록을 새로 읽으려고 도우미를 다시 띄운다. 녹음·받아 적기 중이 아니고, 결과를 기기에 보낼 틈이 지났을 때."""
+        if not self.restart_for or self.restart is None or self.busy or self.recording or not self.takes.empty():
+            return
+        if self._outgoing() != self.sent or self.pending_toast or time.monotonic() - self.last_used < 5:
+            return
+        os.environ[_RESTARTED_ENV] = f"{time.time():.0f}|{self.restart_for}"
+        print(f"[assistant] 장치 목록을 새로 읽으려고 도우미를 다시 띄웁니다 ({self.restart_for})")
+        self.restart()
+
     def _unload_if_idle(self) -> None:
-        if not self.last_used or self.busy or self.recording.is_set():
+        if not self.last_used or self.busy or self.recording or not self.takes.empty():
             return
         if time.monotonic() - self.last_used < self.idle_seconds:
             return
@@ -759,7 +1020,8 @@ class Assistant:
 
     def close(self) -> None:
         # 녹음 중인 쪽이 마이크를 멈추는 동안 닫으면 macOS 오디오가 서로 기다리며 멈춘다 (PortAudio). 끝날 때까지 기다린다.
-        self.recording.clear()
+        self._end_take()
+        self.spoken_later = None
         self.speaker.stop()
         with self._audio_lock:
             self._close_stream()

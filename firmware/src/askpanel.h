@@ -7,7 +7,10 @@
 // 답은 글자로 나오는 대로 이 화면에 뜬다 (companion/assistant.py).
 //   기기 -> PC: {"ask": "start"} 시작 / "stop" 끝 / "cancel" 버림 / "new" 새 대화
 //              음소거를 풀었으면 {"ask": "stop", "voice": true} (답을 PC 스피커로 읽어 줌), 다시 음소거하면 {"ask": "mute"}
-//   PC -> 기기: {"ask": {"state": "listening" | "thinking" | "done" | "error" | "idle", "q": 질문, "a": 답, "done": bool}}
+//   PC -> 기기: {"ask": {"state": "listening" | "thinking" | "done" | "error" | "idle", "q": 질문, "a": 답, "done": bool,
+//                        "queued": 녹음을 마치고 처리를 기다리는 수 (없으면 빠진다)}}
+//   PC 는 녹음과 처리를 따로 한다: 앞 녹음을 받아 적거나 답을 받는 동안에도 새로 녹음할 수 있다.
+//   녹음 중에는 녹음 상태(preparing, listening)만 보내고, 끝나면 처리 상태를 보낸다.
 
 void askpanel_build(lv_obj_t *parent);
 // 상태줄 아래 영역. 화면을 돌리면 다시 부른다.

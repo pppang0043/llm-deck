@@ -444,6 +444,7 @@ def main() -> None:
     keys = typer.Typer()
     ask = assistant.Assistant(cfg.get("assistant", {}), cfg.get("storage", {}).get("model_dir", ""))
     ask.other_audio = lambda: getattr(sink, "stream", None) is not None
+    ask.restart = restart  # 마이크를 연 뒤 장치 목록을 새로 읽어야 할 때
     # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
     sessions = orca.Orca(cfg.get("orca", {}))
     ask.orca = sessions
