@@ -9,7 +9,7 @@
 #define MISS_LIMIT 4
 #define POLL_MS 2000
 #define POLL_FAST_MS 500
-// 모듈이 없을 때 찾아보는 간격. 없는 주소를 부를 때마다 I2C 오류 한 줄이 찍히므로 드물게 (스피커 화면에서는 자주).
+// 모듈이 없을 때 찾아보는 간격 (스피커 화면에서는 자주)
 #define PROBE_MS 30000
 #define PROBE_FAST_MS 5000
 
@@ -41,8 +41,16 @@ static bool read_reply(uint8_t select, uint8_t *buf) {
   return true;
 }
 
+// 주소만 불러서 대답하는지 본다. 데이터를 보내면 없는 주소일 때 코어가 I2C 오류 줄
+// (i2c_master_transmit failed: ESP_ERR_INVALID_STATE)을 찍지만, 빈 전송은 조용히 확인만 한다.
+static bool answers() {
+  Wire.beginTransmission(SPK_ADDR);
+  return Wire.endTransmission(true) == 0;
+}
+
 static bool poll_status() {
   uint8_t buf[SPK_REPLY_LEN];
+  if (!present && !answers()) return false;
   if (!read_reply(0xFF, buf) || buf[0] != 'A' || buf[1] != SPK_PROTO) {
     if (present && ++misses >= MISS_LIMIT) {
       present = false;
