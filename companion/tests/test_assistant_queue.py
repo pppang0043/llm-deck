@@ -28,6 +28,7 @@ def a(monkeypatch):
     monkeypatch.setattr(a, "_record", record)
     monkeypatch.setattr(a, "_answer", answer)
     monkeypatch.setattr(a, "_warm", lambda take: None)
+    monkeypatch.setattr(a, "_watch_mics", lambda: None)  # 이 PC 의 마이크를 열어 보지 않게
     return a
 
 

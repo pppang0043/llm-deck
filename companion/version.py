@@ -6,14 +6,15 @@ PROTO 는 서로 주고받는 내용(메시지 칸, 인증 방식)이 바뀔 때
     3: 블루투스 인증
     4: 독립 생존 신호(5초), 수신 큐 포화 응답
     5: 영구 명령 ID, 처리 완료 조회, 서명된 Wi-Fi ACK
+    6: PC 마이크 상태("pc_mic"), 기기에서 마이크 고르기("mic_pick")
 """
 
 import subprocess
 from pathlib import Path
 
-PROTO = 5
+PROTO = 6
 # git 이 없거나 저장소 밖에서 돌 때 보여줄 버전
-VERSION = "proto5"
+VERSION = "proto6"
 # 기기가 버전을 알려 주지 않은 채 사용량을 이만큼 보내면 오래된 펌웨어로 본다
 SILENT_SENDS = 3
 

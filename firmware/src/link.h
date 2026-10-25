@@ -48,7 +48,7 @@ void link_set_rotate(void (*rotate)());
 
 // PC 도우미와 주고받는 내용의 버전. 메시지 칸·인증 방식이 바뀔 때 올린다 (companion/version.py 의 PROTO 와 같아야 한다).
 // 사용량을 받으면 연결마다 한 번 {"fw_proto": N, "fw": "빌드 시각"} 으로 알려 주고, 다르면 알림을 띄운다.
-#define FW_PROTO 5
+#define FW_PROTO 6
 
 // 지금 쓰는 PC 도우미가 알려 준 것 (사용량 메시지의 "helper"). 보내지 않는 옛 도우미는 proto 0
 struct HelperInfo {

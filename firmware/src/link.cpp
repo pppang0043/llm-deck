@@ -39,6 +39,7 @@
 #include "saver.h"
 #include "sd_video.h"
 #include "storage.h"
+#include "pcmic.h"
 #include "usb_link.h"
 #include "net.h"
 #include "ui.h"
@@ -232,7 +233,7 @@ void link_init(void (*set_mic)(bool on)) {
 // 명령이 하나라도 섞였으면 전체를 FIFO 에 보존한다 (촬영 직전 화면 갱신 등).
 static uint32_t snapshot_key(JsonObjectConst doc) {
   static const char *const fields[] = {"services", "updated", "host", "now", "utc_offset", "helper",
-                                      "ask_mic", "keywords", "os", "pc", "orca", "sync_url"};
+                                      "ask_mic", "keywords", "os", "pc", "orca", "sync_url", "pc_mic"};
   uint32_t mask = 0;
   for (JsonPairConst item : doc) {
     bool known = false;
@@ -523,6 +524,7 @@ void link_loop() {
       }
       if (doc["ask"].is<JsonObjectConst>() && from == active && usage) askpanel_set(doc["ask"]);
       if (doc["ask_mic"].is<bool>() && from == active && usage) askpanel_set_mic(doc["ask_mic"]);
+      if (doc["pc_mic"].is<JsonObjectConst>() && from == active && usage) pcmic_set(doc["pc_mic"]);
       if (doc["orca"].is<JsonObjectConst>() && from == active && usage) orcapanel_set(doc["orca"]);
       if (doc["services"].is<JsonArrayConst>() && from == active && usage) {
         JsonArrayConst services = doc["services"];

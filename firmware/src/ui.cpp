@@ -9,6 +9,7 @@
 #include "history.h"
 #include "mirror.h"
 #include "orcapanel.h"
+#include "pcmic.h"
 #include "pcpanel.h"
 #include "settings.h"
 
@@ -812,6 +813,10 @@ static void layout_status_left() {
   layout_status_right();
 }
 
+void ui_layout_status() {
+  layout_status_left();
+}
+
 static void home_icon_event(lv_event_t *e) {
   switch ((intptr_t)lv_event_get_user_data(e)) {
     case 0:
@@ -981,6 +986,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   status_lbl = add_label(scr, "시작 중...", &font_ko_14, COLOR_DIM);
+  pcmic_build(scr);  // 연결 방식 오른쪽의 PC 마이크 표시
 
   // 뒤로 버튼: 화면 돌리기 버튼과 같은 모양으로 상태줄 왼쪽 끝에 (오른쪽으로 밀기와 같다)
   back_btn = lv_btn_create(scr);
@@ -1065,9 +1071,10 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
 static void render_usage();
 
 // 상태줄 오른쪽: [날짜 시각] [배터리 %] [건전지] [돌리기 버튼].
-// 왼쪽 연결 방식 글자와 겹치면 날짜를 빼고 시각만 보인다.
+// 왼쪽 연결 방식 글자(와 PC 마이크 표시)와 겹치면 날짜를 빼고 시각만 보인다.
 static void layout_status_right() {
   lv_obj_t *scr = lv_scr_act();
+  int left_end = pcmic_place(status_lbl);
   lv_obj_t *right = rotate_btn;
   if (!lv_obj_has_flag(bat_icon, LV_OBJ_FLAG_HIDDEN)) {
     lv_obj_update_layout(scr);
@@ -1082,7 +1089,7 @@ static void layout_status_right() {
   lv_obj_update_layout(scr);
   lv_obj_align_to(clock_lbl, right, LV_ALIGN_OUT_LEFT_MID, -8, 0);
   lv_obj_update_layout(scr);
-  if (clock_date[0] && lv_obj_get_x(clock_lbl) < lv_obj_get_x(status_lbl) + lv_obj_get_width(status_lbl) + 6) {
+  if (clock_date[0] && lv_obj_get_x(clock_lbl) < left_end + 6) {
     lv_label_set_text(clock_lbl, clock_time);
     lv_obj_update_layout(scr);
     lv_obj_align_to(clock_lbl, right, LV_ALIGN_OUT_LEFT_MID, -8, 0);
@@ -1125,6 +1132,7 @@ void ui_layout() {
 void ui_set_status(const char *text) {
   if (strcmp(lv_label_get_text(status_lbl), text) == 0) return;
   lv_label_set_text(status_lbl, text);
+  pcmic_refresh();
   layout_status_right();
   // 연결이 바뀌면 말하기 버튼도 (PC 없음 <-> 누르고 말하기)
   askpanel_refresh();

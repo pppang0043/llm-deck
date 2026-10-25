@@ -2,6 +2,7 @@
 
 #include "display.h"
 #include "link.h"
+#include "pcmic.h"
 #include "ui.h"
 
 LV_FONT_DECLARE(font_ko_14);
@@ -75,7 +76,7 @@ void askpanel_refresh() {
 static bool press(bool dictate, const char *orca_id) {
   int st = askpanel_talk_state();
   if (st == ASK_NO_PC) ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
-  if (st == ASK_NO_MIC) ui_toast("PC에 쓸 수 있는 마이크가 없습니다", 2500);
+  if (st == ASK_NO_MIC) ui_toast(pcmic_why()[0] ? pcmic_why() : "PC에 쓸 수 있는 마이크가 없습니다", 2500);
   if (st != ASK_READY) return false;
   if (orca_id) {
     char json[96];

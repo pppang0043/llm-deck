@@ -25,6 +25,8 @@ void ui_set_usage(JsonArrayConst services);
 
 // 화면 방향이 바뀐 뒤(display_set_rotation) 부르면 가로/세로에 맞게 다시 배치한다.
 void ui_layout();
+// 상태줄만 다시 놓는다 (PC 마이크 표시가 나타났을 때)
+void ui_layout_status();
 
 void ui_set_mic(bool on);
 // 사용량 화면 아래 받아쓰기 버튼과 ORCA 화면의 모양을 다시 그린다 (askpanel.cpp 가 부른다)

@@ -22,6 +22,7 @@ CLI 는 질문마다 새로 켜면 2~3초가 더 걸려서, 한 번 띄워 두�
 회사 PC 는 명령 이름이 다를 수 있어서 claude-test 를 먼저 찾고, 없으면 claude 를 쓴다.
 """
 
+import base64
 import json
 import os
 import queue
@@ -54,6 +55,15 @@ SAMPLE_RATE = 16000
 MAX_RECORD_SECONDS = 60
 # 소리가 오지 않은 마이크는 이만큼 동안 맨 뒤로 미룬다 (녹음마다 1.5초씩 버리고 "바꿉니다" 알림이 뜨지 않게)
 QUIET_MIC_SECONDS = 600
+# 앞 마이크가 조용해서 대신 녹음한 마이크. 그 마이크가 빠질 때까지 맨 앞에 두고 쓴다 (도우미를 다시 켜도)
+FALLBACK_MIC_FILE = Path.home() / ".llm-deck" / "fallback_mic.txt"
+# 기기에서 고른 마이크 (비어 있으면 자동). 그 마이크가 있으면 늘 먼저 쓴다
+PICKED_MIC_FILE = Path.home() / ".llm-deck" / "picked_mic.txt"
+# 쉬는 틈에 마이크를 미리 들어 보는 횟수 (모두 조용하면 PROBE_GAP 초 뒤 다시). 그래도 안 되면 "연결 불가"
+PROBE_TRIES = 3
+PROBE_GAP = 3
+# 연결 불가일 때 다시 들어 보는 간격 (덮개를 열었을 때처럼 장치 목록은 그대로인데 되살아나는 때)
+RECHECK_SECONDS = 60
 # 처리를 기다리며 줄 설 수 있는 녹음 수. 넘으면 새로 누른 것은 받지 않는다
 MAX_QUEUED_TAKES = 5
 # 기기 화면에 보낼 답의 최대 글자 수 (넘으면 뒤를 자른다)
@@ -140,16 +150,14 @@ _NO_AUDIO_REASON = (
     if sys.platform == "darwin" else
     "PC 마이크 소리가 오지 않습니다\n설정 > 개인 정보 > 마이크를\n확인해 주세요")
 _LID_CLOSED_REASON = "맥북 덮개가 닫혀\n내장 마이크가 꺼져 있습니다\n덮개를 열거나 다른 마이크를 쓰세요"
-# 장치 목록을 새로 읽으려고 도우미를 다시 띄운 시각과 까닭 (다시 띄운 도우미가 물려받는다)
-_RESTARTED_ENV = "LLMDECK_AUDIO_RESTART"
-# 같은 까닭으로는 이만큼 지나야 또 다시 띄운다
-RESTART_AGAIN_SECONDS = 3600
+_PRIVACY_REASON = "Windows 가 마이크를 막았습니다\n설정 > 개인 정보 > 마이크에서\n데스크톱 앱 허용을 켜 주세요"
 # 소리가 늘 0 인 가상 장치. 마이크를 돌아가며 잡을 때 건너뛴다
 _VIRTUAL = ("blackhole", "cable output", "zoomaudio", "teams audio", "soundflower")
 # Windows 의 "기본 마이크" 별칭 장치 (MME 사운드 매퍼, DirectSound 주 캡처 드라이버). 진짜 기본 마이크를 알면 건너뛴다
 _ALIASES = ("sound mapper", "사운드 매퍼", "primary sound capture", "주 사운드 캡처")
-# 블루투스 이어폰 마이크는 쓰지 않는다. 쓰는 순간 음악용(AAC) 연결이 통화용(HFP)으로 바뀌어 듣는 소리가 나빠지고,
-# 바뀌는 1~3초 동안은 0 만 와서 녹음이 실패했다. 기본 마이크가 에어팟이면 이 PC 의 다른 마이크(MacBook 마이크)로 녹음한다
+# Mac 은 블루투스 이어폰 마이크를 쓰지 않는다. 쓰는 순간 음악용(AAC) 연결이 통화용(HFP)으로 바뀌어 듣는 소리가 나빠지고,
+# 바뀌는 1~3초 동안은 0 만 와서 녹음이 실패했다. 기본 마이크가 에어팟이면 이 PC 의 다른 마이크(MacBook 마이크)로 녹음한다.
+# 연결 방식(_mac_inputs)으로 알아보고, 이름은 그것을 못 읽을 때만 본다. Windows 는 시스템에서 고른 마이크를 그대로 따른다
 _BLUETOOTH = ("airpods", "bluetooth", "beats", "buds", "hands-free", "handsfree", "핸즈프리")
 
 
@@ -159,7 +167,7 @@ def _bluetooth(name: str) -> bool:
 
 def _system_default_input() -> str | None:
     """시스템 설정에서 지금 고른 기본 마이크 이름. 못 읽으면 None.
-    PortAudio 는 처음 켤 때의 기본 마이크만 기억하고, 마이크를 연 뒤에는 다시 켤 수 없어서 (_refresh_devices) 직접 묻는다."""
+    PortAudio 는 처음 켤 때의 기본 마이크만 기억해서 (micproc.py) 직접 묻는다."""
     if sys.platform == "darwin":
         return _mac_default_input()
     if sys.platform == "win32":
@@ -167,89 +175,117 @@ def _system_default_input() -> str | None:
     return None
 
 
-def _mac_default_input() -> str | None:
-    """Mac: 시스템 설정 > 사운드 > 입력 에서 고른 장치 (CoreAudio)."""
+def _fourcc(text: str) -> int:
+    return int.from_bytes(text.encode(), "big")
+
+
+def _coreaudio():
+    """Mac CoreAudio 함수들과 속성 주소 구조체."""
     import ctypes
     import ctypes.util
-    from ctypes import POINTER, Structure, byref, c_char_p, c_long, c_uint32, c_void_p, sizeof
+    from ctypes import POINTER, Structure, c_char_p, c_long, c_uint32, c_void_p
 
     class Address(Structure):
         _fields_ = [("selector", c_uint32), ("scope", c_uint32), ("element", c_uint32)]
 
-    def code(text: str) -> int:
-        return int.from_bytes(text.encode(), "big")
+    ca = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreAudio"))
+    cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+    ca.AudioObjectGetPropertyDataSize.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p, POINTER(c_uint32)]
+    ca.AudioObjectGetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p,
+                                              POINTER(c_uint32), c_void_p]
+    ca.AudioObjectSetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p, c_uint32, c_void_p]
+    cf.CFStringGetCString.argtypes = [c_void_p, c_char_p, c_long, c_uint32]
+    cf.CFRelease.argtypes = [c_void_p]
+    return ca, cf, Address
 
+
+def _mac_uint(ca, Address, obj: int, selector: str, scope: str = "glob") -> int | None:
+    from ctypes import byref, c_uint32, sizeof
+
+    value, size = c_uint32(0), c_uint32(sizeof(c_uint32))
+    if ca.AudioObjectGetPropertyData(obj, byref(Address(_fourcc(selector), _fourcc(scope), 0)), 0, None,
+                                     byref(size), byref(value)):
+        return None
+    return value.value
+
+
+def _mac_name(ca, cf, Address, device: int) -> str | None:
+    import ctypes
+    from ctypes import byref, c_uint32, c_void_p, sizeof
+
+    name, size = c_void_p(), c_uint32(sizeof(c_void_p))
+    if ca.AudioObjectGetPropertyData(device, byref(Address(_fourcc("lnam"), _fourcc("glob"), 0)), 0, None,
+                                     byref(size), byref(name)) or not name.value:
+        return None
+    buf = ctypes.create_string_buffer(512)
+    ok = cf.CFStringGetCString(name, buf, 512, 0x08000100)  # UTF-8
+    cf.CFRelease(name)
+    return buf.value.decode() if ok else None
+
+
+def _mac_default_input() -> str | None:
+    """Mac: 시스템 설정 > 사운드 > 입력 에서 고른 장치 (CoreAudio)."""
     try:
-        ca = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreAudio"))
-        cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
-        ca.AudioObjectGetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p,
-                                                  POINTER(c_uint32), c_void_p]
-        cf.CFStringGetCString.argtypes = [c_void_p, c_char_p, c_long, c_uint32]
-        cf.CFRelease.argtypes = [c_void_p]
-        device, size = c_uint32(0), c_uint32(sizeof(c_uint32))
-        # 시스템(1)의 기본 입력 장치 ('dIn ')
-        if ca.AudioObjectGetPropertyData(1, byref(Address(code("dIn "), code("glob"), 0)), 0, None,
-                                         byref(size), byref(device)) or not device.value:
-            return None
-        name, size = c_void_p(), c_uint32(sizeof(c_void_p))
-        if ca.AudioObjectGetPropertyData(device.value, byref(Address(code("lnam"), code("glob"), 0)), 0, None,
-                                         byref(size), byref(name)) or not name.value:
-            return None
-        buf = ctypes.create_string_buffer(512)
-        ok = cf.CFStringGetCString(name, buf, 512, 0x08000100)  # UTF-8
-        cf.CFRelease(name)
-        return buf.value.decode() if ok else None
+        ca, cf, Address = _coreaudio()
+        device = _mac_uint(ca, Address, 1, "dIn ")  # 시스템(1)의 기본 입력 장치
+        return _mac_name(ca, cf, Address, device) if device else None
     except Exception:
         return None
+
+
+def _mac_inputs() -> dict[str, tuple[int, str]]:
+    """Mac 의 마이크들: 이름 -> (장치 번호, 연결 방식 'bltn' 내장, 'blue'·'blea' 블루투스, 'usb ' ...). 못 읽으면 {}.
+    블루투스인지는 이름이 아니라 연결 방식으로 안다 (이름을 바꾼 에어팟, 'Galaxy Buds' 같은 다른 이어폰도)."""
+    from ctypes import byref, c_uint32, sizeof
+
+    try:
+        ca, cf, Address = _coreaudio()
+        size = c_uint32(0)
+        everything = Address(_fourcc("dev#"), _fourcc("glob"), 0)
+        if ca.AudioObjectGetPropertyDataSize(1, byref(everything), 0, None, byref(size)):
+            return {}
+        devices = (c_uint32 * (size.value // sizeof(c_uint32)))()
+        if ca.AudioObjectGetPropertyData(1, byref(everything), 0, None, byref(size), devices):
+            return {}
+        found = {}
+        for device in devices:
+            streams = c_uint32(0)
+            if ca.AudioObjectGetPropertyDataSize(device, byref(Address(_fourcc("stm#"), _fourcc("inpt"), 0)), 0, None,
+                                                 byref(streams)) or not streams.value:
+                continue  # 입력이 없는 장치 (스피커)
+            name = _mac_name(ca, cf, Address, device)
+            kind = _mac_uint(ca, Address, device, "tran") or 0
+            if name:
+                found[name] = (int(device), kind.to_bytes(4, "big").decode("latin-1"))
+        return found
+    except Exception:
+        return {}
+
+
+_MAC_BLUETOOTH = ("blue", "blea")
 
 
 def _mac_use_builtin_input() -> str | None:
     """Mac: 기본 입력이 블루투스 이어폰(에어팟)이면 내장 마이크로 되돌린다. 되돌렸으면 원래 장치 이름.
     에어팟이 다시 붙으면 macOS 가 기본 입력까지 에어팟으로 바꾸는데, 그대로 두면 ORCA·브라우저처럼 기본 마이크를 쓰는
     앱이 마이크를 여는 순간 에어팟이 통화용(HFP)으로 바뀌어 소리가 나빠진다."""
-    import ctypes
-    import ctypes.util
-    from ctypes import POINTER, Structure, byref, c_uint32, c_void_p, sizeof
-
-    class Address(Structure):
-        _fields_ = [("selector", c_uint32), ("scope", c_uint32), ("element", c_uint32)]
-
-    def code(text: str) -> int:
-        return int.from_bytes(text.encode(), "big")
+    from ctypes import byref, c_uint32, sizeof
 
     name = _mac_default_input()
-    if not name or not _bluetooth(name):
+    inputs = _mac_inputs()
+    if not name or not (inputs.get(name, (0, ""))[1] in _MAC_BLUETOOTH or _bluetooth(name)):
+        return None
+    builtin = next((device for device, kind in inputs.values() if kind == "bltn"), None)  # MacBook 마이크
+    if builtin is None:
         return None
     try:
-        ca = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreAudio"))
-        ca.AudioObjectGetPropertyDataSize.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p, POINTER(c_uint32)]
-        ca.AudioObjectGetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p,
-                                                  POINTER(c_uint32), c_void_p]
-        ca.AudioObjectSetPropertyData.argtypes = [c_uint32, POINTER(Address), c_uint32, c_void_p, c_uint32, c_void_p]
-        size = c_uint32(0)
-        if ca.AudioObjectGetPropertyDataSize(1, byref(Address(code("dev#"), code("glob"), 0)), 0, None, byref(size)):
+        ca, _, Address = _coreaudio()
+        if ca.AudioObjectSetPropertyData(1, byref(Address(_fourcc("dIn "), _fourcc("glob"), 0)), 0, None,
+                                         sizeof(c_uint32), byref(c_uint32(builtin))):
             return None
-        devices = (c_uint32 * (size.value // sizeof(c_uint32)))()
-        if ca.AudioObjectGetPropertyData(1, byref(Address(code("dev#"), code("glob"), 0)), 0, None,
-                                         byref(size), devices):
-            return None
-        for device in devices:
-            # 내장('bltn') 이면서 입력 스트림이 있는 장치 = MacBook 마이크
-            kind, size = c_uint32(0), c_uint32(sizeof(c_uint32))
-            if ca.AudioObjectGetPropertyData(device, byref(Address(code("tran"), code("glob"), 0)), 0, None,
-                                             byref(size), byref(kind)) or kind.value != code("bltn"):
-                continue
-            streams = c_uint32(0)
-            if ca.AudioObjectGetPropertyDataSize(device, byref(Address(code("stm#"), code("inpt"), 0)), 0, None,
-                                                 byref(streams)) or not streams.value:
-                continue
-            if ca.AudioObjectSetPropertyData(1, byref(Address(code("dIn "), code("glob"), 0)), 0, None,
-                                             sizeof(c_uint32), byref(c_uint32(device))):
-                return None
-            return name
     except Exception:
         return None
-    return None
+    return name
 
 
 def _windows_default_input() -> str | None:
@@ -318,15 +354,23 @@ def _match_input(full: str, names: list[str]) -> str | None:
     return next((n for n in names if len(n) >= 31 and full.startswith(n)), None)
 
 
-def _input_index(sd, name: str) -> int | None:
-    """이름이 같은 마이크의 장치 번호. Windows 는 같은 마이크가 여러 방식(MME, WASAPI ...)으로 보여서 기본 방식 것을 고른다."""
+def _read_text(path: Path) -> str:
     try:
-        hostapi = sd.query_devices(kind="input")["hostapi"]
-    except Exception:
-        hostapi = None
-    found = [i for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0 and d["name"] == name]
-    same = [i for i in found if sd.query_devices(i)["hostapi"] == hostapi]
-    return (same or found or [None])[0]
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _write_text(path: Path, text: str) -> None:
+    """빈 글이면 파일을 지운다."""
+    try:
+        if text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"[assistant] {path.name} 에 적지 못했습니다: {e}")
 
 
 def _lid_closed() -> bool:
@@ -408,6 +452,116 @@ class _Held:
 
     def __exit__(self, *exc) -> None:
         self.lock.release()
+
+
+class _MicProcess:
+    """micproc.py 를 자식 프로세스로 띄운다. 받은 줄은 on_message 로 넘긴다."""
+
+    def __init__(self, on_message):
+        self.proc = subprocess.Popen([sys.executable, "-u", str(Path(__file__).with_name("micproc.py"))],
+                                     cwd=Path(__file__).parent, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1,
+                                     creationflags=_NO_WINDOW)
+
+        def read() -> None:
+            for line in self.proc.stdout:
+                try:
+                    on_message(json.loads(line))
+                except ValueError:
+                    continue
+
+        def errors() -> None:
+            for line in self.proc.stderr:
+                print(f"[mic] {line.rstrip()}")
+
+        threading.Thread(target=read, daemon=True).start()
+        threading.Thread(target=errors, daemon=True).start()
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def send(self, cmd: dict) -> None:
+        try:
+            self.proc.stdin.write(json.dumps(cmd, ensure_ascii=False) + "\n")
+            self.proc.stdin.flush()
+        except (OSError, ValueError) as e:
+            raise OSError(f"녹음 프로세스에 보내지 못했습니다: {e}") from e
+
+    def close(self) -> None:
+        self.proc.kill()
+
+
+class MicClient:
+    """마이크는 녹음 프로세스(micproc.py)에서만 연다. 장치 목록을 새로 읽거나 멈춘 마이크를 버릴 때는
+    그 프로세스만 끝내고 다음에 부를 때 새로 띄운다 (도우미는 그대로 돈다)."""
+
+    def __init__(self, spawn=_MicProcess):
+        self._spawn = spawn
+        self._proc = None
+        self._replies: queue.Queue[dict] = queue.Queue()
+        self._audio: queue.Queue[str] = queue.Queue()
+        self.spawned = 0  # 띄운 횟수
+
+    def _on_message(self, message: dict) -> None:
+        if "pcm" in message:
+            self._audio.put(message["pcm"])
+        else:
+            self._replies.put(message)
+
+    def _ask(self, cmd: dict, timeout: float) -> dict:
+        if self._proc is None or not self._proc.alive():
+            self._proc = self._spawn(self._on_message)
+            self.spawned += 1
+        while not self._replies.empty():  # 앞에서 늦게 온 답 (읽다가 난 오류 등)
+            self._replies.get_nowait()
+        self._proc.send(cmd)
+        try:
+            return self._replies.get(timeout=timeout)
+        except queue.Empty:
+            print(f"[assistant] 녹음 프로세스가 {timeout:.0f}초 동안 답하지 않아 새로 띄웁니다 ({cmd['op']})")
+            self.stop()
+            raise OSError("마이크가 응답하지 않습니다") from None
+
+    def devices(self) -> tuple[list[str], str]:
+        """(마이크 이름들, PortAudio 의 기본 마이크). 녹음 프로세스를 띄운 때의 목록이다."""
+        reply = self._ask({"op": "devices"}, 20)
+        return list(reply.get("devices", [])), str(reply.get("default", ""))
+
+    def listen(self, name: str) -> float:
+        """그 마이크로 듣기 시작한다. 여는 데 걸린 초. 열지 못하면 OSError."""
+        while not self._audio.empty():
+            self._audio.get_nowait()
+        reply = self._ask({"op": "listen", "name": name}, 20)  # 처음 열 때 10초 넘게 걸린 적이 있다
+        if "opened" not in reply:
+            raise OSError(reply.get("error") or "마이크를 열지 못했습니다")
+        return float(reply.get("secs", 0))
+
+    def read(self, timeout: float):
+        """들은 소리 한 조각 (int16, (n, 1)). 아직 없으면 None."""
+        import numpy as np
+
+        try:
+            data = self._audio.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        return np.frombuffer(base64.b64decode(data), dtype=np.int16).reshape(-1, 1).copy()
+
+    def halt(self) -> None:
+        """듣기를 멈춘다 (마이크는 열어 둔다). 멈추지 않으면 녹음 프로세스를 끝낸다."""
+        if self._proc is not None and self._proc.alive():
+            try:
+                self._ask({"op": "halt"}, 3)
+            except OSError:
+                pass
+
+    def restart(self) -> None:
+        """장치 목록을 새로 읽도록 다음에 부를 때 녹음 프로세스를 새로 띄운다."""
+        self.stop()
+
+    def stop(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            proc.close()
 
 
 class AnswerTimeout(Exception):
@@ -501,6 +655,7 @@ class _Take:
         self.recording.set()
         self.recorder: threading.Thread | None = None
         self.failed = False  # 녹음이 실패해 _record 가 이미 알렸다
+        self.mic = ""  # 녹음한 마이크 이름
 
     @property
     def mode(self) -> str:
@@ -522,24 +677,27 @@ class Assistant:
         self.takes: queue.Queue[_Take] = queue.Queue()  # 녹음을 마치고 처리를 기다리는 것
         self.busy = False  # 받아 적기·답 받기 중 (처리 스레드)
         threading.Thread(target=self._work, daemon=True).start()
-        # PC 마이크를 쓸 수 있는지 (mic_available, _record 가 고친다). 기기는 false 면 말하기 버튼을 끈다.
+        # PC 마이크 상태 (기기 상태줄의 마이크 표시, mic_status): "checking" 들어 보는 중, "ok" 쓸 수 있음, "none" 연결 불가.
+        # self.mic 이 False 면 기기는 말하기 버튼을 끈다. 녹음과 미리 들어 보기(_probe_round)가 고친다.
+        self.mic_state = "checking"
+        self.mic_name = ""  # 소리가 오는 것을 확인한 마이크
         self.mic = True
         self.mic_reason = ""
-        self._mic_failed_until = 0.0
-        # 다른 소리 스트림(기기 마이크 -> 가상 오디오 장치)이 열려 있는지. 열려 있으면 장치 목록을 다시 읽지 않는다
-        # (PortAudio 를 다시 켜면 열린 스트림이 끊긴다). main.py 가 정해 준다.
-        self.other_audio = lambda: False
-        # 마이크 입력 통로. 처음 여는 데 10초 넘게 걸릴 때가 있어서 한 번 열어 두고 다시 쓴다
-        # (녹음하지 않는 동안은 멈춰 둔다. 멈춘 동안은 마이크를 쓰지 않는다). 오래 안 쓰면 닫는다.
-        self._stream = None
-        self._stream_name = ""  # 그 통로의 마이크 이름
-        self._opened = False  # 이 도우미에서 마이크를 한 번이라도 열었는지 (_refresh_devices)
+        # 마이크는 녹음 프로세스에서 연다 (micproc.py). 오래 안 쓰면 끈다
+        self.mics = MicClient()
+        self._names: list[str] = []  # 고를 수 있는 마이크 (기기에 보낸다)
         self._unmatched = ""  # 장치 목록을 다시 읽어도 찾지 못한 기본 마이크 이름 (또 다시 읽지 않는다)
         self._quiet_until: dict[str, float] = {}  # 소리가 오지 않은 마이크 -> 다시 먼저 써 볼 시각 (monotonic)
-        self._input_checked = 0.0  # 기본 입력이 에어팟인지 마지막으로 본 시각 (_keep_builtin_input)
-        # 장치 목록을 새로 읽으려고 도우미를 다시 띄울 까닭과 다시 띄우는 함수 (main.restart, main.py 가 넣어 준다)
-        self.restart_for: str | None = None
-        self.restart = None
+        self._fallback = _read_text(FALLBACK_MIC_FILE)
+        self._picked = _read_text(PICKED_MIC_FILE)
+        self._bt_names: set[str] = set()  # Mac 의 블루투스 마이크 (_device_signature 가 채운다)
+        # 마이크 장치가 바뀌었는지 2초마다 본다 (_watch_mics). 바뀌면 쉬는 틈에 미리 들어 본다
+        self._watched = 0.0
+        self._signature = None
+        self._fresh = True  # 녹음 프로세스가 지금 장치 목록을 알고 있는지 (아니면 들어 보기 전에 새로 띄운다)
+        self._check_due: float | None = 0.0  # 다음에 미리 들어 볼 시각 (None 이면 장치가 바뀔 때까지 안 한다)
+        self._tries = 0  # 이어서 모두 조용했던 횟수
+        self._probing = False
         # 답을 소리로 읽어 줄지 (기기 질문 화면의 음소거 버튼, 기본은 음소거). PC 음량은 건드리지 않는다.
         self.speaker = speech.Speaker(cfg)
         # 녹음하는 동안 나온 답은 마이크에 들어가지 않게 녹음이 끝난 뒤 읽는다
@@ -555,6 +713,8 @@ class Assistant:
     # --- 기기 -> PC ---
 
     def on_event(self, event: dict) -> None:
+        if isinstance(event.get("mic_pick"), str):
+            self._pick(event["mic_pick"][:120])
         action = event.get("ask")
         if action in ("start", "cancel", "new", "mute"):
             # 새로 말하기 시작하면 읽던 답은 끊는다 (마이크에 PC 소리가 들어가지 않게)
@@ -637,36 +797,18 @@ class Assistant:
     # 녹음하는 동안 잡고 있는다. 그동안은 장치 목록을 다시 읽지 않는다 (열린 녹음이 끊긴다)
     _audio_lock = threading.Lock()
 
-    def mic_available(self) -> tuple[bool, str]:
-        """(PC 마이크를 쓸 수 있는지, 못 쓰면 그 이유). main.py 가 30초마다 부른다. self.mic / self.mic_reason 도 바꾼다."""
-        if not self._audio_lock.acquire(blocking=False):
-            return self.mic, self.mic_reason  # 녹음 중이면 마이크가 있다
-        try:
-            self.mic, self.mic_reason = self._check_mic(refresh=True)
-        finally:
-            self._audio_lock.release()
-        return self.mic, self.mic_reason
+    def mic_status(self) -> dict:
+        """기기 상태줄의 마이크 표시와 마이크 고르기 창에 보낼 것 {"pc_mic": ...}"""
+        return {"state": self.mic_state, "name": self.mic_name[:40], "why": self.mic_reason[:120],
+                "list": [n[:40] for n in self._names[:8]], "pick": self._picked[:40]}
 
-    def _check_mic(self, refresh: bool) -> tuple[bool, str]:
-        import sounddevice as sd
-
-        # 방금 열지 못한 마이크는 잠시 없는 것으로 둔다 (장치는 보이는데 열리지 않을 때 버튼이 켜졌다 꺼졌다 하지 않게)
-        if time.monotonic() < getattr(self, "_mic_failed_until", 0.0):
-            return False, self.mic_reason
-        if self._mic_privacy_blocked():
-            return False, "Windows 가 마이크를 막았습니다\n설정 > 개인 정보 > 마이크에서\n데스크톱 앱 허용을 켜 주세요"
-        # 마이크가 없던 때만 다시 읽어 새로 꽂은 것을 찾는다. 있던 마이크가 빠지면 녹음할 때 실패로 알게 된다.
-        if refresh and not self.mic and self._stream is None:
-            # PortAudio 는 처음 켤 때 본 장치만 기억한다. 나중에 꽂거나 뺀 마이크를 알도록 다시 읽는다
-            self._refresh_devices(sd, "마이크 없음")
-        name = self.cfg.get("input") or None
-        try:
-            info = sd.query_devices(name, kind="input")
-        except Exception:  # 기본 마이크가 없거나 config 의 이름과 맞는 마이크가 없다
-            return False, f"'{name}' 마이크를 찾지 못했습니다" if name else "PC 에 마이크가 없습니다"
-        if info["max_input_channels"] < 1:
-            return False, "PC 에 마이크가 없습니다"
-        return True, ""
+    def _set_mic(self, state: str, name: str = "", why: str = "") -> None:
+        if state == "none" and self.mic_state != "none":
+            print(f"[assistant] PC 마이크 연결 불가: {why}".replace("\n", " "))
+        elif state == "ok" and (self.mic_state, self.mic_name) != ("ok", name):
+            print(f"[assistant] PC 마이크: {name}")
+        self.mic_state, self.mic_name = state, name
+        self.mic, self.mic_reason = state != "none", why
 
     @staticmethod
     def _mic_privacy_blocked() -> bool:
@@ -689,7 +831,6 @@ class Assistant:
 
     def _record(self, take: _Take) -> None:
         import numpy as np
-        import sounddevice as sd
 
         def fail(reason: str, no_mic: bool) -> None:
             print(f"[assistant] 녹음 실패: {reason}".replace("\n", " "))
@@ -697,24 +838,23 @@ class Assistant:
             take.chunks = []
             self._end_take(take)
             if no_mic:
-                self.mic, self.mic_reason = False, reason
+                self._set_mic("none", why=reason)
+                self._check_due = time.monotonic() + RECHECK_SECONDS
             if self.busy or not self.takes.empty():
                 # 앞 녹음의 답을 받는 중이면 그 화면을 덮지 않고 알림으로
                 self.pending_toast = reason
             else:
                 self._set("error", a=reason, mode=take.mode)
 
-        if not self._audio_lock.acquire(timeout=3):
-            # 앞 녹음의 마이크가 아직 닫히지 않았다
+        # 미리 들어 보는 중이면 끝날 때까지 기다린다 (마이크마다 2초 안쪽, 처음 열 때는 더)
+        if not self._audio_lock.acquire(timeout=10):
             fail("마이크가 아직 닫히는 중입니다\n잠시 뒤 다시 눌러 주세요", False)
             return
         with _Held(self._audio_lock):
-            ok, reason = self._check_mic(refresh=not self.mic)  # 없던 마이크를 방금 꽂았을 수 있다
-            if not ok:
-                fail(reason, True)
+            if self._mic_privacy_blocked():
+                fail(_PRIVACY_REASON, True)
                 return
-            self.mic, self.mic_reason = True, ""
-            order = self._mic_order(sd)
+            order = self._mic_order()
             silent: list[str] = []  # 열렸지만 소리가 오지 않은 마이크
             error = None  # 열지 못한 마이크의 마지막 오류
             lid = False  # 덮개가 닫혀 내장 마이크가 0 만 보냈다
@@ -723,12 +863,11 @@ class Assistant:
                     if silent or not take.recording.is_set():
                         break
                     # 하나도 열지 못했다. PortAudio 는 처음 켤 때 본 장치만 기억해서, 그 뒤 덮개를 여닫거나
-                    # 에어팟·아이폰 마이크가 붙고 빠지면 열리지 않는다 (Mac: Invalid Property Value). 목록을 다시 읽는다
+                    # 에어팟·아이폰 마이크가 붙고 빠지면 열리지 않는다 (Mac: Invalid Property Value).
+                    # 녹음 프로세스를 새로 띄워 목록을 다시 읽는다
                     print(f"[assistant] 마이크를 열지 못했습니다: {str(error)[:80]}")
-                    self._close_stream()
-                    if not self._refresh_devices(sd, "마이크를 열지 못함"):
-                        break
-                    order = self._mic_order(sd)
+                    self.mics.restart()
+                    order = self._mic_order()
                 for i, name in enumerate(order):
                     if not take.recording.is_set():
                         return
@@ -738,18 +877,14 @@ class Assistant:
                         self._set_rec(take, "preparing")
                         take.chunks = []
                     try:
-                        if self._stream is None or self._stream_name != name:
-                            self._close_stream()
-                            opened = time.monotonic()
-                            self._stream = self._open_stream(sd, name)
-                            self._stream_name = name
-                            print(f"[assistant] 마이크를 열었습니다 ({name}, {time.monotonic() - opened:.1f}초)")
-                        stream = self._stream
-                        stream.start()
-                    except Exception as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
+                        secs = self.mics.listen(name)
+                        if secs >= 1:
+                            print(f"[assistant] 마이크를 열었습니다 ({name}, {secs:.1f}초)")
+                    except OSError as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
                         print(f"[assistant] '{name}' 마이크를 열지 못했습니다: {str(e)[:80]}")
-                        self._close_stream()
                         error = e
+                        if name == self._fallback:
+                            self._save_fallback("")
                         continue
                     quiet = False
                     try:
@@ -758,16 +893,14 @@ class Assistant:
                         start = time.monotonic()
                         heard = False
                         while take.recording.is_set() and time.monotonic() - start < MAX_RECORD_SECONDS:
-                            # 기다리지 않고 읽는다: 마이크 권한을 묻는 중이거나 막혀 있으면 소리가 아예 오지 않아
-                            # read() 가 멈춰 버리고, 그러면 아무 말 없이 빈 녹음이 된다
-                            if stream.read_available < SAMPLE_RATE // 10:
+                            data = self.mics.read(0.05)
+                            if data is None:
+                                # 마이크 권한을 묻는 중이거나 막혀 있으면 소리가 아예 오지 않는다
                                 if not take.chunks and time.monotonic() - start > 2.0:
                                     quiet = True
                                     break
-                                time.sleep(0.02)
                                 continue
-                            data, _ = stream.read(SAMPLE_RATE // 10)
-                            take.chunks.append(data.copy())
+                            take.chunks.append(data)
                             heard = heard or bool(np.any(data))
                             # 진짜 마이크는 조용해도 잡음이 있다. 1.5초 동안 완전히 0 이면 음소거됐거나 막힌 것이다
                             if not heard and time.monotonic() - start > 1.5:
@@ -780,61 +913,70 @@ class Assistant:
                             print(f"[assistant] {MAX_RECORD_SECONDS}초가 지나 녹음을 끝냅니다")
                             threading.Thread(target=self._stop, daemon=True).start()
                     finally:
-                        self._halt(stream)
+                        self.mics.halt()
                     if not quiet:
-                        self._quiet_until.pop(name, None)
+                        take.mic = name
+                        self._mic_works(name, silent)
                         return
                     print(f"[assistant] '{name}' 에서 소리가 오지 않습니다")
-                    silent.append(name)
-                    self._quiet_until[name] = time.monotonic() + QUIET_MIC_SECONDS
-                    if sys.platform == "darwin" and i + 1 < len(order):
-                        # 도우미를 켠 뒤 다시 붙은 에어팟은 PortAudio 가 예전 장치로 알고 있어 0 만 온다.
-                        # 다음 녹음에서는 맨 뒤로 미루고, 녹음하지 않는 틈에 도우미를 다시 띄워 목록을 새로 읽는다
-                        self._refresh_devices(sd, f"'{name}' 마이크가 조용함")
-                    # 조용한 마이크는 닫는다 (다음 녹음은 다시 시스템 기본 마이크부터)
-                    self._close_stream()
+                    self._mic_silent(name, silent)
             if silent:
                 reason = _LID_CLOSED_REASON if lid and len(silent) == 1 else _NO_AUDIO_REASON
                 if len(silent) > 1:
                     reason = f"마이크 {len(silent)}개를 모두 써 봤지만\n" + reason
-                fail(reason, False)
+                fail(reason, True)
             elif take.recording.is_set():
-                self._mic_failed_until = time.monotonic() + 300
                 fail(f"PC 마이크를 열지 못했습니다\n{str(error or '마이크가 없습니다')[:60]}", True)
 
-    def _mic_order(self, sd) -> list[str]:
-        """녹음할 마이크 순서: config 의 input (없으면 시스템 기본 마이크), 그다음 이 PC 의 다른 마이크 모두.
-        블루투스 이어폰 마이크는 기본 마이크여도 뺀다 (_BLUETOOTH)."""
-        def input_names() -> list[str]:
-            devices = [d for d in sd.query_devices() if d["max_input_channels"] > 0]
-            try:
-                hostapi = sd.query_devices(kind="input")["hostapi"]
-                devices = [d for d in devices if d["hostapi"] == hostapi] or devices
-            except Exception:
-                pass
-            return [str(d["name"]) for d in devices]
+    def _mic_works(self, name: str, silent: list[str]) -> None:
+        """그 마이크에서 소리가 왔다. 앞 마이크가 조용해서 대신 쓴 것이면 빠질 때까지 먼저 쓴다."""
+        self._quiet_until.pop(name, None)
+        if silent and name != self._fallback:
+            self._save_fallback(name)
+        self._set_mic("ok", name)
+        self._tries = 0
+        self._check_due = None
 
-        names = input_names()
+    def _mic_silent(self, name: str, silent: list[str]) -> None:
+        silent.append(name)
+        self._quiet_until[name] = time.monotonic() + QUIET_MIC_SECONDS
+        if name == self._fallback:
+            self._save_fallback("")
+        # 다시 붙은 에어팟처럼 녹음 프로세스가 예전 장치로 알고 있을 수 있다. 다음에 들어 볼 때는 새로 띄운다
+        self._fresh = False
+
+    def _bt(self, name: str) -> bool:
+        """Mac 에서 쓰지 않는 블루투스 마이크인지. Windows 는 시스템에서 고른 마이크를 그대로 따른다."""
+        return sys.platform == "darwin" and (name in self._bt_names or _bluetooth(name))
+
+    def _mic_order(self) -> list[str]:
+        """녹음할 마이크 순서: 기기에서 고른 마이크, 앞서 대신 쓴 마이크, config 의 input (없으면 시스템 기본 마이크),
+        그다음 이 PC 의 다른 마이크 모두. Mac 은 블루투스 이어폰 마이크를 기본 마이크여도 뺀다 (_bt)."""
+        try:
+            names, default = self.mics.devices()
+        except OSError as e:
+            print(f"[assistant] 마이크 목록을 읽지 못했습니다: {e}")
+            names, default = [], ""
         wanted = self.cfg.get("input", "")
         if wanted:
             first = next((n for n in names if wanted.lower() in n.lower()), None)
         else:
             full = _system_default_input()
             first = _match_input(full, names) if full else None
-            if full and first is None and full != self._unmatched and not _bluetooth(full):
-                # 도우미를 켠 뒤 연결된 마이크다 (에어팟이면 어차피 쓰지 않으니 다시 읽지 않는다)
-                if self._refresh_devices(sd, f"기본 마이크 '{full}'"):
-                    names = input_names()
-                    first = _match_input(full, names)
-                    if first is None:
-                        # 다시 읽어도 없다 (이름이 PortAudio 와 다르게 나온다). 녹음마다 다시 읽지 않는다
-                        print(f"[assistant] 기본 마이크 '{full}' 를 장치 목록에서 찾지 못해 기본 장치로 엽니다")
-                        self._unmatched = full
-            if first is None:
+            if full and first is None and full != self._unmatched and not self._bt(full):
+                # 녹음 프로세스를 띄운 뒤 연결된 마이크다 (에어팟이면 어차피 쓰지 않으니 다시 읽지 않는다)
+                print(f"[assistant] 새 기본 마이크 '{full}' 를 찾으려고 녹음 프로세스를 새로 띄웁니다")
+                self.mics.restart()
                 try:
-                    first = str(sd.query_devices(kind="input")["name"])
-                except Exception:
-                    first = None
+                    names, default = self.mics.devices()
+                except OSError:
+                    names, default = [], ""
+                first = _match_input(full, names)
+                if first is None:
+                    # 다시 읽어도 없다 (이름이 PortAudio 와 다르게 나온다). 녹음마다 다시 읽지 않는다
+                    print(f"[assistant] 기본 마이크 '{full}' 를 장치 목록에서 찾지 못해 기본 장치로 엽니다")
+                    self._unmatched = full
+            first = first or default or None
         order = [first] if first else []
         # 진짜 기본 마이크를 앞에 두었으면 그것을 가리키기만 하는 별칭 장치는 또 시도하지 않는다
         real = bool(first) and not any(a in first.lower() for a in _ALIASES)
@@ -843,69 +985,143 @@ class Assistant:
             if name in order or any(v in lower for v in _VIRTUAL) or (real and any(a in lower for a in _ALIASES)):
                 continue
             order.append(name)
-        order = [n for n in order if not _bluetooth(n)]
+        order = [n for n in order if not self._bt(n)]
+        self._names = [n for n in order if not any(a in n.lower() for a in _ALIASES)] or order
+        if self._fallback and self._fallback not in order:
+            print(f"[assistant] 대신 쓰던 '{self._fallback}' 마이크가 빠져 기본 마이크로 돌아갑니다")
+            self._save_fallback("")
+        # 고른 마이크, 앞서 기본 마이크가 조용해서 대신 쓴 마이크 순서로 앞에 둔다 (녹음마다 바꾼다는 알림이 뜨지 않게)
+        for name in (self._fallback, self._picked):
+            if name in order:
+                order.remove(name)
+                order.insert(0, name)
         # 얼마 전 소리가 오지 않은 마이크는 맨 뒤로 (다른 마이크도 모두 조용할 때만 써 본다)
         now = time.monotonic()
         quiet = [n for n in order if self._quiet_until.get(n, 0.0) > now]
         return [n for n in order if n not in quiet] + quiet
 
-    def _open_stream(self, sd, name: str):
-        index = _input_index(sd, name)
-        if index is None:  # None 을 넘기면 PortAudio 가 다른 마이크(처음 본 기본 마이크)를 연다
-            raise OSError(f"'{name}' 마이크가 장치 목록에 없습니다")
-        stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=index)
-        self._opened = True
-        return stream
+    def _save_fallback(self, name: str) -> None:
+        """대신 쓸 마이크를 정한다 (빈 글이면 지운다). 도우미를 다시 켜도 이어 쓰게 파일에 적는다."""
+        self._fallback = name
+        if name:
+            print(f"[assistant] 앞으로 '{name}' 마이크를 먼저 씁니다 (빠질 때까지)")
+        _write_text(FALLBACK_MIC_FILE, name)
 
-    def _refresh_devices(self, sd, why: str) -> bool:
-        """PortAudio 의 장치 목록을 새로 읽는다. 읽었으면 True.
-        마이크를 한 번이라도 연 뒤에 다시 읽으면 도우미가 끝날 때까지 어느 마이크에서도 소리가 오지 않는다
-        (Mac 에서 확인). 그때는 바로 읽지 않고, 녹음하지 않는 틈에 도우미를 다시 띄운다 (pending).
-        Windows 는 그런 일을 본 적이 없고 다시 띄우면 트레이 앱이 도우미를 놓치므로 전처럼 바로 읽는다."""
-        if self.other_audio():  # 다시 읽으면 열린 소리 스트림이 끊긴다
+    def _pick(self, name: str) -> None:
+        """기기의 마이크 고르기 창에서 고른 마이크 (빈 글이면 자동). 바로 다시 들어 보고 상태를 알린다."""
+        if name == self._picked:
+            return
+        print(f"[assistant] 기기에서 마이크를 골랐습니다: {name or '자동'}")
+        self._picked = name
+        _write_text(PICKED_MIC_FILE, name)
+        if name:
+            self._quiet_until.pop(name, None)
+        self._tries = 0
+        self._check_due = time.monotonic()
+        self._watched = 0.0  # 2초를 기다리지 않고 바로 들어 본다
+
+    # --- 쉬는 틈에 마이크 미리 들어 보기 ---
+
+    def _device_signature(self) -> tuple:
+        """마이크 장치가 바뀌었는지 알아보는 값. Mac 은 마이크 목록과 기본 마이크, Windows 는 기본 마이크."""
+        if sys.platform == "darwin":
+            inputs = _mac_inputs()
+            self._bt_names = {n for n, (_, kind) in inputs.items() if kind in _MAC_BLUETOOTH}
+            return _mac_default_input(), tuple(sorted(inputs))
+        return (_system_default_input(),)
+
+    def _watch_mics(self) -> None:
+        """2초마다: Mac 기본 입력이 에어팟이면 MacBook 마이크로 되돌리고, 마이크 장치가 바뀌었거나 다시 볼 때가 되었으면
+        녹음하지 않는 틈에 미리 들어 본다 (_probe_round). 그러면 녹음 버튼을 누르자마자 소리가 오는 마이크로 녹음한다."""
+        now = time.monotonic()
+        if now - self._watched < 2:
+            return
+        self._watched = now
+        if sys.platform == "darwin":
+            moved = _mac_use_builtin_input()
+            if moved:
+                print(f"[assistant] 기본 입력이 '{moved}' 로 바뀌어 MacBook 마이크로 되돌렸습니다")
+        signature = self._device_signature()
+        if signature != self._signature:
+            if self._signature is not None:
+                print("[assistant] 마이크 장치가 바뀌어 다시 들어 봅니다")
+                self._fresh = False
+            self._signature = signature
+            self._tries = 0
+            self._check_due = now
+        if self._check_due is None or now < self._check_due or self._probing or self.recording:
+            return
+        self._probing = True
+        threading.Thread(target=self._probe_round, daemon=True).start()
+
+    def _probe_round(self) -> None:
+        """마이크를 순서대로 잠깐 들어 보고 소리가 오는 첫 마이크를 쓸 마이크로 정한다.
+        모두 조용하면 PROBE_GAP 초 뒤 다시, PROBE_TRIES 번이면 연결 불가로 알리고 RECHECK_SECONDS 마다 다시 본다."""
+        try:
+            if not self._audio_lock.acquire(blocking=False):  # 녹음 중
+                self._check_due = time.monotonic() + PROBE_GAP
+                return
+            with _Held(self._audio_lock):
+                if self._mic_privacy_blocked():
+                    self._set_mic("none", why=_PRIVACY_REASON)
+                    self._check_due = time.monotonic() + RECHECK_SECONDS
+                    return
+                if self._tries == 0 and self.mic_state != "none":
+                    self._set_mic("checking")
+                if not self._fresh:
+                    self.mics.restart()
+                    self._fresh = True
+                order = self._mic_order()
+                silent: list[str] = []
+                lid = False
+                for name in order:
+                    if self.take is not None:  # 녹음을 시작했다. 녹음이 마이크 상태를 정한다
+                        return
+                    heard = self._probe(name)
+                    if heard:
+                        self._mic_works(name, silent)
+                        return
+                    if heard is False:
+                        lid = lid or ("macbook" in name.lower() and _lid_closed())
+                        self._mic_silent(name, silent)
+                self._tries += 1
+                if self._tries < PROBE_TRIES:
+                    print(f"[assistant] 소리가 오는 마이크가 없어 {PROBE_GAP}초 뒤 다시 들어 봅니다 ({self._tries}/{PROBE_TRIES})")
+                    self._check_due = time.monotonic() + PROBE_GAP
+                    return
+                if not order:
+                    why = "PC 에 마이크가 없습니다"
+                elif not silent:
+                    why = "PC 마이크를 열지 못했습니다"
+                else:
+                    why = _LID_CLOSED_REASON if lid and len(silent) == 1 else _NO_AUDIO_REASON
+                self._set_mic("none", why=why)
+                self._check_due = time.monotonic() + RECHECK_SECONDS
+        finally:
+            self._probing = False
+
+    def _probe(self, name: str) -> bool | None:
+        """잠깐 들어 본다: 소리가 오면 True, 조용하면 False, 열지 못하면 None. 소리가 오면 바로 멈춘다."""
+        import numpy as np
+
+        try:
+            self.mics.listen(name)
+        except OSError as e:
+            print(f"[assistant] '{name}' 마이크를 열지 못했습니다: {str(e)[:80]}")
+            return None
+        try:
+            start = time.monotonic()
+            while time.monotonic() - start < 2.0:
+                data = self.mics.read(0.05)
+                if data is None:
+                    continue
+                if np.any(data):
+                    return True
+                if time.monotonic() - start > 1.5:
+                    break
             return False
-        if not self._opened or sys.platform != "darwin":
-            self._close_stream()
-            try:
-                sd._terminate()
-                sd._initialize()
-                return True
-            except Exception as e:
-                print(f"[assistant] 오디오 장치 목록을 다시 읽지 못했습니다: {e}")
-                return False
-        # 같은 까닭으로 다시 띄운 지 얼마 안 됐으면 또 띄우지 않는다 (다시 띄워도 그대로인 장치)
-        at, _, before = os.environ.get(_RESTARTED_ENV, "").partition("|")
-        if before == why and time.time() - float(at or 0) < RESTART_AGAIN_SECONDS:
-            return False
-        if self.restart_for is None:
-            print(f"[assistant] 장치 목록을 새로 읽어야 합니다 ({why}). 녹음하지 않는 틈에 도우미를 다시 띄웁니다")
-            self.restart_for = why
-        return False
-
-    def _halt(self, stream) -> None:
-        """녹음을 멈춘다. Mac 에서 stream.stop() 이 돌아오지 않아 다음 녹음이 모두 막힌 적이 있다.
-        abort() 는 쌓인 소리도 버린다. 1초 안에 안 끝나면 그 스트림은 버리고 다음에 새로 연다."""
-        done = threading.Event()
-
-        def abort() -> None:
-            try:
-                stream.abort()
-            except Exception:
-                pass
-            done.set()
-
-        threading.Thread(target=abort, daemon=True).start()
-        if not done.wait(1.0):
-            print("[assistant] 마이크가 바로 멈추지 않아 다음에는 새로 엽니다")
-            self._stream = None
-
-    def _close_stream(self) -> None:
-        stream, self._stream = self._stream, None
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception:
-                pass
+        finally:
+            self.mics.halt()
 
     def _stop(self) -> None:
         """녹음을 끝내고 줄에 넣는다. 처리는 _work 가 차례대로 한다 (그동안 새로 녹음할 수 있다)."""
@@ -1051,7 +1267,11 @@ class Assistant:
                     print(f"[assistant] 조용한 소리에서 지어낸 말로 보여 버립니다: {question}")
                     question = ""
                 if not question:
-                    hint = "마이크 가까이에서\n다시 말해 주세요" if peak < QUIET_PEAK else "다시 말해 주세요"
+                    hint = "다시 말해 주세요"
+                    if peak < QUIET_PEAK:
+                        # 소리가 너무 작았다: 어느 마이크인지 알려 주고 바꿀 곳을 안내한다
+                        hint = (f"'{take.mic[:16]}' 소리가 작습니다\n가까이에서 말하거나 위의\n마이크 표시를 눌러 바꾸세요"
+                                if take.mic else "마이크 가까이에서\n다시 말해 주세요")
                     if take.dictate:
                         self._set("idle", mode="dictate")
                         self.pending_toast = f"알아듣지 못했습니다\n{hint}"
@@ -1121,9 +1341,8 @@ class Assistant:
 
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다. 오래 안 쓰면 CLI 를 내린다."""
-        self._keep_builtin_input()
+        self._watch_mics()
         self._unload_if_idle()
-        self._restart_if_wanted()
         state = self._outgoing()
         if state is None or state == self.sent:
             return None
@@ -1142,25 +1361,6 @@ class Assistant:
         waiting = self.takes.qsize()
         return {**self.state, "queued": waiting} if self.state and waiting else self.state
 
-    def _keep_builtin_input(self) -> None:
-        """Mac: 2초마다 기본 입력을 보고, 에어팟이면 MacBook 마이크로 되돌린다 (_mac_use_builtin_input)."""
-        if sys.platform != "darwin" or time.monotonic() - self._input_checked < 2:
-            return
-        self._input_checked = time.monotonic()
-        moved = _mac_use_builtin_input()
-        if moved:
-            print(f"[assistant] 기본 입력이 '{moved}' 로 바뀌어 MacBook 마이크로 되돌렸습니다")
-
-    def _restart_if_wanted(self) -> None:
-        """장치 목록을 새로 읽으려고 도우미를 다시 띄운다. 녹음·받아 적기 중이 아니고, 결과를 기기에 보낼 틈이 지났을 때."""
-        if not self.restart_for or self.restart is None or self.busy or self.recording or not self.takes.empty():
-            return
-        if self._outgoing() != self.sent or self.pending_toast or time.monotonic() - self.last_used < 5:
-            return
-        os.environ[_RESTARTED_ENV] = f"{time.time():.0f}|{self.restart_for}"
-        print(f"[assistant] 장치 목록을 새로 읽으려고 도우미를 다시 띄웁니다 ({self.restart_for})")
-        self.restart()
-
     def _unload_if_idle(self) -> None:
         if not self.last_used or self.busy or self.recording or not self.takes.empty():
             return
@@ -1175,7 +1375,7 @@ class Assistant:
             self.model = None
             if self._audio_lock.acquire(blocking=False):
                 try:
-                    self._close_stream()
+                    self.mics.stop()  # 녹음 프로세스를 끈다 (다음 녹음 때 다시 띄운다)
                 finally:
                     self._audio_lock.release()
             self.last_used = 0.0
@@ -1189,7 +1389,7 @@ class Assistant:
         self.spoken_later = None
         self.speaker.stop()
         with self._audio_lock:
-            self._close_stream()
+            self.mics.stop()
         with self.lock:
             if self.session:
                 self.session.close()

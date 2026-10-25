@@ -467,8 +467,6 @@ def main() -> None:
     typer.configure(cfg.get("keywords"))  # config.toml 의 키워드 버튼 (없으면 기본 목록)
     keys = typer.Typer()
     ask = assistant.Assistant(cfg.get("assistant", {}), cfg.get("storage", {}).get("model_dir", ""))
-    ask.other_audio = lambda: getattr(sink, "stream", None) is not None
-    ask.restart = restart  # 마이크를 연 뒤 장치 목록을 새로 읽어야 할 때
     # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
     sessions = orca.Orca(cfg.get("orca", {}))
     ask.orca = sessions
@@ -494,6 +492,7 @@ def main() -> None:
     frames.mirror_sink = view.on_frame
     first = True
     sent_mic = True
+    sent_mic_status = None
     wifi_tried = time.time()
     collector = Collector(cfg)
     watchdog = Watchdog()
@@ -520,9 +519,9 @@ def main() -> None:
                 collector.start()
                 message = collector.take(wait=2)
                 # PC 마이크를 쓸 수 있는지 (없으면 기기의 말하기 버튼이 꺼진다)
-                if hasattr(ask, "mic_available"):
-                    ask.mic_available()
                 message["ask_mic"] = ask.mic
+                # 기기 상태줄의 PC 마이크 표시와 마이크 고르기 창
+                message["pc_mic"] = sent_mic_status = ask.mic_status()
                 # 키워드 버튼 이름 (기기가 바뀐 것만 저장하고 단축키 화면·ORCA 팝업을 다시 만든다)
                 message["keywords"] = typer.ITEMS
                 # 기기 버전을 아직 모르면 다시 알려 달라고 한다 (도우미만 다시 켜면 기기는 같은 연결로 보고 알려 주지 않는다)
@@ -674,6 +673,8 @@ def main() -> None:
                         extra["ask"] = answer
                     if ask.mic != sent_mic:
                         extra["ask_mic"] = sent_mic = ask.mic
+                    if ask.mic_status() != sent_mic_status:
+                        extra["pc_mic"] = sent_mic_status = ask.mic_status()
                     extra.update(view.pending() or {})
                     if extra:
                         try:
