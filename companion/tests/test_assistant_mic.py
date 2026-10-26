@@ -80,6 +80,7 @@ def mic_files(tmp_path, monkeypatch):
     # 이 Mac 의 설정을 건드리지 않게
     monkeypatch.setattr(assistant, "FALLBACK_MIC_FILE", tmp_path / "fallback_mic.txt")
     monkeypatch.setattr(assistant, "PICKED_MIC_FILE", tmp_path / "picked_mic.txt")
+    monkeypatch.setattr(assistant, "PHONE_MICS_FILE", tmp_path / "phone_mics.txt")
     return tmp_path
 
 
@@ -94,7 +95,7 @@ def make(monkeypatch, sd, platform="darwin", default="USB 마이크"):
     monkeypatch.setattr(assistant, "_mac_default_input", lambda: default)
     monkeypatch.setattr(assistant, "_mac_inputs", lambda: {d["name"]: (i, "usb ") for i, d in enumerate(sd.devices)})
     monkeypatch.setattr(assistant, "_lid_closed", lambda: False)
-    monkeypatch.setattr(assistant, "_mac_use_builtin_input", lambda: None)  # 시험이 이 Mac 의 기본 입력을 바꾸지 않게
+    monkeypatch.setattr(assistant, "_mac_use_builtin_input", lambda allowed="": None)  # 시험이 이 Mac 의 기본 입력을 바꾸지 않게
     a = assistant.Assistant({})
     a.mics = assistant.MicClient(lambda on: LocalMic(sd, on))
     return a
@@ -290,7 +291,7 @@ def test_watch_probes_when_devices_change(fake, monkeypatch):
 def test_airpods_default_input_switched_back_every_2_seconds(fake, monkeypatch):
     sd, a = fake
     calls = []
-    monkeypatch.setattr(assistant, "_mac_use_builtin_input", lambda: calls.append(1) and None)
+    monkeypatch.setattr(assistant, "_mac_use_builtin_input", lambda allowed="": calls.append(allowed) and None)
     monkeypatch.setattr(a, "_probe_round", lambda: setattr(a, "_probing", False))
     a.pending()
     a.pending()  # 2초 안에는 다시 보지 않는다
@@ -384,3 +385,77 @@ def test_real_recorder_process_answers():
         assert isinstance(names, list) and isinstance(default, str)
     finally:
         mics.stop()
+
+
+@pytest.fixture
+def phone(monkeypatch):
+    # MacBook 마이크는 덮개가 닫혀 조용하고 아이폰 마이크만 소리가 온다
+    sd = FakeSd(["MacBook Pro 마이크", "‘내 폰’ 마이크"], default=0, loud=["‘내 폰’ 마이크"])
+    a = make(monkeypatch, sd, default="MacBook Pro 마이크")
+    monkeypatch.setattr(assistant, "_mac_inputs", lambda: {"MacBook Pro 마이크": (1, "bltn"), "‘내 폰’ 마이크": (2, "ccwl")})
+    a._device_signature()
+    return sd, a
+
+
+def test_phone_mic_not_used_until_picked(phone, fallback_file):
+    sd, a = phone
+    assert a._mic_order() == ["MacBook Pro 마이크"]
+    take = record(a, 2.2)
+    assert take.failed and take.mic == ""  # 조용한 MacBook 마이크만 써 보고 아이폰은 열지 않는다
+    assert not fallback_file.exists()
+    status = a.mic_status()
+    assert "‘내 폰’ 마이크" in status["list"] and status["limited"] == ["‘내 폰’ 마이크"] and "left" not in status
+
+
+def test_picked_phone_mic_used_for_30_minutes(phone, mic_files, monkeypatch):
+    sd, a = phone
+    a.on_event({"mic_pick": "‘내 폰’ 마이크"})
+    assert a._mic_order()[0] == "‘내 폰’ 마이크"
+    assert a.mic_status()["left"] == 30
+    assert record(a, 1.0).mic == "‘내 폰’ 마이크"
+    monkeypatch.setattr(a, "_probe_round", lambda: setattr(a, "_probing", False))
+    a._phone_until = time.monotonic() - 1  # 30분이 지났다
+    a._watched -= 2
+    a._watch_mics()
+    assert a._picked == "" and not (mic_files / "picked_mic.txt").exists()
+    assert "30분" in a.pending_toast and not a._fresh  # 녹음 프로세스를 새로 띄워 아이폰 마이크를 닫는다
+    assert a._mic_order() == ["MacBook Pro 마이크"]
+
+
+def test_phone_pick_left_from_before_restart_is_dropped_quietly(phone, mic_files, monkeypatch):
+    sd, a = phone
+    (mic_files / "picked_mic.txt").write_text("‘내 폰’ 마이크", encoding="utf-8")
+    a._picked = "‘내 폰’ 마이크"  # 도우미를 다시 켜면 허락은 남지 않는다
+    monkeypatch.setattr(a, "_probe_round", lambda: setattr(a, "_probing", False))
+    a._watch_mics()
+    assert a._picked == "" and not a.pending_toast
+    assert "‘내 폰’ 마이크" not in a._mic_order()
+
+
+def test_phone_default_input_kept_only_while_allowed(phone, monkeypatch):
+    sd, a = phone
+    calls = []
+    monkeypatch.setattr(assistant, "_mac_use_builtin_input", lambda allowed="": calls.append(allowed) and None)
+    monkeypatch.setattr(a, "_probe_round", lambda: setattr(a, "_probing", False))
+    a._watch_mics()
+    a.on_event({"mic_pick": "‘내 폰’ 마이크"})
+    a._watch_mics()
+    assert calls == ["", "‘내 폰’ 마이크"]
+
+
+def test_phone_mic_remembered_while_its_connection_is_unknown(phone, mic_files, monkeypatch):
+    sd, a = phone
+    assert "‘내 폰’ 마이크" in (mic_files / "phone_mics.txt").read_text(encoding="utf-8")
+    # 다시 붙는 동안은 연결 방식이 비어 있다
+    monkeypatch.setattr(assistant, "_mac_inputs", lambda: {"MacBook Pro 마이크": (1, "bltn"), "‘내 폰’ 마이크": (2, "\0\0\0\0")})
+    b = make(monkeypatch, sd, default="MacBook Pro 마이크")
+    monkeypatch.setattr(assistant, "_mac_inputs", lambda: {"MacBook Pro 마이크": (1, "bltn"), "‘내 폰’ 마이크": (2, "\0\0\0\0")})
+    assert b._mic_order() == ["MacBook Pro 마이크"]
+
+
+def test_phone_found_just_before_choosing(fake, monkeypatch):
+    sd, a = fake
+    sd.devices.append({"name": "새 폰 마이크", "max_input_channels": 1, "hostapi": 0})
+    a.mics.restart()
+    monkeypatch.setattr(assistant, "_mac_inputs", lambda: {"USB 마이크": (0, "usb "), "새 폰 마이크": (3, "ccwl")})
+    assert "새 폰 마이크" not in a._mic_order()  # 장치가 바뀐 것을 2초마다 보기 전에 녹음해도

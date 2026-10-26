@@ -55,7 +55,8 @@ int BatteryLevel::update(int mv, bool charging, bool full, uint32_t now) {
     resume_pct_ = -1;
   } else if (charging != was_charging_) {
     // 꽂은 순간: 바로 앞 배터리 전압과 잠시 뒤 전압의 차이가 충전 전류로 오른 만큼이다
-    measuring_ = charging && battery_mv_ > 0;
+    measuring_ = charging && battery_mv_ > 0 && !skip_measure_;
+    skip_measure_ = false;
     before_mv_ = battery_mv_;
     plug_ms_ = now;
   }

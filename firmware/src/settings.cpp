@@ -34,6 +34,9 @@ static bool auto_rotate = true;
 static bool rotate_restore = true;
 static bool mic_sound = true;
 static bool auto_dim = true;
+// 오래 안 쓰면 깊은 잠(꺼짐). 배터리 절약(화면 어둡게·끄기)과 따로 둔다. 충전기는 전압으로만 짐작해서
+// 꽂혀 있어도 배터리로 잘못 알 수 있어 기본은 끔
+static bool auto_off = false;
 static bool limit_alerts = true;
 static bool sd_photos = true;
 static bool sd_videos = true;
@@ -75,7 +78,7 @@ static lv_obj_t *wifi_value, *ble_value, *spk_value, *battery_value, *sd_value;
 static lv_obj_t *bright_slider, *bright_value;
 static lv_obj_t *mic_sw;
 static void (*mic_handler)(bool on) = nullptr;
-static lv_obj_t *rotate_sw, *restore_sw, *sound_sw, *mirror_sw, *dim_sw, *alert_sw, *sd_sw, *sd_video_sw;
+static lv_obj_t *rotate_sw, *restore_sw, *sound_sw, *mirror_sw, *dim_sw, *off_sw, *alert_sw, *sd_sw, *sd_video_sw;
 static lv_obj_t *saver_lbl, *cam_value;
 static lv_obj_t *wifi_status, *wifi_ip, *wifi_signal, *wifi_list;
 static lv_obj_t *ble_status, *ble_none;
@@ -134,6 +137,7 @@ void settings_init() {
   rotate_restore = prefs.getBool("rot_restore", true);
   mic_sound = prefs.getBool("mic_sound", true);
   auto_dim = prefs.getBool("auto_dim", true);
+  auto_off = prefs.getBool("auto_off", false);
   limit_alerts = prefs.getBool("lim_alert", true);
   sd_photos = prefs.getBool("sd_photos", true);
   sd_videos = prefs.getBool("sd_videos", true);
@@ -204,6 +208,10 @@ bool settings_mic_sound() {
 
 bool settings_auto_dim() {
   return auto_dim;
+}
+
+bool settings_auto_off() {
+  return auto_off;
 }
 
 bool settings_limit_alerts() {
@@ -459,6 +467,11 @@ static lv_obj_t *add_menu(lv_obj_t *group, const char *symbol, uint32_t color, c
 static void dim_changed(lv_event_t *e) {
   auto_dim = lv_obj_has_state(dim_sw, LV_STATE_CHECKED);
   prefs.putBool("auto_dim", auto_dim);
+}
+
+static void off_changed(lv_event_t *e) {
+  auto_off = lv_obj_has_state(off_sw, LV_STATE_CHECKED);
+  prefs.putBool("auto_off", auto_off);
 }
 
 static void alert_changed(lv_event_t *e) {
@@ -818,7 +831,8 @@ static void build_battery(lv_obj_t *parent) {
   bat_state = add_info(p, "전원");
   bat_left = add_info(p, "남은 시간");
   dim_sw = add_switch(add_row(p, "배터리 절약", "1분 어둡게, 3분 끄기"), auto_dim, dim_changed);
-  add_note(p, "배터리 절약은 배터리로만 쓸 때 동작합니다. 잔량은 전압으로 짐작하며, 충전이 끝난 채 USB에 20분 꽂혀 있으면 스스로 보정합니다. 배터리로 쓸 때는 잔량이 줄기만 하고, 충전 중에는 늘기만 합니다.");
+  off_sw = add_switch(add_row(p, "자동 꺼짐", "20분 안 쓰면 끄기"), auto_off, off_changed);
+  add_note(p, "배터리 절약은 화면만 어둡게 하고 끕니다. 자동 꺼짐을 켜면 배터리로만 쓸 때 20분 동안 안 만지면 기기가 꺼지고, BOOT 버튼으로 켭니다. 충전기는 꽂고 뺄 때의 전압 변화로 알아봐서 놓칠 수 있으니, 전원에 꽂아 두고 쓰면 자동 꺼짐은 끄세요. 배터리 절약은 배터리로만 쓸 때 동작합니다. 잔량은 전압으로 짐작하며, 충전이 끝난 채 USB에 20분 꽂혀 있으면 스스로 보정합니다. 배터리로 쓸 때는 잔량이 줄기만 하고, 충전 중에는 늘기만 합니다.");
 }
 
 static void build_camera(lv_obj_t *parent) {
@@ -1065,7 +1079,8 @@ static void refresh_live() {
         snprintf(buf, sizeof(buf), "%d%% (%.2fV)", pct, battery_mv() / 1000.0f);
         set_text(bat_level, buf);
         set_text(bat_state, battery_charging()           ? "충전 중"
-                            : battery_external_power() ? "USB (충전 완료)"
+                            : battery_full()           ? "USB (충전 완료)"
+                            : battery_external_power() ? "USB (전원 확인 중)"
                                                        : "배터리 사용 중");
         int left = battery_minutes_left();
         if (left >= 0) {
@@ -1166,6 +1181,7 @@ void settings_refresh() {
   set_checked(rotate_sw, auto_rotate);
   set_checked(restore_sw, rotate_restore);
   set_checked(dim_sw, auto_dim);
+  set_checked(off_sw, auto_off);
   set_checked(alert_sw, limit_alerts);
   set_checked(sound_sw, mic_sound);
   set_checked(sd_sw, sd_photos);

@@ -14,6 +14,8 @@ static I2SClass i2s;
 static WiFiUDP udp;
 
 static volatile bool on = false;
+static volatile bool ask = false;
+static volatile bool present = false;
 static volatile uint8_t level = 0;
 static volatile uint32_t target = 0;
 
@@ -34,16 +36,53 @@ static bool open_i2s() {
   return true;
 }
 
+// 한 묶음(20ms) 안에서 값이 움직였는지. 진짜 마이크는 조용해도 잡음으로 몇 칸씩 움직인다
+#define MIC_FLAT_SPAN 4
+// 이만큼 이어서 값이 그대로면 마이크가 빠졌다고 본다 (1초)
+#define MIC_FLAT_FRAMES 50
+
+static void set_present(bool value) {
+  if (value == present) return;
+  present = value;
+  Serial.printf("[mic] device mic %s\n", value ? "found" : "missing");
+}
+
+// 켤 때 한 번: 마이크를 0.6초 열어 보고 닫는다 (INMP441 은 켜고 수십 ms 뒤부터 소리를 낸다)
+static void probe(int32_t *raw) {
+  if (!open_i2s()) return;
+  bool moved = false;
+  for (int i = 0; i < 30 && !moved; i++) {
+    if (i < 10) {
+      i2s.readBytes((char *)raw, MIC_FRAME_SAMPLES * 4);
+      continue;
+    }
+    if (i2s.readBytes((char *)raw, MIC_FRAME_SAMPLES * 4) != MIC_FRAME_SAMPLES * 4) continue;
+    int32_t lo = INT32_MAX, hi = INT32_MIN;
+    for (int j = 0; j < MIC_FRAME_SAMPLES; j++) {
+      int32_t s = raw[j] >> 14;
+      lo = min(lo, s);
+      hi = max(hi, s);
+    }
+    moved = hi - lo > MIC_FLAT_SPAN;
+  }
+  i2s.end();
+  set_present(moved);
+  if (!moved) Serial.println("[mic] device mic missing");
+}
+
 static void mic_task(void *) {
   static int32_t raw[MIC_FRAME_SAMPLES];
   static Packet packet;
   static uint8_t trailer[NET_UDP_TRAILER];
   uint32_t seq = 0;
   bool opened = false;
+  int flat = 0;  // 이어서 값이 그대로였던 묶음 수
 
+  probe(raw);
   for (;;) {
-    if (on != opened) {
-      if (on) {
+    bool want = on || ask;
+    if (want != opened) {
+      if (want) {
         opened = open_i2s();
         if (!opened) {
           vTaskDelay(pdMS_TO_TICKS(1000));
@@ -53,6 +92,7 @@ static void mic_task(void *) {
         i2s.end();
         opened = false;
         level = 0;
+        flat = 0;
       }
     }
     if (!opened) {
@@ -60,20 +100,28 @@ static void mic_task(void *) {
       continue;
     }
     size_t got = i2s.readBytes((char *)raw, sizeof(raw));
-    if (got != sizeof(raw) || !on) {
+    if (got != sizeof(raw) || !(on || ask)) {
       level = 0;
       if (got == 0) vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
 
     // INMP441 은 32비트 칸에 24비트 값을 담아 보낸다. 16비트로 줄이면서 소리를 키운다.
-    int32_t peak = 0;
+    int32_t peak = 0, lo = INT32_MAX, hi = INT32_MIN;
     for (int i = 0; i < MIC_FRAME_SAMPLES; i++) {
       int32_t s = constrain(raw[i] >> 14, -32768, 32767);
       packet.pcm[i] = s;
       if (abs(s) > peak) peak = abs(s);
+      lo = min(lo, s);
+      hi = max(hi, s);
     }
     level = peak * 100 / 32768;
+    if (hi - lo > MIC_FLAT_SPAN) {
+      flat = 0;
+      set_present(true);
+    } else if (++flat >= MIC_FLAT_FRAMES) {
+      set_present(false);
+    }
 
     packet.seq = seq++;
     switch (link_active()) {
@@ -109,6 +157,14 @@ void mic_set_on(bool value) {
 
 bool mic_is_on() {
   return on;
+}
+
+void mic_set_ask(bool value) {
+  ask = value;
+}
+
+bool mic_present() {
+  return present;
 }
 
 uint8_t mic_level() {

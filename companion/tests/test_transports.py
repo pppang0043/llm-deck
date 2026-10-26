@@ -138,3 +138,31 @@ def test_wifi_never_blindly_replays_camera_toggle(monkeypatch, failure):
     with pytest.raises(OSError):
         w.send({"camera": "record"})
     assert len(calls) == (3 if failure == "full" else 1)
+
+
+def test_wifi_tcp_keeps_reading_when_signature_comes_alone():
+    # 2026-10-26: 기기가 서명만 먼저 보내면 도우미가 바로 끊어 Wi-Fi 미러링 화면이 오지 않았다
+    import socket
+    import threading
+    import time
+
+    from transports import auth
+    from transports.wifi import WifiTransport
+
+    events = []
+    w = WifiTransport({}, lambda *a: None, on_event=events.append)
+    w.key = b"k" * 32
+    pc, device = socket.socketpair()
+    reader = threading.Thread(target=w._read_stream, args=(pc,), daemon=True)
+    reader.start()
+    challenge = device.recv(16)
+    device.sendall(b"\xa5\x5a" + bytes([auth.FRAME_AUTH, 32, 0]) + auth.tcp_tag(w.key, challenge))
+    time.sleep(0.2)  # 서명만 따로 닿게
+    body = b'{"hi": 1}'
+    device.sendall(b"\xa5\x5a" + bytes([2, len(body), 0]) + body)
+    deadline = time.monotonic() + 2
+    while not events and time.monotonic() < deadline:
+        time.sleep(0.02)
+    device.close()
+    reader.join(2)
+    assert events == [{"hi": 1}]

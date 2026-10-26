@@ -165,6 +165,7 @@ class WifiTransport:
             except OSError:
                 return
             if peer[0] != self.address:
+                _notice(f"[Wi-Fi] 기기({self.address})가 아닌 {peer[0]} 에서 온 TCP 접속을 끊었습니다")
                 conn.close()  # 기기가 아닌 곳에서 접속했다 (open 의 설명 참고)
                 continue
             threading.Thread(target=self._read_stream, args=(conn,), daemon=True).start()
@@ -179,10 +180,12 @@ class WifiTransport:
             while len(buf) < 5 + 32:
                 data = conn.recv(4096)
                 if not data:
+                    _notice(f"[Wi-Fi] 기기가 TCP 서명을 보내기 전에 끊었습니다 ({len(buf)}바이트)")
                     return None
                 buf += data
             conn.settimeout(None)
-        except OSError:
+        except OSError as e:
+            _notice(f"[Wi-Fi] 기기의 TCP 서명을 받지 못했습니다 ({len(buf)}바이트, {e})")
             return None
         key = self.key
         if (buf[:5] != b"\xa5\x5a" + bytes([auth.FRAME_AUTH, 32, 0]) or not key
@@ -197,13 +200,16 @@ class WifiTransport:
             if data is None:
                 return
             buf = b""
-            while data:
+            # 서명만 따로 왔으면 data 는 빈 바이트다. 그래도 이어서 받는다 (전에는 여기서 끊어 Wi-Fi 미러링이 안 됐다)
+            while True:
                 found, buf = frames.split(buf + data)
                 for kind, body in found:
                     frames.dispatch(self, kind, body)
                 try:
                     data = conn.recv(65536)
                 except OSError:
+                    return
+                if not data:
                     return
 
     def _receive(self, sock) -> None:

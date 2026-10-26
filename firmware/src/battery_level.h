@@ -24,6 +24,9 @@ class BatteryLevel {
   // 다시 켜기 전에 충전 중이었고 그때 보이던 잔량. 충전 중에 다시 켜졌으면 첫 값을 이것보다 낮추지 않는다
   // (충전 중 전압으로는 정전압 충전 구간을 가릴 수 없어, 켤 때마다 100% 가 80% 대로 떨어졌다)
   void resume(int pct) { resume_pct_ = pct; }
+  // 다음에 충전으로 바뀔 때 오름 폭(충전 전류로 오른 전압)을 새로 재지 않고 지난 값을 쓴다
+  // (전압이 이미 오른 뒤에야 전원을 확인했을 때)
+  void skip_offset_measure() { skip_measure_ = true; }
 
  private:
   int shown_ = -1;
@@ -34,6 +37,7 @@ class BatteryLevel {
   int battery_mv_ = 0;   // 배터리로 쓸 때 마지막 전압 (꽂는 순간 얼마나 오르는지 재는 데 쓴다)
   int before_mv_ = 0;
   bool measuring_ = false;
+  bool skip_measure_ = false;
   uint32_t plug_ms_ = 0;
   uint32_t step_ms_ = 0;
   uint32_t above_ms_ = 0;

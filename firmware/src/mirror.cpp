@@ -18,6 +18,10 @@
 #define KEEP_MS 6000
 // 장 사이의 최소 간격 (초당 최대 약 25장). 화면 복사가 화면 반응을 늦추지 않게 둔다.
 #define MIN_GAP_MS 40
+// Wi-Fi 신호가 약하면 (net_wifi_bars) 장 사이를 벌리고, 아주 약하면 색을 줄여 한 장을 작게 만든다.
+// 신호 -90dBm 대에서 18KB 장은 거의 다 깨졌고, 작은 묶음만 지나갔다 (2026-10-26).
+static const uint16_t WIFI_GAP_MS[5] = {2500, 1000, 250, 40, 40};  // 0~4칸
+#define WEAK_COLOR_MASK 0xE79C  // RGB565 에서 R·B 위 3비트, G 위 4비트만 (같은 색이 길게 이어져 덜 커진다)
 #define CHUNK 2000
 #define MAX_PIXELS (320 * 240)
 #define DEVICE_STATUS_H 32
@@ -107,6 +111,9 @@ static void send_task(void *) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     uint32_t t0 = millis();
+    if (via == LINK_WIFI && net_wifi_bars() <= 1) {
+      for (int i = 0; i < grab_w * grab_h; i++) grab[i] &= WEAK_COLOR_MASK;
+    }
     size_t len = pack(grab, grab_w * grab_h, packed);
     uint32_t t1 = millis();
     Head head = {frame_no++, 0, (uint32_t)len, (uint16_t)grab_w, (uint16_t)grab_h};
@@ -246,7 +253,12 @@ void mirror_loop() {
   display_split(split_on);
   // 기기 화면에서 PC 상태를 보는 동안만 PC 에 계속 보내 달라고 한다
   pcpanel_device_watch(split_on && dev_body && ui_usage_pages_on_pc(dev_body));
-  if (busy || millis() - last_ms < MIN_GAP_MS) return;
+  uint32_t gap = MIN_GAP_MS;
+  if (now == LINK_WIFI) {
+    int bars = net_wifi_bars();
+    if (bars >= 0) gap = WIFI_GAP_MS[bars];
+  }
+  if (busy || millis() - last_ms < gap) return;
   if (!display_mirror_take(grab, &grab_w, &grab_h)) return;
   last_ms = millis();
   via = now;

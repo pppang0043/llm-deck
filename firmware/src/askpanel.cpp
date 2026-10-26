@@ -2,6 +2,7 @@
 
 #include "display.h"
 #include "link.h"
+#include "mic.h"
 #include "pcmic.h"
 #include "ui.h"
 
@@ -18,8 +19,8 @@ LV_FONT_DECLARE(font_ko_20);
 // 가로 화면에서는 말하기 버튼을 오른쪽에 세로로 둔다 (홈 화면 마이크 버튼처럼)
 #define TALK_W 60
 
-#define GUIDE_TALL "아래 버튼을 누르고 PC 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다."
-#define GUIDE_WIDE "오른쪽 버튼을 누르고 PC 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다."
+#define GUIDE_TALL "아래 버튼을 누르고 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다."
+#define GUIDE_WIDE "오른쪽 버튼을 누르고 마이크에 말하세요.\n다 말하면 버튼을 한 번 더 누릅니다."
 
 static bool wide = false;  // 가로 화면 (askpanel_layout 이 정한다)
 static lv_obj_t *panel, *state_lbl, *new_btn, *mute_btn, *mute_lbl, *text_box, *q_lbl, *a_lbl, *talk_btn, *talk_lbl;
@@ -49,7 +50,8 @@ static bool pc_connected() {
 int askpanel_talk_state() {
   if (talking) return ASK_TALKING;
   if (!pc_connected()) return ASK_NO_PC;
-  return mic_ok ? ASK_READY : ASK_NO_MIC;
+  // 기기 마이크가 있으면 PC 마이크가 없어도 된다
+  return mic_ok || mic_present() ? ASK_READY : ASK_NO_MIC;
 }
 
 void askpanel_refresh() {
@@ -78,16 +80,19 @@ static bool press(bool dictate, const char *orca_id) {
   if (st == ASK_NO_PC) ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
   if (st == ASK_NO_MIC) ui_toast(pcmic_why()[0] ? pcmic_why() : "PC에 쓸 수 있는 마이크가 없습니다", 2500);
   if (st != ASK_READY) return false;
+  // 기기 마이크가 있으면 녹음하는 동안 소리를 PC 로 보내고 "dev_mic" 로 알린다 (PC 가 PC 마이크보다 먼저 쓴다)
+  bool dev = mic_present();
+  char json[128];
   if (orca_id) {
-    char json[96];
-    snprintf(json, sizeof(json), "{\"ask\":\"start\",\"mode\":\"dictate\",\"orca\":\"%s\"}", orca_id);
-    link_send_event(json);
+    snprintf(json, sizeof(json), "{\"ask\":\"start\",\"mode\":\"dictate\",\"orca\":\"%s\"%s}", orca_id,
+             dev ? ",\"dev_mic\":true" : "");
   } else {
     // 음소거를 풀어 두었으면 시작할 때도 알린다 (PC 가 60초에 스스로 녹음을 끝내도 읽어 주도록)
-    link_send_event(dictate          ? "{\"ask\":\"start\",\"mode\":\"dictate\"}"
-                    : voice ? "{\"ask\":\"start\",\"voice\":true}"
-                            : "{\"ask\":\"start\"}");
+    snprintf(json, sizeof(json), "{\"ask\":\"start\"%s%s}",
+             dictate ? ",\"mode\":\"dictate\"" : voice ? ",\"voice\":true" : "", dev ? ",\"dev_mic\":true" : "");
   }
+  mic_set_ask(dev);
+  link_send_event(json);
   snprintf(dictate_target, sizeof(dictate_target), "%s", orca_id ? orca_id : "");
   talking = true;
   dictating = dictate;
@@ -118,6 +123,7 @@ bool askpanel_release() {
   if (!talking) return false;
   link_send_event(voice && !dictating ? "{\"ask\":\"stop\",\"voice\":true}" : "{\"ask\":\"stop\"}");
   talking = false;
+  mic_set_ask(false);
   if (dictating) {
     dictate_step = DICTATE_WRITING;
   } else {
@@ -261,6 +267,7 @@ void askpanel_show(bool on) {
     if (talking && !dictating) {
       link_send_event("{\"ask\":\"cancel\"}");
       talking = false;
+      mic_set_ask(false);
       askpanel_refresh();
     }
     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
@@ -278,6 +285,7 @@ void askpanel_set(JsonObjectConst ask) {
   bool recording = strcmp(state, "preparing") == 0 || strcmp(state, "listening") == 0;
   if (talking && !recording) {
     talking = false;
+    mic_set_ask(false);
     askpanel_refresh();
   }
   if (strcmp(ask["mode"] | "ask", "dictate") == 0) {

@@ -9,6 +9,9 @@
 void net_init();
 void net_loop();
 
+// Wi-Fi 신호 칸 수 0~4 (상태줄 아이콘, 미러링 속도에 쓴다). Wi-Fi 에 붙어 있지 않으면 -1
+int net_wifi_bars();
+
 // Wi-Fi 를 추가로 등록한다. 같은 이름이 있으면 비밀번호를 바꾼다.
 void net_add_wifi(const char *ssid, const char *password);
 

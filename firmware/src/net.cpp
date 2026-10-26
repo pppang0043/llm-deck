@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <esp_mac.h>
+#include <esp_wifi.h>
 #include <esp_random.h>
 #include <initializer_list>
 #include <mbedtls/md.h>
@@ -372,6 +373,25 @@ static void start_ota() {
   Serial.println("[ota] ready");
 }
 
+// 공유기와의 무선 연결 상태 (신호, 채널, 대역폭, 방식, 절전). -80dBm 아래면 큰 패킷부터 잃는다
+static void log_link() {
+  wifi_ap_record_t ap;
+  if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return;
+  wifi_bandwidth_t bw = WIFI_BW_HT20;
+  esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
+  uint8_t proto = 0;
+  esp_wifi_get_protocol(WIFI_IF_STA, &proto);
+  wifi_ps_type_t ps = WIFI_PS_NONE;
+  esp_wifi_get_ps(&ps);
+  wifi_phy_mode_t phy = WIFI_PHY_MODE_11G;
+  esp_wifi_sta_get_negotiated_phymode(&phy);
+  int8_t power = 0;
+  esp_wifi_get_max_tx_power(&power);
+  Serial.printf("[net] link rssi %d ch %u/%d bw %d proto 0x%x phy %d ps %d tx %d bssid %02x:%02x:%02x\n", ap.rssi,
+                ap.primary, (int)ap.second, (int)bw, proto, (int)phy, (int)ps, power, ap.bssid[3], ap.bssid[4],
+                ap.bssid[5]);
+}
+
 static void start_services() {
   MDNS.begin(HOSTNAME);
   MDNS.addService(HOSTNAME, "tcp", 80);
@@ -479,6 +499,13 @@ void net_loop() {
     ui_set_wifi_info("다시 연결 중...");
   }
   was_connected = connected;
+  // 붙은 뒤 한 번과 그 뒤 5분마다 신호 세기를 적는다
+  static uint32_t link_ms = 0;
+  if (!connected) link_ms = 0;
+  if (connected && (!link_ms || millis() - link_ms > 300000)) {
+    link_ms = millis();
+    log_link();
+  }
   if (connected) {
     server.handleClient();
     if (ota_ready) ArduinoOTA.handle();
@@ -498,4 +525,10 @@ void net_set_enabled(bool on) {
     Serial.println("[net] wifi on");
     ui_set_wifi_info("연결 중...");
   }
+}
+
+int net_wifi_bars() {
+  if (WiFi.status() != WL_CONNECTED) return -1;
+  int rssi = WiFi.RSSI();
+  return rssi >= -60 ? 4 : rssi >= -67 ? 3 : rssi >= -75 ? 2 : rssi >= -82 ? 1 : 0;
 }

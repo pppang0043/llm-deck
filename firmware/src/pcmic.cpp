@@ -21,7 +21,8 @@ enum { MIC_UNKNOWN, MIC_CHECKING, MIC_OK, MIC_NONE };
 static int state = MIC_UNKNOWN;
 static char name[128] = "", why[384] = "", pick[128] = "";
 static char list[MIC_MAX][128];
-static int count = 0;
+static bool limited[MIC_MAX];  // 고르면 30분만 쓰는 마이크 (Mac 의 아이폰 마이크)
+static int count = 0, left = 0;  // left: 고른 아이폰 마이크를 쓸 수 있는 남은 분
 
 static lv_obj_t *icon, *capsule, *stem, *base, *cross;
 static lv_obj_t *panel, *panel_state, *panel_list;
@@ -68,8 +69,11 @@ static void row_clicked(lv_event_t *e) {
   state = MIC_CHECKING;
   pcmic_refresh();
   close_panel();
+  bool timed = false;
+  for (int i = 0; i < count; i++) timed = timed || (limited[i] && strcmp(list[i], chosen) == 0);
   char text[180];
-  snprintf(text, sizeof(text), "PC 마이크: %s\n들어 보는 중...", chosen[0] ? chosen : "자동");
+  snprintf(text, sizeof(text), timed ? "PC 마이크: %s\n30분 동안 씁니다" : "PC 마이크: %s\n들어 보는 중...",
+           chosen[0] ? chosen : "자동");
   ui_toast(text, 2500);
 }
 
@@ -113,7 +117,17 @@ static void render_panel() {
   for (int i = 0; i < count; i++) {
     bool selected = pick[0] && strcmp(pick, list[i]) == 0;
     found = found || selected;
-    add_row(list[i], list[i], selected);
+    if (limited[i]) {
+      char label[160];
+      if (selected && left > 0) {
+        snprintf(label, sizeof(label), "%s (%d분 남음)", list[i], left);
+      } else {
+        snprintf(label, sizeof(label), "%s (30분만)", list[i]);
+      }
+      add_row(label, list[i], selected);
+    } else {
+      add_row(list[i], list[i], selected);
+    }
   }
   if (pick[0] && !found) {
     // 고른 마이크가 빠져 있다 (PC 는 자동으로 고른다)
@@ -222,8 +236,11 @@ void pcmic_set(JsonObjectConst mic) {
   count = 0;
   for (JsonVariantConst item : mic["list"].as<JsonArrayConst>()) {
     if (count >= MIC_MAX) break;
+    limited[count] = false;
+    for (JsonVariantConst l : mic["limited"].as<JsonArrayConst>()) limited[count] = limited[count] || strcmp(l | "", item | "") == 0;
     snprintf(list[count++], sizeof(list[0]), "%s", item | "");
   }
+  left = mic["left"] | 0;
   pcmic_refresh();
   // 상태줄 오른쪽(시각)이 표시와 겹치지 않게 다시 놓는다
   if (was_hidden) ui_layout_status();

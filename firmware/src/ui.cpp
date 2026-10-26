@@ -51,6 +51,8 @@ static lv_obj_t *bat_icon;
 static lv_obj_t *bat_fill;
 static lv_obj_t *bat_bolt;
 static lv_obj_t *bat_lbl;
+static lv_obj_t *wifi_icon;
+static lv_obj_t *wifi_bar[4];
 static char clock_date[24] = "";
 static char clock_time[8] = "";
 static bool waiting = true;
@@ -1041,6 +1043,20 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
   lv_obj_add_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
 
+  // Wi-Fi 신호: 높이가 다른 막대 4개. Wi-Fi 에 붙어 있지 않으면 숨긴다.
+  wifi_icon = lv_obj_create(scr);
+  lv_obj_remove_style_all(wifi_icon);
+  lv_obj_set_size(wifi_icon, 4 * 3 + 3 * 2, BAT_H);
+  lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_CLICKABLE);
+  for (int i = 0; i < 4; i++) {
+    wifi_bar[i] = lv_obj_create(wifi_icon);
+    lv_obj_remove_style_all(wifi_bar[i]);
+    lv_obj_set_style_bg_opa(wifi_bar[i], LV_OPA_COVER, 0);
+    lv_obj_set_size(wifi_bar[i], 3, BAT_H * (i + 1) / 4);
+    lv_obj_align(wifi_bar[i], LV_ALIGN_BOTTOM_LEFT, i * 5, 0);
+  }
+  lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+
   tiles = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(tiles, COLOR_BG, 0);
   lv_obj_add_event_cb(tiles, easy_paging, LV_EVENT_SCROLL_BEGIN, NULL);
@@ -1081,6 +1097,11 @@ static void layout_status_right() {
     lv_obj_align_to(bat_icon, rotate_btn, LV_ALIGN_OUT_LEFT_MID, -6, 0);
     lv_obj_align_to(bat_lbl, bat_icon, LV_ALIGN_OUT_LEFT_MID, -3, 0);
     right = bat_lbl;
+  }
+  if (!lv_obj_has_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_update_layout(scr);
+    lv_obj_align_to(wifi_icon, right, LV_ALIGN_OUT_LEFT_MID, -6, 0);
+    right = wifi_icon;
   }
 
   char text[40];
@@ -1168,6 +1189,21 @@ void ui_set_battery(int pct, bool charging) {
     lv_obj_set_style_text_color(bat_lbl, !charging && pct <= 20 ? color : COLOR_DIM, 0);
     lv_obj_clear_flag(bat_icon, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
+  }
+  layout_status_right();
+}
+
+void ui_set_wifi(int bars) {
+  static int shown = -2;
+  if (bars == shown) return;
+  shown = bars;
+  if (bars < 0) {
+    lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    // 1칸 이하는 미러링이 끊기기 쉬운 세기라 주황으로
+    lv_color_t on = bars <= 1 ? COLOR_WARN : lv_color_white();
+    for (int i = 0; i < 4; i++) lv_obj_set_style_bg_color(wifi_bar[i], i < bars ? on : lv_color_hex(0x3A424C), 0);
+    lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
   }
   layout_status_right();
 }

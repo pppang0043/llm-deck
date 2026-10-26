@@ -40,5 +40,19 @@ int main() {
     level.update(0, false, false, 1000);  // 배터리 없음 → 처음부터
     assert(level.update(4146, true, false, 2000) < 90);
   }
+  {
+    // 전압이 이미 오른 뒤에야 전원을 확인했으면 (battery.cpp check_trend) 오름 폭을 다시 재지 않고 지난 값(100 mV)을 쓴다.
+    // 다시 재면 거의 0 이 되어 잔량을 높게 짐작했다
+    BatteryLevel measured, kept;
+    kept.skip_offset_measure();
+    BatteryLevel *levels[] = {&measured, &kept};
+    for (BatteryLevel *level : levels) {
+      level->update(3900, false, false, 0);
+      level->update(3905, true, false, 1000);
+      level->update(3910, true, false, 125000);
+    }
+    assert(measured.charge_offset_mv() == 10);
+    assert(kept.charge_offset_mv() == 100);
+  }
   return 0;
 }

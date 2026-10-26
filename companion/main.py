@@ -467,6 +467,11 @@ def main() -> None:
     typer.configure(cfg.get("keywords"))  # config.toml 의 키워드 버튼 (없으면 기본 목록)
     keys = typer.Typer()
     ask = assistant.Assistant(cfg.get("assistant", {}), cfg.get("storage", {}).get("model_dir", ""))
+
+    def on_audio(seq: int, pcm: bytes) -> None:
+        # 기기 마이크 소리: 가상 마이크로 내보내고, 질문 녹음 중이면 녹음에도 쓴다
+        sink.push(seq, pcm)
+        ask.on_device_audio(seq, pcm)
     # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
     sessions = orca.Orca(cfg.get("orca", {}))
     ask.orca = sessions
@@ -503,7 +508,7 @@ def main() -> None:
                 # 끊긴 연결로 받던 녹화가 있으면 받은 데까지 재생되는 파일로 마무리한다
                 movies.finish()
                 view.link_lost()
-                transport = connect(names, cfg, sink.push, on_event, receiver.on_chunk, movies.on_chunk)
+                transport = connect(names, cfg, on_audio, on_event, receiver.on_chunk, movies.on_chunk)
                 if transport:
                     sessions.resend()  # 새로 연결한 기기에도 세션 목록을 보낸다
                     peer.reset()
@@ -581,7 +586,7 @@ def main() -> None:
                 # 블루투스로 붙어 있으면 가끔 Wi-Fi 를 찾아, 되면 갈아탄다 (Wi-Fi 가 더 빠르고 인증도 되며, 기기도 Wi-Fi 를 우선한다)
                 if transport and link == "auto" and transport.name == "Bluetooth" and time.time() - wifi_tried > WIFI_RETRY:
                     wifi_tried = time.time()
-                    faster = TRANSPORTS["wifi"](cfg.get("device", {}), sink.push, on_event, receiver.on_chunk, movies.on_chunk)
+                    faster = TRANSPORTS["wifi"](cfg.get("device", {}), on_audio, on_event, receiver.on_chunk, movies.on_chunk)
                     if not faster.open():
                         faster.close()
                     else:

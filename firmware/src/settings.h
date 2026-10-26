@@ -19,6 +19,8 @@ bool settings_rotate_restore();
 bool settings_mic_sound();
 // 배터리로만 쓸 때 만지지 않으면 화면을 어둡게(1분) 하고 끄는지(3분)
 bool settings_auto_dim();
+// 배터리로만 쓸 때 20분 안 만지면 깊은 잠에 드는지 (배터리 절약과 따로, 기본 끔)
+bool settings_auto_off();
 // 만지지 않은 지 이만큼 지나면 화면 보호기를 띄운다 (0 이면 끔)
 uint32_t settings_saver_ms();
 // 사용률이 80%, 90% 를 넘거나 초기화되면 알릴지

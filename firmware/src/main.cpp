@@ -196,7 +196,8 @@ static void power_save() {
   // 사진·동영상을 보내거나 카드에 쓰는 중에는 잠들지 않는다
   bool transferring = photo_sending() || photo_streaming() || sd_video_active();
   cpu_save(!powered && !busy && (level == 0 || saver));
-  if (battery_only && !transferring && idle > DEEP_SLEEP_AFTER_MS) deep_sleep();
+  // 꺼지는 것은 배터리 절약과 따로 "자동 꺼짐" 설정을 따른다. 전원이 들어오면 화면만 쉬고 꺼지지 않는다
+  if (settings_auto_off() && !powered && !busy && !transferring && idle > DEEP_SLEEP_AFTER_MS) deep_sleep();
   if (level == shown && saver == shown_saver) return;
   bool first = shown == 255;
   shown = level;
@@ -290,6 +291,7 @@ static void show_clock() {
   }
   ui_set_clock(date, hm);
   ui_set_battery(battery_pct(), battery_charging());
+  ui_set_wifi(net_wifi_bars());
 }
 
 // 내부 RAM 이 얼마나 남았는지 (부팅 단계별로 무엇이 얼마나 쓰는지 볼 때)

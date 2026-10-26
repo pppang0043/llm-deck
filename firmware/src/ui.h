@@ -14,6 +14,8 @@ void ui_set_clock(const char *date, const char *time);
 
 // 상태줄 오른쪽(화면 돌리기 버튼 옆)의 배터리 잔량. -1 이면 숨긴다. 충전 중이면 건전지 안에 번개를 그린다.
 void ui_set_battery(int pct, bool charging);
+// Wi-Fi 신호 칸 수 0~4, -1 이면 숨긴다
+void ui_set_wifi(int bars);
 
 // 대기 화면에 보여줄 Wi-Fi 안내 (IP 주소 등)
 void ui_set_wifi_info(const char *text);
