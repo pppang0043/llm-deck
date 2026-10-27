@@ -69,7 +69,7 @@ static lv_obj_t *home;
 #define HOME_ICONS 6
 static lv_obj_t *home_icons[HOME_ICONS];
 static lv_obj_t *ask_icon_sym;  // 홈의 질문 아이콘 (말할 수 없으면 흐리게)
-static int pc_tile = 0;  // 사용량 화면에서 PC 상태 페이지의 번호 (맨 마지막)
+static int pc_tile = 0;  // 사용량 화면에서 PC 상태 페이지의 번호 (맨 처음)
 static void update_pc_watch();
 static lv_obj_t *settings_panel;
 static void (*camera_cb)() = nullptr;
@@ -684,7 +684,7 @@ static lv_obj_t *add_page(lv_obj_t *tv, uint8_t index, uint8_t col = 0) {
   return page;
 }
 
-// 사용량 페이지 맨 끝에 PC 상태 페이지를 붙인다 (pcpanel.cpp 가 그린다)
+// 사용량 화면 맨 앞에 PC 상태 페이지를 둔다 (pcpanel.cpp 가 그린다)
 static void add_pc_tile(uint8_t index) {
   lv_obj_t *tile = lv_tileview_add_tile(tiles, 0, index, LV_DIR_VER);
   lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
@@ -695,12 +695,12 @@ static void add_pc_tile(uint8_t index) {
 static void show_placeholder(const char *title, const char *body) {
   pcpanel_status_detach();
   lv_obj_clean(tiles);
-  lv_obj_t *page = add_page(tiles, 0);
+  add_pc_tile(0);
+  lv_obj_t *page = add_page(tiles, 1);
   add_label(page, title, &font_ko_20, COLOR_ACCENT);
   lv_obj_t *lbl = add_label(page, body, &font_ko_14, COLOR_DIM);
   lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(lbl, lv_pct(100));
-  add_pc_tile(1);
   update_pc_watch();
 }
 
@@ -1247,10 +1247,11 @@ void ui_set_usage(JsonArrayConst services) {
   lv_timer_resume(usage_timer);
 }
 
-// 서비스 페이지들을 tv 에 만든다. 페이지 수(줄)를 돌려주고, 옆 페이지가 있는 줄을 side_rows 에 표시한다.
+// 서비스 페이지들을 tv 의 first_row 줄부터 만든다. 다음 빈 줄 번호를 돌려주고, 옆 페이지가 있는 줄을 side_rows 에 표시한다.
 // 원래 화면이면 첫 페이지 제목 옆에 나눠 쓰기 버튼을 둔다 (기기 화면은 위쪽 줄에 따로 있다).
-static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool main_screen, uint32_t *side_rows) {
-  uint8_t index = 0;
+static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool main_screen, uint32_t *side_rows,
+                                 uint8_t first_row) {
+  uint8_t index = first_row;
   // 구독 한도 페이지가 둘 이상이면 처음 것 자리에 "구독제" 한 페이지로 모은다
   int limits = 0;
   for (JsonObjectConst svc : services) limits += is_limits_page(svc);
@@ -1261,13 +1262,13 @@ static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool mai
     if (limits >= 2 && is_limits_page(svc)) {
       if (limits_done) continue;
       limits_done = true;
-      bool first = index == 0;
+      bool first = index == first_row;
       lv_obj_t *page = prev = add_page(tv, index++);
       add_limits_table(page, services, svc["note"] | "", first && main_screen);
       continue;
     }
     // 옆 페이지: 앞 페이지 오른쪽에 둔다
-    bool side = svc["side"] == true && prev && index > 0 && !(*side_rows & (1u << (index - 1)));
+    bool side = svc["side"] == true && prev && index > first_row && !(*side_rows & (1u << (index - 1)));
     lv_obj_t *page;
     if (side) {
       ((lv_tileview_tile_t *)prev)->dir = (lv_dir_t)(LV_DIR_VER | LV_DIR_RIGHT);
@@ -1280,7 +1281,7 @@ static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool mai
     // 제목 오른쪽의 작은 글자는 이 값이 언제 것인지(시각)를 나타낸다
     lv_obj_t *title = add_row(page, svc["name"] | "?", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14,
                               COLOR_DIM);
-    if (index == 0 && !side && main_screen) add_title_split_btn(title);
+    if (index == first_row && !side && main_screen) add_title_split_btn(title);
 
     if (svc["headline"].is<const char *>()) {
       add_label(page, svc["headline"], &lv_font_montserrat_48, lv_color_white());
@@ -1321,8 +1322,6 @@ static void render_usage() {
   // 데이터가 갱신돼도 보고 있던 페이지에 머물도록 현재 위치를 기억해 둔다
   uint8_t keep, keep_col;
   tile_pos(tiles, &keep, &keep_col);
-  // PC 상태를 보고 있었으면 페이지 수가 바뀌어도 PC 상태(맨 끝)에 머문다
-  bool keep_pc = keep == pc_tile;
 
   size_t count = services.size();
   if (count == 0) {
@@ -1334,10 +1333,10 @@ static void render_usage() {
   lv_obj_clean(tiles);
   gauge_count = 0;
   uint32_t side_rows;
-  uint8_t index = build_usage_pages(tiles, services, true, &side_rows);
-  add_pc_tile(index);
+  add_pc_tile(0);
+  uint8_t index = build_usage_pages(tiles, services, true, &side_rows, 1);
 
-  uint8_t row = keep_pc || keep > index ? index : keep;
+  uint8_t row = keep >= index ? index - 1 : keep;
   lv_obj_set_tile_id(tiles, keep_col && (side_rows & (1u << row)) ? 1 : 0, row, LV_ANIM_OFF);
   update_pc_watch();
 }
@@ -1369,20 +1368,19 @@ void ui_usage_pages(lv_obj_t *tv) {
   // 그래프는 원래 화면에 열리므로 기기 화면에서는 눌러도 열지 않는다
   no_history = true;
   uint32_t side_rows;
-  uint8_t count = build_usage_pages(tv, services, false, &side_rows);
-  no_history = false;
-  // 맨 끝은 원래 화면처럼 PC 상태
-  lv_obj_t *tile = lv_tileview_add_tile(tv, 0, count, LV_DIR_VER);
+  // 맨 앞은 원래 화면처럼 PC 상태
+  lv_obj_t *tile = lv_tileview_add_tile(tv, 0, 0, LV_DIR_VER);
   lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
   pcpanel_device_status(tile, lv_obj_get_width(tv), lv_obj_get_height(tv));
-  uint8_t row = keep > count ? count : keep;
+  uint8_t count = build_usage_pages(tv, services, false, &side_rows, 1);
+  no_history = false;
+  uint8_t row = keep >= count ? count - 1 : keep;
   lv_obj_set_tile_id(tv, keep_col && (side_rows & (1u << row)) ? 1 : 0, row, LV_ANIM_OFF);
 }
 
 bool ui_usage_pages_on_pc(lv_obj_t *tv) {
   lv_obj_t *active = lv_tileview_get_tile_act(tv);
-  uint32_t n = lv_obj_get_child_cnt(tv);
-  return active && n && active == lv_obj_get_child(tv, n - 1);
+  return active && lv_obj_get_child_cnt(tv) && active == lv_obj_get_child(tv, 0);
 }
 
 void ui_usage_summary(char *out, size_t size) {
@@ -1471,7 +1469,7 @@ void ui_show(const char *name) {
     update_pc_watch();
     return;
   } else if (strcmp(name, "pc") == 0) {
-    // PC 상태는 사용량 화면의 마지막 페이지
+    // PC 상태는 사용량 화면의 첫 페이지
     view = VIEW_USAGE;
     apply_view();
     lv_obj_set_tile_id(tiles, 0, pc_tile, LV_ANIM_OFF);

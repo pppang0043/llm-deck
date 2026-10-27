@@ -12,7 +12,7 @@ int main() {
     assert(l.disk_heading_y + 24 <= l.disk_y);
     assert(l.disk_slots >= 2);
     assert(l.disk_y + (l.disk_slots - 1) * l.disk_stride + l.disk_height + 6 <= l.footer_y);
-    assert(l.footer_y + 32 <= l.height);
+    assert(l.footer_y + 16 <= l.height);
     // 26개 드라이브가 있어도 한 페이지의 항목은 같은 고정 영역 안에 있다.
     for (int count = 0; count <= 26; ++count) {
       int visible = count < l.disk_slots ? count : l.disk_slots;

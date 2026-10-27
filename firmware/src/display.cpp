@@ -314,12 +314,16 @@ void display_init() {
   // 세게 튕겨야 했다. 줄이면 가볍게 튕겨도 다음 페이지로 넘어가고 목록도 더 멀리 미끄러진다.
   // (lv_conf.h 의 LV_INDEV_DEF_* 는 lv_hal_indev.h 가 다시 정의해 버려 여기서 정한다)
   indev_drv.scroll_throw = 5;
+  // 밀기(오른쪽으로 밀어 뒤로 등) 판정. 빠르기(10ms 에 3px 넘게)는 기본 그대로 두고, 기본 50px 이던 거리만 줄인다
+  indev_drv.gesture_limit = 20;
   lv_indev_drv_register(&indev_drv);
 
   lv_indev_drv_init(&device_indev_drv);
   device_indev_drv.type = LV_INDEV_TYPE_POINTER;
   device_indev_drv.read_cb = device_touch_cb;
   device_indev_drv.disp = device_disp;
+  device_indev_drv.scroll_throw = indev_drv.scroll_throw;
+  device_indev_drv.gesture_limit = indev_drv.gesture_limit;
   lv_indev_drv_register(&device_indev_drv);
 }
 

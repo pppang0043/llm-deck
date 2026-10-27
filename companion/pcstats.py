@@ -4,8 +4,12 @@
 (화면을 안 볼 때는 보내지 않아 블루투스를 아낀다).
 """
 
+import functools
 import ntpath
 import os
+import plistlib
+import re
+import subprocess
 import sys
 import time
 
@@ -32,8 +36,18 @@ def _system_disk() -> str:
     return "/System/Volumes/Data" if os.path.isdir("/System/Volumes/Data") else "/"
 
 
+@functools.lru_cache(maxsize=64)
+def _mac_disk_image(mount: str) -> bool:
+    """Mac 에서 .dmg 같은 디스크 이미지인지. 실제 디스크(내장, USB, 외장)만 보여 주려고 쓴다."""
+    try:
+        out = subprocess.run(["/usr/sbin/diskutil", "info", "-plist", mount], capture_output=True, timeout=3).stdout
+        return plistlib.loads(out).get("BusProtocol") == "Disk Image"
+    except (OSError, subprocess.SubprocessError, plistlib.InvalidFileException, AttributeError):
+        return False
+
+
 def _disks() -> list[dict]:
-    """시스템 디스크와 접근 가능한 로컬 드라이브. 네트워크/광학 드라이브는 제외."""
+    """시스템 디스크와 접근 가능한 로컬 드라이브. 네트워크/광학 드라이브, Mac 의 디스크 이미지(.dmg)는 제외."""
     system = _system_disk()
     candidates = [system]
     try:
@@ -48,6 +62,8 @@ def _disks() -> list[dict]:
     for mount in candidates:
         if sys.platform == "darwin" and mount != system and not mount.startswith("/Volumes/"):
             continue  # APFS 의 시스템 보조 볼륨은 중복 표시하지 않는다
+        if sys.platform == "darwin" and mount != system and _mac_disk_image(mount):
+            continue  # 프로그램 설치용 .dmg 등은 하드웨어 디스크가 아니다
         key = paths.normcase(paths.normpath(mount))
         if key in seen:
             continue
@@ -68,12 +84,25 @@ def _disks() -> list[dict]:
     return disks  # Windows 드라이브 문자 수, 기기 표시 한도와 같다
 
 
+class MacGpu:
+    """Mac GPU 사용률. ioreg 의 IOAccelerator "Device Utilization %" (관리자 권한 필요 없음). 못 읽으면 None."""
+
+    def percent(self, now: float) -> int | None:
+        try:
+            out = subprocess.run(["/usr/sbin/ioreg", "-r", "-d", "1", "-c", "IOAccelerator"],
+                                 capture_output=True, text=True, timeout=2).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        values = [int(v) for v in re.findall(r'"Device Utilization %"=(\d+)', out)]
+        return min(100, max(values)) if values else None
+
+
 class PcStats:
     def __init__(self) -> None:
         self.watch_until = 0.0
         self.sent_at = 0.0
         psutil.cpu_percent(interval=None)  # 첫 호출은 0 이 나오므로 미리 한 번
-        self.gpu = WindowsGpu()
+        self.gpu = MacGpu() if sys.platform == "darwin" else WindowsGpu()
         self._net = psutil.net_io_counters()
         self._net_at = time.time()
 

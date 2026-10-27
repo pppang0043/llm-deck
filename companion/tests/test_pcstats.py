@@ -47,13 +47,24 @@ def test_macos_skips_internal_helper_volumes(monkeypatch):
     monkeypatch.setattr(pcstats.psutil, "disk_partitions", lambda all: [
         partition("/", "apfs"), partition("/System/Volumes/VM", "apfs"),
         partition("/Volumes/Backup", "apfs"), partition("/Volumes/Share", "smbfs"),
+        partition("/Volumes/Google Chrome", "apfs", "ro,nosuid,local,quarantine"),
     ])
+    monkeypatch.setattr(pcstats, "_mac_disk_image", lambda mount: mount == "/Volumes/Google Chrome")
     monkeypatch.setattr(pcstats.psutil, "disk_usage", lambda mount: NS(total=1024, free=512, percent=50))
     assert [d["name"] for d in pcstats._disks()] == ["시스템", "Backup"]
 
 
+def test_mac_gpu_reads_busiest_accelerator(monkeypatch):
+    out = '"PerformanceStatistics" = {"Device Utilization %"=12,"Renderer Utilization %"=90}\n"Device Utilization %"=37'
+    monkeypatch.setattr(pcstats.subprocess, "run", lambda *a, **k: NS(stdout=out))
+    assert pcstats.MacGpu().percent(0) == 37
+    monkeypatch.setattr(pcstats.subprocess, "run", lambda *a, **k: NS(stdout=""))
+    assert pcstats.MacGpu().percent(0) is None
+
+
 def test_collect_gpu_multi_disk_and_legacy_fields(monkeypatch):
     clock = [100.0]
+    monkeypatch.setattr(pcstats.sys, "platform", "win32")
     monkeypatch.setattr(pcstats.time, "time", lambda: clock[0])
     monkeypatch.setattr(pcstats.psutil, "cpu_percent", lambda interval: 24)
     monkeypatch.setattr(pcstats.psutil, "virtual_memory", lambda: NS(percent=42, used=4 * 1024**3, total=8 * 1024**3))

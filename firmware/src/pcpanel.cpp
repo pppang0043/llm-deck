@@ -132,7 +132,7 @@ struct StatusView {
   int disk_count, width, height, disk_page, disk_slots;
   lv_obj_t *disk_heading, *disk_prev, *disk_next, *disk_index;
   bool data_visible;
-  lv_obj_t *net, *bat;
+  lv_obj_t *ram_used;  // RAM 칸 막대 아래 "12/32GB"
   bool watching;  // 화면에 보이는 중 (ui.cpp, mirror.cpp 가 알려 준다)
 };
 static StatusView main_stat, device_stat;
@@ -541,7 +541,7 @@ static void disk_count(StatusView &v, int count) {
 // 안내 글을 보이는 동안은 숫자 줄을 숨긴다 (안내가 가운데에서 줄과 겹치지 않게, 오래된 숫자를 지금 것으로 보지 않게)
 static void show_data(StatusView &v, bool on) {
   v.data_visible = on;
-  for (lv_obj_t *o : {v.cpu.row, v.gpu.row, v.ram.row, v.disk_heading, v.net, v.bat, v.age}) {
+  for (lv_obj_t *o : {v.cpu.row, v.gpu.row, v.ram.row, v.disk_heading, v.age}) {
     if (on) {
       lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -572,13 +572,12 @@ static void build_status(StatusView &v, lv_obj_t *parent) {
   v.cpu = add_meter(v.panel, "CPU");
   v.gpu = add_meter(v.panel, "GPU");
   v.ram = add_meter(v.panel, "RAM");
+  v.ram_used = add_label(v.ram.row, "", &font_ko_14, COLOR_DIM);
   v.disk_heading = add_label(v.panel, "디스크 여유/전체", &font_ko_14, COLOR_DIM);
   v.disk_prev = disk_nav_button(v, "<");
   v.disk_next = disk_nav_button(v, ">");
   v.disk_index = add_label(v.panel, "1/1", &font_ko_14, COLOR_DIM);
   disk_count(v, 1);
-  v.net = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
-  v.bat = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
   v.none = add_label(v.panel, "PC 도우미에서 받는 중...", &font_ko_14, COLOR_DIM);
   lv_obj_set_style_text_align(v.none, LV_TEXT_ALIGN_CENTER, 0);
   show_data(v, false);
@@ -620,6 +619,9 @@ static void layout_status(StatusView &v, int w, int h) {
     lv_obj_set_size(m->bar, l.card_width - 12, 3);
     lv_obj_set_pos(m->bar, 6, 45);
   }
+  lv_obj_set_width(v.ram_used, l.card_width - 12);
+  lv_label_set_long_mode(v.ram_used, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(v.ram_used, 6, 47);
   lv_obj_set_pos(v.disk_heading, 0, l.disk_heading_y + 4);
   lv_obj_set_width(v.disk_heading, l.width - 98);
   lv_label_set_long_mode(v.disk_heading, LV_LABEL_LONG_DOT);
@@ -643,16 +645,9 @@ static void layout_status(StatusView &v, int w, int h) {
     lv_obj_set_pos(m.bar, 0, 18);
     lv_obj_set_pos(m.row, 0, l.disk_y + (i % l.disk_slots) * l.disk_stride);
   }
-  for (lv_obj_t *label : {v.net, v.bat}) {
-    lv_obj_set_width(label, l.width);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-  }
-  lv_obj_set_pos(v.net, 0, l.footer_y);
-  lv_obj_set_width(v.bat, l.width - 64);
-  lv_obj_set_pos(v.bat, 0, l.footer_y + 16);
   lv_obj_set_width(v.age, 60);
   lv_obj_set_style_text_align(v.age, LV_TEXT_ALIGN_RIGHT, 0);
-  lv_obj_set_pos(v.age, l.width - 60, l.footer_y + 16);
+  lv_obj_set_pos(v.age, l.width - 60, l.footer_y);
   lv_obj_set_width(v.none, l.width);
   lv_obj_align(v.none, LV_ALIGN_CENTER, 0, 10);
   disk_page(v);
@@ -708,8 +703,7 @@ void pcpanel_device_status(lv_obj_t *tile, int w, int h) {
   lv_label_set_text(device_stat.host, lv_label_get_text(main_stat.host));
   lv_label_set_text(device_stat.age, lv_label_get_text(main_stat.age));
   lv_label_set_text(device_stat.none, lv_label_get_text(main_stat.none));
-  lv_label_set_text(device_stat.net, lv_label_get_text(main_stat.net));
-  lv_label_set_text(device_stat.bat, lv_label_get_text(main_stat.bat));
+  lv_label_set_text(device_stat.ram_used, lv_label_get_text(main_stat.ram_used));
   copy_meter(device_stat.cpu, main_stat.cpu);
   copy_meter(device_stat.gpu, main_stat.gpu);
   copy_meter(device_stat.ram, main_stat.ram);
@@ -770,15 +764,18 @@ static void apply_status(StatusView &v, void *arg) {
     }
   }
   if (v.width > 0 && v.height > 0) layout_status(v, v.width, v.height);
-  snprintf(buf, sizeof(buf), "받기 %s  보내기 %s", pc["down"] | "-", pc["up"] | "-");
-  lv_label_set_text(v.net, buf);
-  int bat = pc["battery"] | -1;
-  if (bat >= 0) {
-    snprintf(buf, sizeof(buf), "배터리 %d%%%s", bat, pc["plugged"] == true ? " 충전" : "");
-    lv_label_set_text(v.bat, buf);
+  // PC 는 "12.3GB / 32.0GB" 로 보낸다. 좁은 칸에 맞게 "12/32GB" 로 줄인다 (10 보다 작으면 소수 한 자리)
+  float used, total;
+  char used_unit[3], total_unit[3];
+  if (sscanf(pc["ram_text"] | "", "%f%2s / %f%2s", &used, used_unit, &total, total_unit) == 4) {
+    if (strcmp(used_unit, total_unit) == 0) {
+      snprintf(buf, sizeof(buf), used < 10 ? "%.1f/%.0f%s" : "%.0f/%.0f%s", used, total, total_unit);
+    } else {
+      snprintf(buf, sizeof(buf), "%.0f%s/%.0f%s", used, used_unit, total, total_unit);
+    }
+    lv_label_set_text(v.ram_used, buf);
   } else {
-    snprintf(buf, sizeof(buf), "RAM %s", pc["ram_text"] | "-");
-    lv_label_set_text(v.bat, buf);
+    lv_label_set_text(v.ram_used, "");
   }
   show_data(v, true);
 }

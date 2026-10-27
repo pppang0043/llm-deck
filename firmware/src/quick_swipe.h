@@ -1,6 +1,6 @@
 #pragma once
 
-// 화면 위 32px 에서 시작한 세로 쓸기만 빠른 설정으로 쓴다. 기존 버튼의 탭은 그대로 둔다.
+// 화면 위 56px 에서 시작한 세로 쓸기만 빠른 설정으로 쓴다. 기존 버튼의 탭은 그대로 둔다.
 enum class QuickSwipeAction { None, Open, Close };
 class QuickSwipe {
  public:
@@ -10,14 +10,14 @@ class QuickSwipe {
       pressed_ = true;
       start_x_ = x; start_y_ = y;
       was_open_ = open;
-      eligible_ = open || (y >= 0 && y < 32);
+      eligible_ = open || (y >= 0 && y < 56);
       return QuickSwipeAction::None;
     }
     if (!eligible_ || consumed_) return QuickSwipeAction::None;
     int dx = x - start_x_, dy = y - start_y_;
     int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
     if (ax > 32 && ax > ay) eligible_ = false;
-    if (eligible_ && ay >= 40 && ay > ax * 3 / 2 && (was_open_ ? dy < 0 : dy > 0)) {
+    if (eligible_ && ay >= 24 && ay > ax * 3 / 2 && (was_open_ ? dy < 0 : dy > 0)) {
       consumed_ = true;
       return was_open_ ? QuickSwipeAction::Close : QuickSwipeAction::Open;
     }

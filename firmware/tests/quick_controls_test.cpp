@@ -29,11 +29,16 @@ int main() {
   assert(swipe.sample(140, 25, true, false) == A::None);
   assert(swipe.sample(140, 100, true, false) == A::None);
   swipe.reset();
-  swipe.sample(100, 31, true, false);
-  assert(swipe.sample(100, 71, true, false) == A::Open);
+  swipe.sample(100, 55, true, false);
+  assert(swipe.sample(100, 95, true, false) == A::Open);
   swipe.reset();
-  swipe.sample(100, 32, true, false);
-  assert(swipe.sample(100, 100, true, false) == A::None);
+  // 짧게 (24px) 내려도 열린다
+  swipe.sample(100, 5, true, false);
+  assert(swipe.sample(100, 28, true, false) == A::None);
+  assert(swipe.sample(100, 29, true, false) == A::Open);
+  swipe.sample(100, 29, false, true);
+  swipe.sample(100, 56, true, false);
+  assert(swipe.sample(100, 120, true, false) == A::None);
 
   StandbyState sleep;
   assert(!sleep.active());
