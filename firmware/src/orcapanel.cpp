@@ -27,6 +27,7 @@ LV_FONT_DECLARE(font_ko_20);
 #define POP_DICTATE_COLOR 0x7A2E2A
 #define POP_DRAG_START 10  // 이만큼 내려야 끌기 (그 전에는 버튼 누르기)
 #define POP_DRAG_CLOSE 40  // 놓을 때 이만큼 내렸으면 닫는다
+#define ACTIVE_HOLD_MS 3000  // 탭 저장 지연 동안 PC 의 예전 선택으로 되돌아가지 않는다
 #define KEEP_ORDER_MS 15000  // 누른 뒤 이만큼은 순서를 바꾸지 않는다 (누르려던 자리에 다른 세션이 오지 않게)
 #define ALERT_QUIET_MS 60000  // 한 세션의 같은 알림은 이만큼 안에 다시 내지 않는다 (상태가 오락가락할 때)
 
@@ -39,6 +40,11 @@ struct Session {
 static Session sessions[MAX_ROWS];
 static int count = 0;
 static char active_id[12] = "";  // 이 기기에서 마지막으로 띄운 세션 (한 번 더 누르면 받아쓰기)
+// PC 화면 강조와 팝업/받아쓰기 대상을 구분한다. PC 가 바뀌었다고 입력을 보내지 않는다.
+static char shown_id[12] = "", pc_shown_id[12] = "";
+static bool panel_visible = false, selection_held = false;
+static uint32_t selected_at = 0;
+static void sync_pc_selection(bool reveal = false);
 static bool orca_ok = false;     // PC 에서 ORCA 를 읽었는지
 static bool received = false;    // PC 가 한 번이라도 보냈는지
 static uint32_t touched_at = 0;
@@ -157,6 +163,9 @@ static void btn_event(lv_event_t *e) {
     snprintf(json, sizeof(json), "{\"orca\":\"activate\",\"id\":\"%s\"}", s.id);
     link_send_event(json);
     snprintf(active_id, sizeof(active_id), "%s", s.id);
+    snprintf(shown_id, sizeof(shown_id), "%s", s.id);
+    selected_at = lv_tick_get();
+    selection_held = true;
     set_pop(true);
     orcapanel_refresh();
     return;
@@ -400,7 +409,7 @@ void orcapanel_refresh() {
       const Session &s = sessions[i];
       const StateLook &l = look(s.state);
       bool mine = dictating_to(s);
-      bool active = strcmp(active_id, s.id) == 0;
+      bool active = strcmp(shown_id, s.id) == 0;
       lv_obj_set_style_bg_color(p.btn[k], mine ? COLOR_TALKING : lv_color_hex(l.color), 0);
       lv_obj_set_style_border_width(p.btn[k], active ? 3 : 0, 0);
       lv_color_t text = l.dark_text && !mine ? lv_color_hex(0x1A1A1A) : lv_color_white();
@@ -750,12 +759,14 @@ static void place_pop() {
 }
 
 // 띄운 세션 버튼이 팝업에 가려지면 그 쪽을 위로 올린다
-static void reveal_active() {
-  if (!pop_open) return;
+static void reveal_session(const char *id) {
+  if (!panel_visible || !id[0]) return;
   for (Page &p : pages) {
     for (int k = 0; k < PER_PAGE; k++) {
       int i = p.session[k];
-      if (i >= 0 && i < count && strcmp(sessions[i].id, active_id) == 0) {
+      if (i >= 0 && i < count && strcmp(sessions[i].id, id) == 0) {
+        lv_obj_update_layout(pager);
+        lv_obj_scroll_to_view(p.page, LV_ANIM_ON);
         lv_obj_update_layout(p.page);
         lv_obj_scroll_to_view(p.btn[k], LV_ANIM_ON);
         return;
@@ -773,7 +784,27 @@ static void set_pop(bool open) {
     lv_obj_set_style_translate_y(pop, 0, 0);
     place_pop();
   }
-  reveal_active();
+  if (pop_open) reveal_session(active_id);
+}
+
+// 화면이 숨겨졌을 때는 저장만 한다. 보호 시간 뒤에도 새 패킷 없이 저장한 선택을 적용한다.
+static void sync_pc_selection(bool reveal) {
+  if (!panel_visible) return;
+  if (selection_held) {
+    if (lv_tick_elaps(selected_at) < ACTIVE_HOLD_MS) {
+      if (reveal) reveal_session(shown_id);
+      return;
+    }
+    selection_held = false;
+  }
+  bool changed = strcmp(shown_id, pc_shown_id) != 0;
+  if (changed) {
+    snprintf(shown_id, sizeof(shown_id), "%s", pc_shown_id);
+    // PC 에서 바뀐 세션에 예전 팝업으로 잘못 입력하지 않게 닫는다.
+    if (pop_open && strcmp(active_id, shown_id) != 0) close_pop();
+    orcapanel_refresh();
+  }
+  if (changed || reveal) reveal_session(shown_id);
 }
 
 // 상태 알림: 지난번 목록과 비교해 새 권한 요청, 작업 중 -> 완료·입력 기다림이면 알림과 소리.
@@ -847,6 +878,7 @@ bool orcapanel_running() {
 void orcapanel_set(JsonObjectConst orca) {
   received = true;
   orca_ok = orca["ok"] | false;
+  snprintf(pc_shown_id, sizeof(pc_shown_id), "%s", orca_ok ? (orca["a"] | "") : "");
   static Session next[MAX_ROWS];
   int n = 0;
   for (JsonObjectConst item : orca["list"].as<JsonArrayConst>()) {
@@ -880,6 +912,7 @@ void orcapanel_set(JsonObjectConst orca) {
     count = n;
     lay_out_pages();
   }
+  sync_pc_selection();
   orcapanel_refresh();
 }
 
@@ -933,6 +966,7 @@ void orcapanel_build(lv_obj_t *parent) {
   }
   build_pop();
   build_qr();
+  lv_timer_create([](lv_timer_t *) { sync_pc_selection(); }, 100, nullptr);
   orcapanel_refresh();
 }
 
@@ -970,10 +1004,12 @@ void orcapanel_layout(int x, int y, int w, int h) {
 }
 
 void orcapanel_show(bool on) {
+  panel_visible = on;
   if (on) {
     orcapanel_refresh();
     lv_obj_scroll_to_x(pager, 0, LV_ANIM_OFF);  // 늘 가장 최근 쪽부터
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+    sync_pc_selection(true);
   } else {
     // 받아쓰기는 다른 화면으로 가도 이어진다 (사용량 화면 버튼과 같다)
     close_qr();

@@ -6,6 +6,7 @@
 #include <lvgl.h>
 
 #include "pins.h"
+#include "quickpanel.h"
 
 #define CST816_ADDR 0x15
 #define CST816_REG_ID 0xA7
@@ -36,6 +37,7 @@ static bool finger_down = false;
 static lv_point_t finger_at;
 static uint8_t rotation = 0;
 static volatile uint32_t touched_ms = 0;
+static uint32_t wake_sequence = 0;
 // 화면이 꺼져(어두워져) 있을 때의 첫 터치는 깨우기만 하고 버튼으로 넘기지 않는다
 static volatile bool sleeping = false;
 static bool swallow = false;
@@ -191,6 +193,7 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   if (finger_down) {
     finger_point(raw, &finger_at);
     touched_ms = millis();
+    ++wake_sequence;
   }
   // 나눠 쓰는 동안 손가락은 기기 화면(device_touch_cb)으로 가고, 원래 화면은 PC 에서 누른 것만 받는다
   bool down = finger_down && !split;
@@ -216,11 +219,20 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     remote = remote_active;
     down = remote && remote_now.down;
   }
-  if (down) touched_ms = millis();
+  if (down) {
+    touched_ms = millis();
+    if (remote) ++wake_sequence;
+  }
   if (down && sleeping) swallow = true;
   if (swallow) {
     // 손을 뗄 때까지 눌리지 않은 것으로 알린다
     if (!down) swallow = false;
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+  int x = remote ? remote_now.x : finger_at.x;
+  int y = remote ? remote_now.y : finger_at.y;
+  if (quickpanel_touch(drv->disp, x, y, down)) {
     data->state = LV_INDEV_STATE_RELEASED;
     return;
   }
@@ -242,6 +254,10 @@ static void device_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   if (down && sleeping) device_swallow = true;
   if (device_swallow) {
     if (!down) device_swallow = false;
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+  if (quickpanel_touch(drv->disp, finger_at.x, finger_at.y, down)) {
     data->state = LV_INDEV_STATE_RELEASED;
     return;
   }
@@ -358,8 +374,13 @@ void display_set_sleeping(bool on) {
   sleeping = on;
 }
 
-void display_poke() {
+void display_poke(bool wake) {
   touched_ms = millis();
+  if (wake) ++wake_sequence;
+}
+
+uint32_t display_wake_sequence() {
+  return wake_sequence;
 }
 
 void display_mirror(bool on) {

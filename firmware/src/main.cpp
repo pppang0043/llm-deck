@@ -19,6 +19,8 @@
 #include "net.h"
 #include "photo.h"
 #include "saver.h"
+#include "quickpanel.h"
+#include "standby_state.h"
 #include "sd_video.h"
 #include "settings.h"
 #include "askpanel.h"
@@ -80,6 +82,7 @@ static void apply_rotation() {
   camera_ui_layout();
   gallery_layout();
   saver_layout();
+  quickpanel_layout();
   Serial.printf("[main] screen rotation %d (tilt %d + button %d)\n", rotation, tilt, rotate_offset);
 }
 
@@ -175,15 +178,23 @@ static void cpu_save(bool save) {
   }
 }
 
+static StandbyState standby;
+
+static void enter_standby() {
+  standby.enter(display_wake_sequence());
+  Serial.println("[power] standby: screen off, links kept (touch/BOOT wakes)");
+}
+
 static void power_save() {
   static uint8_t shown = 255;
   static bool shown_saver = false;
+  bool manual = standby.update(display_wake_sequence());
   uint32_t idle = millis() - display_last_touch_ms();
-  bool busy = camera_ui_open() || video_recording();
+  bool busy = camera_ui_open() || video_recording() || (manual && gallery_open());
   bool powered = battery_pct() < 0 || battery_external_power();  // 배터리가 없으면 USB 전원으로 켜진 것
   bool battery_only = settings_auto_dim() && !powered && !busy;
   bool idle_long = !busy && settings_saver_ms() && idle > settings_saver_ms();
-  bool saver = (idle_long && !powered) || saver_demo_active();
+  bool saver = !manual && ((idle_long && !powered) || saver_demo_active());
 
   uint8_t level = settings_brightness();
   if (battery_only && idle > OFF_AFTER_MS) {
@@ -191,13 +202,16 @@ static void power_save() {
   } else if (battery_only && idle > DIM_AFTER_MS) {
     level = 10;
   }
+  if (manual) level = 0;
   if (saver && level > 0) level = min(level, (uint8_t)SAVER_BRIGHTNESS);
   if (idle_long && powered && level > 0) level = min(level, (uint8_t)IDLE_BRIGHTNESS);
   // 사진·동영상을 보내거나 카드에 쓰는 중에는 잠들지 않는다
   bool transferring = photo_sending() || photo_streaming() || sd_video_active();
-  cpu_save(!powered && !busy && (level == 0 || saver));
+  // 수동 절전은 USB 전원에서도 CPU 를 낮추되 녹음/전송/카메라는 기존 속도를 유지한다.
+  bool audio = mic_is_on() || askpanel_talk_state() == ASK_TALKING;
+  cpu_save(manual ? standby.lower_cpu(busy, transferring, audio) : !powered && !busy && (level == 0 || saver));
   // 꺼지는 것은 배터리 절약과 따로 "자동 꺼짐" 설정을 따른다. 전원이 들어오면 화면만 쉬고 꺼지지 않는다
-  if (settings_auto_off() && !powered && !busy && !transferring && idle > DEEP_SLEEP_AFTER_MS) deep_sleep();
+  if (!manual && settings_auto_off() && !powered && !busy && !transferring && idle > DEEP_SLEEP_AFTER_MS) deep_sleep();
   if (level == shown && saver == shown_saver) return;
   bool first = shown == 255;
   shown = level;
@@ -324,6 +338,7 @@ void setup() {
   gallery_init();
   mem_log("camera_ui");
   saver_init();
+  quickpanel_init(enter_standby);
   ui_set_home_actions(camera_ui_show);
   imu_init();
   battery_init();
@@ -386,8 +401,9 @@ void loop() {
   ble_link_loop();
   link_loop();
   if (boot_button_pressed()) {
+    bool waking = standby.wake();
     display_poke();
-    toggle_mic();
+    if (!waking) toggle_mic();
   }
   follow_tilt();
   battery_loop();

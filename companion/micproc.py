@@ -51,9 +51,13 @@ class MicServer:
             self._close()
             self.emit({"closed": True})
 
+    def _usable(self, d: dict) -> bool:
+        # PortAudio WDM-KS 는 blocking 읽기를 지원하지 않는다.
+        return d["max_input_channels"] > 0 and "WDM-KS" not in self.sd.query_hostapis(d["hostapi"])["name"]
+
     def _inputs(self) -> list[str]:
         """기본 방식(Windows 는 MME, WASAPI ... 중 하나)의 마이크 이름들"""
-        devices = [d for d in self.sd.query_devices() if d["max_input_channels"] > 0]
+        devices = [d for d in self.sd.query_devices() if self._usable(d)]
         try:
             hostapi = self.sd.query_devices(kind="input")["hostapi"]
             devices = [d for d in devices if d["hostapi"] == hostapi] or devices
@@ -63,7 +67,8 @@ class MicServer:
 
     def _default(self) -> str:
         try:
-            return str(self.sd.query_devices(kind="input")["name"])
+            d = self.sd.query_devices(kind="input")
+            return str(d["name"]) if self._usable(d) else ""
         except Exception:  # 기본 마이크가 없다
             return ""
 
@@ -73,7 +78,7 @@ class MicServer:
             hostapi = self.sd.query_devices(kind="input")["hostapi"]
         except Exception:
             hostapi = None
-        found = [i for i, d in enumerate(self.sd.query_devices()) if d["max_input_channels"] > 0 and d["name"] == name]
+        found = [i for i, d in enumerate(self.sd.query_devices()) if self._usable(d) and d["name"] == name]
         same = [i for i in found if self.sd.query_devices(i)["hostapi"] == hostapi]
         return (same or found or [None])[0]
 

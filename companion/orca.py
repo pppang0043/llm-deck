@@ -1,7 +1,8 @@
 """ORCA 에 열린 세션들의 작업 상태를 기기로 보내고, 기기에서 고른 세션에 받아쓰기한 글을 입력한다.
 
-  - 10초마다 orca CLI 로 세션 목록과 상태를 읽는다 (orca worktree ps, orca terminal list). 바뀌었을 때만 기기로 보낸다.
-      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태}]}}
+  - 2초마다 orca CLI 로 세션 목록과 상태를 읽는다 (orca worktree ps, orca terminal list). 바뀌었을 때만 기기로 보낸다.
+    Windows 는 CLI 의 named pipe 로 직접 묻고, 안 되면 orca 명령으로 보낸다.
+      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태}], "a": ORCA 에 지금 보이는 세션 id 또는 ""}}
       s: working(작업 중) / waiting(입력 기다림) / permission(권한 요청) / blocked / done / idle / shell(AI 없는 터미널)
   - 기기에서 세션을 누르면 {"ask": "start", "mode": "dictate", "orca": id}: 그 세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다.
     받아 적은 글은 커서 자리가 아니라 그 세션 터미널에 직접 넣는다 (orca terminal send). Enter 는 누르지 않는다.
@@ -22,11 +23,12 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import typer
 
-POLL_SECONDS = 10
+POLL_SECONDS = 2  # 직접 묻기는 수십 ms 라 자주 읽어도 된다
 # ORCA 는 탭을 바꾸면 이만큼 뒤에 화면 상태를 저장한다 (재 보니 1~1.5초)
 ACTIVE_TAB_LAG_SECONDS = 2.0
 MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
@@ -99,6 +101,9 @@ def find_orca() -> str | None:
             if os.path.isfile(path):
                 return path
     path = shutil.which("orca")
+    # Windows which 는 cwd 의 이 모듈(orca.py)을 실행 파일로 고를 수 있다
+    if path and sys.platform == "win32" and not path.lower().endswith((".exe", ".cmd", ".bat")):
+        path = None
     # 끊어진 링크는 which 가 건너뛴다. Windows 에서 orca.exe 가 옆에 없는 .cmd(install.py 가 까는 orca.cmd)는
     # cmd.exe 를 거쳐 글이 망가질 수 있어 (_native) 진짜 orca.exe 를 못 찾을 때만 쓴다
     if path and not _native(path).lower().endswith((".cmd", ".bat")):
@@ -130,6 +135,95 @@ def find_orca() -> str | None:
                 if os.path.exists(path):
                     return path
     return shim
+
+
+# Windows: orca.exe 실행을 막거나 늦추는 보안 프로그램을 피하려고 CLI 와 같은 pipe 요청을 쓴다.
+CLI_CLIENT = {"id": "orca-cli", "type": "desktop"}
+
+
+def _rpc_request(args: tuple) -> tuple[str, dict] | None:
+    if args == ("worktree", "ps"):
+        return "worktree.ps", {}
+    if args == ("terminal", "list"):
+        return "terminal.list", {"includeVisualLayouts": False}
+    if len(args) == 4 and args[:3] == ("terminal", "switch", "--terminal"):
+        return "terminal.focus", {"terminal": args[3], "navigation": "host"}
+    if len(args) >= 5 and args[:3] == ("terminal", "send", "--terminal"):
+        params = {"terminal": args[3], "enter": False, "interrupt": False, "client": CLI_CLIENT}
+        if args[4:] == ("--enter",):
+            return "terminal.send", {**params, "enter": True}
+        if len(args) == 6 and args[4] == "--text":
+            return "terminal.send", {**params, "text": args[5]}
+    return None
+
+
+def _runtime_pipe() -> tuple[str, str] | None:
+    """ORCA 가 기록한 Windows pipe 주소와 인증 토큰. 다른 OS 는 기존 CLI 를 쓴다."""
+    if sys.platform != "win32":
+        return None
+    base = os.environ.get("ORCA_USER_DATA_PATH") or os.path.join(os.environ.get("APPDATA", ""), "orca")
+    try:
+        meta = json.loads(Path(base, "orca-runtime.json").read_text(encoding="utf-8"))
+        pipe = next(t["endpoint"] for t in meta["transports"] if t.get("kind") == "named-pipe")
+        return pipe, meta["authToken"]
+    except (OSError, ValueError, KeyError, TypeError, StopIteration):
+        return None
+
+
+def _pipe_call(method: str, params: dict, timeout: float) -> tuple[str, dict | None]:
+    """unsent: 미전송, lost: 전송 뒤 응답 유실, answered: 성공/실패 답변 수신."""
+    target = _runtime_pipe()
+    if target is None:
+        return "unsent", None
+    pipe, token = target
+    try:
+        f = open(pipe, "r+b", buffering=0)
+    except OSError:
+        return "unsent", None
+    rid = str(uuid.uuid4())
+    box: dict = {}
+
+    def talk() -> None:
+        try:
+            payload = (json.dumps({"id": rid, "authToken": token, "method": method, "params": params}) + "\n").encode()
+            # Raw pipe writes may be short; send the complete line.
+            while payload:
+                written = f.write(payload)
+                if not written:
+                    raise OSError("pipe write failed")
+                payload = payload[written:]
+            buf = b""
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    return
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    if not line.strip():
+                        continue
+                    msg = json.loads(line)
+                    if "_keepalive" in msg:
+                        continue
+                    if msg.get("id") == rid:
+                        box["msg"] = msg
+                        return
+        except (OSError, ValueError, TypeError) as e:
+            box["error"] = e
+        finally:
+            f.close()
+
+    worker = threading.Thread(target=talk, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    msg = box.get("msg")
+    if msg is None:
+        print(f"[orca] {method} 직접 보내기 실패: {box.get('error') or ('시간 초과' if worker.is_alive() else '답 없음')}")
+        return "lost", None
+    if not msg.get("ok"):
+        print(f"[orca] {method} 실패: {msg.get('error')}")
+        return "answered", None
+    return "answered", msg.get("result")
 
 
 # --- "슬래시" 를 / 명령으로 ---
@@ -400,7 +494,13 @@ class Orca:
         if self.enabled:
             threading.Thread(target=self._poll, daemon=True).start()
 
-    def _run(self, *args: str, timeout: float = 10) -> dict | None:
+    def _run(self, *args: str, timeout: float = 30) -> dict | None:
+        # 보낸 입력은 응답을 잃어도 다시 보내지 않는다 (중복 입력 방지).
+        request = _rpc_request(args)
+        if request:
+            status, result = _pipe_call(*request, timeout)
+            if status == "answered" or (status == "lost" and request[0] == "terminal.send"):
+                return result
         if self.cli is None:
             self.cli = find_orca()
             if self.cli is None:
@@ -479,7 +579,10 @@ class Orca:
         self.handles = handles
         self.tabs = tabs
         self.workdirs = sorted({t.get("worktreePath") for t in terms.get("terminals", []) if t.get("worktreePath")})
-        return {"ok": True, "list": rows[:MAX_SESSIONS]}
+        rows = rows[:MAX_SESSIONS]
+        active = active_tab()
+        shown = next((r["id"] for r in rows if active and tabs.get(handles[r["id"]]) == active), "")
+        return {"ok": True, "list": rows, "a": shown}
 
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다."""

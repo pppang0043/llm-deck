@@ -21,7 +21,9 @@ int display_height();
 // 마지막으로 화면을 만진 시각 (millis)
 uint32_t display_last_touch_ms();
 // 만진 것처럼 절전 시간을 처음부터 다시 센다 (버튼·알림이 있을 때)
-void display_poke();
+void display_poke(bool wake = true);
+// 실제 터치/버튼/알림의 깨우기 신호. 동영상 재생의 화면 유지(wake=false)는 제외한다.
+uint32_t display_wake_sequence();
 // 절전으로 화면이 어둡거나 꺼져 있는 동안 true. 이때의 첫 터치는 깨우기만 하고 버튼을 누르지 않는다.
 void display_set_sleeping(bool on);
 

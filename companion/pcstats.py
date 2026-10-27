@@ -1,13 +1,17 @@
-"""기기의 "PC 상태" 화면에 보낼 이 PC 의 CPU, 메모리, 디스크, 네트워크, 배터리.
+"""기기의 "PC 상태" 화면에 보낼 이 PC 의 CPU, GPU, 메모리, 드라이브별 디스크, 네트워크, 배터리.
 
 기기는 그 화면이 보이는 동안 5초마다 {"pc_watch": true} 를 보낸다. 그 뒤 15초 동안 3초마다 보낸다
 (화면을 안 볼 때는 보내지 않아 블루투스를 아낀다).
 """
 
+import ntpath
 import os
+import sys
 import time
 
 import psutil
+
+from wingpu import WindowsGpu
 
 WATCH_SECONDS = 15
 SEND_EVERY = 3
@@ -28,11 +32,48 @@ def _system_disk() -> str:
     return "/System/Volumes/Data" if os.path.isdir("/System/Volumes/Data") else "/"
 
 
+def _disks() -> list[dict]:
+    """시스템 디스크와 접근 가능한 로컬 드라이브. 네트워크/광학 드라이브는 제외."""
+    system = _system_disk()
+    candidates = [system]
+    try:
+        candidates += [p.mountpoint for p in psutil.disk_partitions(all=False)
+                       if p.fstype and p.fstype.lower() not in ("cdfs", "udf", "smbfs", "cifs", "nfs", "nfs4")
+                       and "remote" not in p.opts.lower() and "cdrom" not in p.opts.lower()]
+    except OSError:
+        pass
+    seen: set[str] = set()
+    disks = []
+    paths = ntpath if sys.platform == "win32" else os.path
+    for mount in candidates:
+        if sys.platform == "darwin" and mount != system and not mount.startswith("/Volumes/"):
+            continue  # APFS 의 시스템 보조 볼륨은 중복 표시하지 않는다
+        key = paths.normcase(paths.normpath(mount))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            usage = psutil.disk_usage(mount)
+        except OSError:
+            continue  # 비어 있는 카드 리더, 권한 없는 드라이브 등
+        if usage.total <= 0:
+            continue
+        name = mount.rstrip("/\\") or "/"
+        if sys.platform != "win32":
+            name = "시스템" if mount == system else os.path.basename(name) or "/"
+        disks.append({"name": name[:24], "pct": round(usage.percent),
+                      "free": _size(usage.free), "total": _size(usage.total)})
+        if len(disks) == 26:
+            break
+    return disks  # Windows 드라이브 문자 수, 기기 표시 한도와 같다
+
+
 class PcStats:
     def __init__(self) -> None:
         self.watch_until = 0.0
         self.sent_at = 0.0
         psutil.cpu_percent(interval=None)  # 첫 호출은 0 이 나오므로 미리 한 번
+        self.gpu = WindowsGpu()
         self._net = psutil.net_io_counters()
         self._net_at = time.time()
 
@@ -47,7 +88,7 @@ class PcStats:
     def collect(self) -> dict:
         self.sent_at = time.time()
         mem = psutil.virtual_memory()
-        disk = psutil.disk_usage(_system_disk())
+        disks = _disks()
         net = psutil.net_io_counters()
         now = time.time()
         span = max(now - self._net_at, 0.1)
@@ -58,8 +99,11 @@ class PcStats:
             "cpu": round(psutil.cpu_percent(interval=None)),
             "ram": round(mem.percent),
             "ram_text": f"{_size(mem.used)} / {_size(mem.total)}",
-            "disk": round(disk.percent),
-            "disk_text": f"{_size(disk.free)} 남음",
+            # 예전 펌웨어도 시스템 디스크 한 개는 계속 표시한다.
+            "disk": disks[0]["pct"] if disks else 0,
+            "disk_text": f"{disks[0]['free']} 남음" if disks else "-",
+            "disks": disks,
+            "gpu": self.gpu.percent(time.monotonic()),
             "down": _size(down) + "/s",
             "up": _size(up) + "/s",
         }

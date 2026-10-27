@@ -50,6 +50,9 @@ class FakeSd:
             return self.devices[self.default]
         return self.devices[device]
 
+    def query_hostapis(self, index):
+        return {"name": "Core Audio"}
+
     def InputStream(self, samplerate, channels, dtype, device):
         return FakeStream(self, device)
 

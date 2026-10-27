@@ -1076,7 +1076,7 @@ void gallery_loop() {
   }
   if (!playing) return;
   uint32_t pos = millis() - play_from;
-  display_poke();  // 보는 동안 화면 보호기·절전이 끼어들지 않게
+  display_poke(false);  // 자동 절전만 늦춘다. 사용자가 직접 고른 절전은 깨우지 않는다
   if (pos >= v_duration) {
     set_playing(false);
     show_video_time(v_duration);

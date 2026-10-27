@@ -5,6 +5,7 @@
 #include "ble_hid.h"
 #include "link.h"
 #include "orcapanel.h"
+#include "pc_status_layout.h"
 
 #define COUNT(a) (sizeof(a) / sizeof(a[0]))
 #define MAX_BUTTONS 8
@@ -126,7 +127,11 @@ struct Meter {
 // PC 상태 화면 하나. 원래 화면에 하나, 미러링을 나눠 쓰는 동안 기기 화면에 하나 (mirror.cpp).
 struct StatusView {
   lv_obj_t *panel, *host, *age, *none;
-  Meter cpu, ram, disk;
+  Meter cpu, gpu, ram;
+  Meter disks[26];  // Windows 드라이브 문자 수. 실제 받은 개수만 만든다
+  int disk_count, width, height, disk_page, disk_slots;
+  lv_obj_t *disk_heading, *disk_prev, *disk_next, *disk_index;
+  bool data_visible;
   lv_obj_t *net, *bat;
   bool watching;  // 화면에 보이는 중 (ui.cpp, mirror.cpp 가 알려 준다)
 };
@@ -486,15 +491,64 @@ static Meter add_meter(lv_obj_t *parent, const char *name) {
   return m;
 }
 
+static void layout_status(StatusView &v, int w, int h);
+
+static void disk_page(StatusView &v) {
+  int pages = max(1, (v.disk_count + v.disk_slots - 1) / v.disk_slots);
+  v.disk_page = constrain(v.disk_page, 0, pages - 1);
+  for (int i = 0; i < v.disk_count; i++) {
+    bool visible = v.data_visible && i / v.disk_slots == v.disk_page;
+    if (visible) lv_obj_clear_flag(v.disks[i].row, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(v.disks[i].row, LV_OBJ_FLAG_HIDDEN);
+  }
+  for (lv_obj_t *o : {v.disk_prev, v.disk_next, v.disk_index}) {
+    if (v.data_visible && pages > 1) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_label_set_text_fmt(v.disk_index, "%d/%d", v.disk_page + 1, pages);
+  if (v.disk_page == 0) lv_obj_add_state(v.disk_prev, LV_STATE_DISABLED);
+  else lv_obj_clear_state(v.disk_prev, LV_STATE_DISABLED);
+  if (v.disk_page == pages - 1) lv_obj_add_state(v.disk_next, LV_STATE_DISABLED);
+  else lv_obj_clear_state(v.disk_next, LV_STATE_DISABLED);
+}
+
+static void disk_nav(lv_event_t *e) {
+  StatusView &v = *(StatusView *)lv_event_get_user_data(e);
+  v.disk_page += lv_event_get_target(e) == v.disk_next ? 1 : -1;
+  disk_page(v);
+}
+
+static lv_obj_t *disk_nav_button(StatusView &v, const char *text) {
+  lv_obj_t *b = lv_btn_create(v.panel);
+  lv_obj_remove_style_all(b);
+  lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_color(b, COLOR_ROW, 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_30, LV_STATE_DISABLED);
+  lv_obj_set_style_radius(b, 5, 0);
+  lv_obj_t *label = add_label(b, text, &font_ko_14, lv_color_white());
+  lv_obj_center(label);
+  lv_obj_add_event_cb(b, disk_nav, LV_EVENT_CLICKED, &v);
+  return b;
+}
+
+static void disk_count(StatusView &v, int count) {
+  count = constrain(count, 0, 26);
+  while (v.disk_count > count) lv_obj_del(v.disks[--v.disk_count].row);
+  while (v.disk_count < count) v.disks[v.disk_count++] = add_meter(v.panel, "디스크");
+}
+
 // 안내 글을 보이는 동안은 숫자 줄을 숨긴다 (안내가 가운데에서 줄과 겹치지 않게, 오래된 숫자를 지금 것으로 보지 않게)
 static void show_data(StatusView &v, bool on) {
-  for (lv_obj_t *o : {v.cpu.row, v.ram.row, v.disk.row, v.net, v.bat, v.age}) {
+  v.data_visible = on;
+  for (lv_obj_t *o : {v.cpu.row, v.gpu.row, v.ram.row, v.disk_heading, v.net, v.bat, v.age}) {
     if (on) {
       lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
     }
   }
+  disk_page(v);
   if (on) {
     lv_obj_add_flag(v.none, LV_OBJ_FLAG_HIDDEN);
   } else {
@@ -504,11 +558,25 @@ static void show_data(StatusView &v, bool on) {
 
 static void build_status(StatusView &v, lv_obj_t *parent) {
   v.panel = add_panel(parent, "PC 상태");
+  v.disk_count = 0;
+  v.width = v.height = 0;
+  v.disk_page = 0;
+  v.disk_slots = 2;
+  v.data_visible = false;
+  lv_obj_set_style_pad_all(v.panel, 8, 0);
+  lv_obj_clear_flag(v.panel, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(v.panel, LV_DIR_NONE);
+  lv_obj_set_scrollbar_mode(v.panel, LV_SCROLLBAR_MODE_OFF);
   v.host = add_label(v.panel, "", &font_ko_14, lv_color_white());
   v.age = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
   v.cpu = add_meter(v.panel, "CPU");
-  v.ram = add_meter(v.panel, "메모리");
-  v.disk = add_meter(v.panel, "디스크");
+  v.gpu = add_meter(v.panel, "GPU");
+  v.ram = add_meter(v.panel, "RAM");
+  v.disk_heading = add_label(v.panel, "디스크 여유/전체", &font_ko_14, COLOR_DIM);
+  v.disk_prev = disk_nav_button(v, "<");
+  v.disk_next = disk_nav_button(v, ">");
+  v.disk_index = add_label(v.panel, "1/1", &font_ko_14, COLOR_DIM);
+  disk_count(v, 1);
   v.net = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
   v.bat = add_label(v.panel, "", &font_ko_14, COLOR_DIM);
   v.none = add_label(v.panel, "PC 도우미에서 받는 중...", &font_ko_14, COLOR_DIM);
@@ -523,25 +591,71 @@ void pcpanel_build(lv_obj_t *parent) {
 }
 
 static void layout_status(StatusView &v, int w, int h) {
+  v.width = w;
+  v.height = h;
+  const PcStatusLayout l = PcStatusLayout::fit(w, h);
+  v.disk_slots = l.disk_slots;
   lv_obj_set_size(v.panel, w, h);
   lv_obj_set_pos(v.panel, 0, 0);
-  int inner_w = w - 20;
-
-  // PC 상태: 위에서부터 차례로
-  lv_obj_align(v.host, LV_ALIGN_TOP_RIGHT, 0, 4);
-  int yy = 30;
-  lv_obj_set_pos(v.age, 0, yy);
-  yy += 22;
-  for (Meter *m : {&v.cpu, &v.ram, &v.disk}) {
-    lv_obj_set_size(m->row, inner_w, 30);
-    lv_obj_set_width(m->bar, inner_w);
-    lv_obj_set_pos(m->row, 0, yy);
-    yy += 36;
+  // 제목과 PC 이름은 한 줄, 사용률 세 개는 나란히 놓는다.
+  lv_obj_set_width(v.host, l.width - 90);
+  lv_label_set_long_mode(v.host, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_align(v.host, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(v.host, 90, 4);
+  int col = 0;
+  for (Meter *m : {&v.cpu, &v.gpu, &v.ram}) {
+    lv_obj_set_size(m->row, l.card_width, l.card_height);
+    lv_obj_set_pos(m->row, col++ * (l.card_width + 6), l.card_y);
+    lv_obj_set_style_bg_color(m->row, COLOR_ROW, 0);
+    lv_obj_set_style_bg_opa(m->row, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(m->row, 7, 0);
+    lv_obj_set_align(m->name, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_align(m->value, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_align(m->bar, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_pos(m->name, 6, 2);
+    lv_obj_set_style_text_font(m->value, &font_ko_20, 0);
+    lv_obj_set_style_text_align(m->value, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_width(m->value, l.card_width - 12);
+    lv_obj_set_pos(m->value, 6, 19);
+    lv_obj_set_size(m->bar, l.card_width - 12, 3);
+    lv_obj_set_pos(m->bar, 6, 45);
   }
-  lv_obj_set_pos(v.net, 0, yy);
-  yy += 20;
-  lv_obj_set_pos(v.bat, 0, yy);
+  lv_obj_set_pos(v.disk_heading, 0, l.disk_heading_y + 4);
+  lv_obj_set_width(v.disk_heading, l.width - 98);
+  lv_label_set_long_mode(v.disk_heading, LV_LABEL_LONG_DOT);
+  lv_obj_set_size(v.disk_prev, 28, 24);
+  lv_obj_set_pos(v.disk_prev, l.width - 94, l.disk_heading_y);
+  lv_obj_set_width(v.disk_index, 34);
+  lv_obj_set_style_text_align(v.disk_index, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_pos(v.disk_index, l.width - 64, l.disk_heading_y + 4);
+  lv_obj_set_size(v.disk_next, 28, 24);
+  lv_obj_set_pos(v.disk_next, l.width - 28, l.disk_heading_y);
+  for (int i = 0; i < v.disk_count; i++) {
+    Meter &m = v.disks[i];
+    lv_obj_set_size(m.row, l.width, l.disk_height);
+    lv_obj_set_width(m.name, 44);
+    lv_label_set_long_mode(m.name, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(m.value, l.width - 48);
+    lv_label_set_long_mode(m.value, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(m.value, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_align(m.bar, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_size(m.bar, l.width, 4);
+    lv_obj_set_pos(m.bar, 0, 18);
+    lv_obj_set_pos(m.row, 0, l.disk_y + (i % l.disk_slots) * l.disk_stride);
+  }
+  for (lv_obj_t *label : {v.net, v.bat}) {
+    lv_obj_set_width(label, l.width);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+  }
+  lv_obj_set_pos(v.net, 0, l.footer_y);
+  lv_obj_set_width(v.bat, l.width - 64);
+  lv_obj_set_pos(v.bat, 0, l.footer_y + 16);
+  lv_obj_set_width(v.age, 60);
+  lv_obj_set_style_text_align(v.age, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(v.age, l.width - 60, l.footer_y + 16);
+  lv_obj_set_width(v.none, l.width);
   lv_obj_align(v.none, LV_ALIGN_CENTER, 0, 10);
+  disk_page(v);
 }
 
 void pcpanel_layout(int x, int y, int w, int h) {
@@ -590,7 +704,6 @@ void pcpanel_device_status(lv_obj_t *tile, int w, int h) {
   build_status(device_stat, tile);
   lv_obj_clear_flag(device_stat.panel, LV_OBJ_FLAG_HIDDEN);  // 판은 숨긴 채 만들어진다 (add_panel)
   lv_obj_add_event_cb(device_stat.panel, device_status_deleted, LV_EVENT_DELETE, NULL);
-  layout_status(device_stat, w, h);
   // 지금까지 받은 값은 원래 화면의 것을 그대로 옮긴다
   lv_label_set_text(device_stat.host, lv_label_get_text(main_stat.host));
   lv_label_set_text(device_stat.age, lv_label_get_text(main_stat.age));
@@ -598,8 +711,14 @@ void pcpanel_device_status(lv_obj_t *tile, int w, int h) {
   lv_label_set_text(device_stat.net, lv_label_get_text(main_stat.net));
   lv_label_set_text(device_stat.bat, lv_label_get_text(main_stat.bat));
   copy_meter(device_stat.cpu, main_stat.cpu);
+  copy_meter(device_stat.gpu, main_stat.gpu);
   copy_meter(device_stat.ram, main_stat.ram);
-  copy_meter(device_stat.disk, main_stat.disk);
+  disk_count(device_stat, main_stat.disk_count);
+  for (int i = 0; i < main_stat.disk_count; i++) {
+    lv_label_set_text(device_stat.disks[i].name, lv_label_get_text(main_stat.disks[i].name));
+    copy_meter(device_stat.disks[i], main_stat.disks[i]);
+  }
+  layout_status(device_stat, w, h);
   show_data(device_stat, lv_obj_has_flag(main_stat.none, LV_OBJ_FLAG_HIDDEN));
 }
 
@@ -628,18 +747,38 @@ static void apply_status(StatusView &v, void *arg) {
   char buf[64];
   snprintf(buf, sizeof(buf), "%d%%", (int)(pc["cpu"] | 0));
   set_meter(v.cpu, pc["cpu"] | 0, buf);
-  snprintf(buf, sizeof(buf), "%d%%  %s", (int)(pc["ram"] | 0), pc["ram_text"] | "");
+  int gpu = pc["gpu"] | -1;
+  if (gpu >= 0) snprintf(buf, sizeof(buf), "%d%%", gpu);
+  else snprintf(buf, sizeof(buf), "-");  // 미지원/첫 표본을 0%% 로 오해하지 않게 한다
+  set_meter(v.gpu, gpu, buf);
+  snprintf(buf, sizeof(buf), "%d%%", (int)(pc["ram"] | 0));
   set_meter(v.ram, pc["ram"] | 0, buf);
-  snprintf(buf, sizeof(buf), "%d%%  %s", (int)(pc["disk"] | 0), pc["disk_text"] | "");
-  set_meter(v.disk, pc["disk"] | 0, buf);
-  snprintf(buf, sizeof(buf), "네트워크  받기 %s  보내기 %s", pc["down"] | "-", pc["up"] | "-");
+  JsonArrayConst disks = pc["disks"].as<JsonArrayConst>();
+  int count = pc["disks"].is<JsonArrayConst>() ? min((int)disks.size(), 26) : 1;
+  disk_count(v, count);
+  for (int i = 0; i < count; i++) {
+    if (!disks.isNull()) {
+      JsonObjectConst d = disks[i];
+      snprintf(buf, sizeof(buf), "%s", d["name"] | "디스크");
+      lv_label_set_text(v.disks[i].name, buf);
+      snprintf(buf, sizeof(buf), "%s / %s", d["free"] | "-", d["total"] | "-");
+      set_meter(v.disks[i], d["pct"] | 0, buf);
+    } else {
+      lv_label_set_text(v.disks[i].name, "디스크");
+      snprintf(buf, sizeof(buf), "%d%%  %s", (int)(pc["disk"] | 0), pc["disk_text"] | "");
+      set_meter(v.disks[i], pc["disk"] | 0, buf);
+    }
+  }
+  if (v.width > 0 && v.height > 0) layout_status(v, v.width, v.height);
+  snprintf(buf, sizeof(buf), "받기 %s  보내기 %s", pc["down"] | "-", pc["up"] | "-");
   lv_label_set_text(v.net, buf);
   int bat = pc["battery"] | -1;
   if (bat >= 0) {
-    snprintf(buf, sizeof(buf), "배터리  %d%%%s", bat, pc["plugged"] == true ? " (충전기 연결)" : "");
+    snprintf(buf, sizeof(buf), "배터리 %d%%%s", bat, pc["plugged"] == true ? " 충전" : "");
     lv_label_set_text(v.bat, buf);
   } else {
-    lv_label_set_text(v.bat, "");
+    snprintf(buf, sizeof(buf), "RAM %s", pc["ram_text"] | "-");
+    lv_label_set_text(v.bat, buf);
   }
   show_data(v, true);
 }
