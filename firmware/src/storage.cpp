@@ -14,6 +14,7 @@
 static bool mounted = false;
 static uint32_t tried_ms = 0;
 static bool drop_later = false;  // 동영상을 쓰는 중이라 연결을 끊지 못하고 미뤄 두었다
+static bool lent = false;        // USB 드라이브 모드로 PC 에 넘겼다 (다시 시작할 때까지 건드리지 않는다)
 // 남은 공간 (바이트). FAT32 는 처음 셀 때 오래 걸릴 수 있어 한 번 세고, 쓸 때마다 대충 뺀다. -1 이면 다시 센다.
 static volatile int64_t free_bytes = -1;
 static uint64_t total_bytes = 0;
@@ -26,7 +27,7 @@ static bool card_busy() {
 // 연결을 끊고 다음에 처음부터 다시 연결한다. 동영상을 마저 쓰는 중이면(녹화를 멈춘 뒤에도 잠시 쓴다)
 // 그 파일이 망가지지 않도록 다 쓸 때까지 미룬다.
 static void drop_card() {
-  if (!mounted) return;
+  if (!mounted || lent) return;
   if (card_busy()) {
     drop_later = true;
     return;
@@ -39,6 +40,7 @@ static void drop_card() {
 }
 
 bool storage_ready() {
+  if (lent) return false;
   if (drop_later && !card_busy()) drop_card();
   if (mounted) return true;
   // 카드가 없을 때 매번 시도하면 느려지므로 10초에 한 번만
@@ -177,7 +179,7 @@ int storage_clear(const char *dir) {
 bool storage_present() {
   // 연결된 뒤에 카드를 뺐는지는 storage_ready 만으로는 모른다. 첫 칸(512바이트)을 읽어 본다.
   // 동영상을 쓰는 중에는 건드리지 않는다 (빠졌으면 그쪽이 알아서 실패한다).
-  if (mounted && !sd_video_active()) {
+  if (mounted && !lent && !sd_video_active()) {
     static uint8_t sector[512];
     if (!SD.readRAW(sector, 0)) {
       Serial.println("[sd] card removed");
@@ -198,6 +200,12 @@ bool storage_recheck() {
   drop_card();
   tried_ms = 0;
   return storage_ready();
+}
+
+bool storage_lend() {
+  if (card_busy() || !storage_ready()) return false;
+  lent = true;
+  return true;
 }
 
 bool storage_format() {

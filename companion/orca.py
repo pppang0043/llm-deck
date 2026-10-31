@@ -2,7 +2,7 @@
 
   - 2초마다 orca CLI 로 세션 목록과 상태를 읽는다 (orca worktree ps, orca terminal list). 바뀌었을 때만 기기로 보낸다.
     Windows 는 CLI 의 named pipe 로 직접 묻고, 안 되면 orca 명령으로 보낸다.
-      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태}], "a": ORCA 에 지금 보이는 세션 id 또는 ""}}
+      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태, "m": 끝난 세션의 마지막 답변 요약 (없으면 뺀다)}], "a": ORCA 에 지금 보이는 세션 id 또는 ""}}
       s: working(작업 중) / waiting(입력 기다림) / permission(권한 요청) / blocked / done / idle / shell(AI 없는 터미널)
   - 기기에서 세션을 누르면 {"ask": "start", "mode": "dictate", "orca": id}: 그 세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다.
     받아 적은 글은 커서 자리가 아니라 그 세션 터미널에 직접 넣는다 (orca terminal send). Enter 는 누르지 않는다.
@@ -139,6 +139,8 @@ def find_orca() -> str | None:
 
 # Windows: orca.exe 실행을 막거나 늦추는 보안 프로그램을 피하려고 CLI 와 같은 pipe 요청을 쓴다.
 CLI_CLIENT = {"id": "orca-cli", "type": "desktop"}
+DONE_STATES = ("waiting", "awaiting-input", "done")  # 펌웨어 orcapanel.cpp 의 is_waiting
+SUMMARY_CHARS = 40
 
 
 def _rpc_request(args: tuple) -> tuple[str, dict] | None:
@@ -412,6 +414,15 @@ def _custom_titles() -> dict[str, str]:
     return titles
 
 
+def _summary(message: str | None) -> str:
+    """기기의 완료 알림에 보일 요약: 마지막 답변의 첫 줄을 마크다운 표시를 빼고 SUMMARY_CHARS 까지."""
+    for line in (message or "").splitlines():
+        line = re.sub(r"^[\s#>*-]+|[*`]", "", line).strip()
+        if line:
+            return line if len(line) <= SUMMARY_CHARS else line[:SUMMARY_CHARS - 3] + "..."
+    return ""
+
+
 def _short_title(title: str) -> str:
     # ORCA 는 탭 이름 앞에 작업 중 표시(◐ ✳ 등)를 붙인다
     return re.sub(r"^[^\w가-힣/]+\s*", "", title or "").strip() or "터미널"
@@ -559,6 +570,10 @@ class Orca:
             title = custom.get(term.get("tabId")) or _short_title(term.get("title"))
             rows.append({"id": short, "t": title[:30], "p": Path(path).name[:20],
                          "s": state})
+            # 작업 중에는 답변이 계속 바뀌어 목록을 자꾸 다시 보내게 되므로 끝난 뒤에만 넣는다
+            summary = _summary(agent.get("lastAssistantMessage")) if agent and state in DONE_STATES else ""
+            if summary:
+                rows[-1]["m"] = summary
             handles[short] = handle
             tabs[handle] = term.get("tabId")
             order_keys.append((term.get("worktreeId") or path, term.get("tabId"), short))
@@ -587,6 +602,14 @@ class Orca:
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다."""
         state = self.state
+        # 세션 목록(2초)을 다시 수집할 때까지 기다리지 않고 PC 선택만 매 전송 루프에서 읽는다.
+        # 공유 state/목록은 수정하지 않아 수집 스레드와 섞이지 않는다.
+        if state and state.get("ok"):
+            tab = active_tab()
+            if tab is not None:
+                selected = next((row["id"] for row in state.get("list", [])
+                                 if self.tabs.get(self.handles.get(row["id"])) == tab), "")
+                state = {**state, "a": selected}
         if state is None or state == self.sent:
             return None
         self.sent = state

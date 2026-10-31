@@ -5,6 +5,8 @@
 #include "pcpanel.h"
 #include "speaker.h"
 #include "ui.h"
+#include "quickpanel.h"
+#include "mirror.h"
 
 LV_FONT_DECLARE(font_ko_14);
 LV_FONT_DECLARE(font_ko_20);
@@ -36,6 +38,7 @@ struct Session {
   char title[96];
   char project[64];
   char state[16];
+  char summary[128];  // 끝난 세션의 마지막 답변 요약 (companion/orca.py 의 _summary)
 };
 static Session *sessions;  // 내부 RAM 을 아끼려고 PSRAM 에 둔다 (orcapanel_build)
 static int count = 0;
@@ -800,8 +803,13 @@ static void sync_pc_selection(bool reveal) {
   bool changed = strcmp(shown_id, pc_shown_id) != 0;
   if (changed) {
     snprintf(shown_id, sizeof(shown_id), "%s", pc_shown_id);
-    // PC 에서 바뀐 세션에 예전 팝업으로 잘못 입력하지 않게 닫는다.
-    if (pop_open && strcmp(active_id, shown_id) != 0) close_pop();
+    int selected = 0;
+    while (selected < count && strcmp(sessions[selected].id, shown_id) != 0) selected++;
+    if (mirror_active() && selected < count) {
+      close_pop();
+      snprintf(active_id, sizeof(active_id), "%s", shown_id);
+      set_pop(true);
+    } else if (pop_open && strcmp(active_id, shown_id) != 0) close_pop();
     orcapanel_refresh();
   }
   if (changed || reveal) reveal_session(shown_id);
@@ -843,6 +851,9 @@ static void check_alerts(const Session *next, int n) {
     } else if (strcmp(before, "working") == 0 && is_waiting(s.state) && !quiet(m.done_at)) {
       m.done_at = lv_tick_get() | 1;
       if (!done_n++) done = s.title;
+      char completed[240];  // 알림함이 글자 경계에서 자른다 (CompletionInbox::TEXT_SIZE)
+      snprintf(completed, sizeof(completed), "ORCA - %s%s%s", s.title, s.summary[0] ? "\n" : "", s.summary);
+      quickpanel_notify(completed);
     }
   }
   memcpy(seen, now, sizeof(Seen) * n);
@@ -860,7 +871,7 @@ static void check_alerts(const Session *next, int n) {
   }
   const char *sound = asked ? "limit_warn" : "limit_reset";  // alerts.cpp 의 소리를 같이 쓴다
   Serial.printf("[orca] alert %s\n", sound);
-  ui_toast(text, 6000);
+  if (asked) ui_toast(text, 6000);
   if (speaker_play(sound)) return;
   char event[48];
   snprintf(event, sizeof(event), "{\"sound\":\"%s\"}", sound);
@@ -876,6 +887,7 @@ bool orcapanel_running() {
 }
 
 void orcapanel_set(JsonObjectConst orca) {
+  bool pc_changed = strcmp(pc_shown_id, orca["a"] | "") != 0;
   received = true;
   orca_ok = orca["ok"] | false;
   snprintf(pc_shown_id, sizeof(pc_shown_id), "%s", orca_ok ? (orca["a"] | "") : "");
@@ -888,6 +900,7 @@ void orcapanel_set(JsonObjectConst orca) {
     snprintf(s.title, sizeof(s.title), "%s", item["t"] | "");
     snprintf(s.project, sizeof(s.project), "%s", item["p"] | "");
     snprintf(s.state, sizeof(s.state), "%s", item["s"] | "idle");
+    snprintf(s.summary, sizeof(s.summary), "%s", item["m"] | "");
   }
   // ORCA 를 못 읽은 목록(꺼짐)은 비교하지 않는다. 다시 읽기 시작하면 첫 목록은 알리지 않는다.
   if (orca_ok) {
@@ -911,6 +924,12 @@ void orcapanel_set(JsonObjectConst orca) {
     memcpy(sessions, next, sizeof(Session) * n);
     count = n;
     lay_out_pages();
+  }
+  // PC에서 실제 선택이 바뀌었을 때만 ORCA 조작 화면으로 간다. 같은 상태 재전송은 닫은 팝업을 다시 열지 않는다.
+  if (mirror_active() && orca_ok && pc_changed && pc_shown_id[0]) {
+    bool valid = false;
+    for (int i = 0; i < count; i++) valid |= strcmp(sessions[i].id, pc_shown_id) == 0;
+    if (valid) ui_show("orca");
   }
   sync_pc_selection();
   orcapanel_refresh();

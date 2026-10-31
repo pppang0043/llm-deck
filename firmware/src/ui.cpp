@@ -12,6 +12,7 @@
 #include "pcmic.h"
 #include "pcpanel.h"
 #include "settings.h"
+#include "quickpanel.h"
 
 // 한글이 들어 있는 글꼴 (src/fonts, 나눔고딕). 큰 숫자(48)는 기본 글꼴을 쓴다.
 LV_FONT_DECLARE(font_ko_14);
@@ -89,9 +90,23 @@ static lv_obj_t *add_row(lv_obj_t *parent, const char *left, const lv_font_t *le
   lv_obj_t *row = lv_obj_create(parent);
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 8, 0);
+  lv_obj_update_layout(parent);
+  int available = LV_MAX(1, lv_obj_get_content_width(parent) - 8);
+  lv_point_t left_size, right_size;
+  lv_txt_get_size(&left_size, left, left_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  lv_txt_get_size(&right_size, right, right_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  int right_width = LV_MIN(right_size.x, available - LV_MIN(left_size.x, available / 3));
   lv_obj_t *lbl = add_label(row, left, left_font, left_color);
-  lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
-  lv_obj_align(add_label(row, right, right_font, right_color), LV_ALIGN_RIGHT_MID, 0, 0);
+  lv_obj_set_width(lbl, 1);
+  lv_obj_set_flex_grow(lbl, 1);
+  lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_t *value = add_label(row, right, right_font, right_color);
+  lv_obj_set_width(value, LV_MAX(1, right_width));
+  lv_label_set_long_mode(value, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
   return lbl;
 }
 
@@ -342,6 +357,7 @@ static void hist_render() {
   lv_label_set_text_fmt(hist_title, "%s %s", hist_key.service, hist_key.label);
   lv_label_set_long_mode(hist_title, LV_LABEL_LONG_DOT);
   lv_obj_set_width(hist_title, display_width() - 20 - btn_w - 6);
+  lv_obj_set_height(hist_title, lv_font_get_line_height(&font_ko_20));
   // 화면 방향에 맞춰 크기를 다시 정한다. 그래프 아래는 축(요일) 글자 한 줄 + 쪽지 줄 수만큼 (한 줄 17px)
   int lines = 1;
   for (const char *p = note; *p; p++) lines += *p == '\n';
@@ -514,14 +530,24 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
   lv_obj_t *row = lv_obj_create(parent);
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-  lv_obj_align(add_label(row, bar["label"] | "", &font_ko_28, COLOR_DIM), LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 8, 0);
+  lv_obj_t *details = lv_obj_create(row);
+  lv_obj_remove_style_all(details);
+  lv_obj_clear_flag(details, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_size(details, 1, LV_SIZE_CONTENT);
+  lv_obj_set_flex_grow(details, 1);
+  lv_obj_set_flex_flow(details, LV_FLEX_FLOW_COLUMN);
+  add_label(details, bar["label"] | "", &font_ko_28, COLOR_DIM);
   // 리셋 시각을 알면 남은 시간과 함께 밝게 ("0일 02:13 (15:00)")
   bool known = bar["resets"] | 0u;
-  lv_obj_t *note = add_label(row, bar["note"] | "", known ? &font_ko_20 : &font_ko_14,
+  lv_obj_t *note = add_label(details, bar["note"] | "", known ? &font_ko_20 : &font_ko_14,
                              known ? lv_color_white() : COLOR_DIM);
-  lv_obj_align(note, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_set_width(note, lv_pct(100));
+  lv_label_set_long_mode(note, LV_LABEL_LONG_CLIP);
   add_remain(note, bar["resets"] | 0u);
-  lv_obj_align(add_label(row, bar["text"] | "", &lv_font_montserrat_48, color), LV_ALIGN_RIGHT_MID, 0, 0);
+  add_label(row, bar["text"] | "", &lv_font_montserrat_48, color);
   if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
     strlcpy(k.service, service, sizeof(k.service));
@@ -1091,20 +1117,27 @@ static void render_usage();
 static void layout_status_right() {
   lv_obj_t *scr = lv_scr_act();
   int left_end = pcmic_place(status_lbl);
+  bool compact = quickpanel_unread_count() && display_width() < 300;
+  lv_obj_set_width(rotate_btn, compact ? 36 : 48);
+  lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 2);
   lv_obj_t *right = rotate_btn;
   if (!lv_obj_has_flag(bat_icon, LV_OBJ_FLAG_HIDDEN)) {
     lv_obj_update_layout(scr);
     lv_obj_align_to(bat_icon, rotate_btn, LV_ALIGN_OUT_LEFT_MID, -6, 0);
     lv_obj_align_to(bat_lbl, bat_icon, LV_ALIGN_OUT_LEFT_MID, -3, 0);
-    right = bat_lbl;
+    if (compact) lv_obj_add_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_clear_flag(bat_lbl, LV_OBJ_FLAG_HIDDEN);
+    right = compact ? bat_icon : bat_lbl;
   }
   if (!lv_obj_has_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN)) {
     lv_obj_update_layout(scr);
     lv_obj_align_to(wifi_icon, right, LV_ALIGN_OUT_LEFT_MID, -6, 0);
     right = wifi_icon;
   }
+  right = quickpanel_status_before(right);
 
   char text[40];
+  lv_obj_clear_flag(clock_lbl, LV_OBJ_FLAG_HIDDEN);
   snprintf(text, sizeof(text), "%s%s%s", clock_date, clock_date[0] ? " " : "", clock_time);
   lv_label_set_text(clock_lbl, text);
   lv_obj_update_layout(scr);
@@ -1115,6 +1148,8 @@ static void layout_status_right() {
     lv_obj_update_layout(scr);
     lv_obj_align_to(clock_lbl, right, LV_ALIGN_OUT_LEFT_MID, -8, 0);
   }
+  lv_obj_update_layout(scr);
+  if (lv_obj_get_x(clock_lbl) < left_end + 4) lv_obj_add_flag(clock_lbl, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_layout() {
@@ -1279,7 +1314,7 @@ static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool mai
     }
 
     // 제목 오른쪽의 작은 글자는 이 값이 언제 것인지(시각)를 나타낸다
-    lv_obj_t *title = add_row(page, svc["name"] | "?", &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14,
+    lv_obj_t *title = add_row(page, svc["title"] | (svc["name"] | "?"), &font_ko_28, COLOR_ACCENT, svc["note"] | "", &font_ko_14,
                               COLOR_DIM);
     if (index == first_row && !side && main_screen) add_title_split_btn(title);
 

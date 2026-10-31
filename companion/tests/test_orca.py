@@ -25,6 +25,27 @@ def fake_session(o, state):
     o._run = lambda *a, **k: o.sent_cmds.append(a) or {}
 
 
+@pytest.mark.parametrize("message, expected", [
+    ("48장 수집을 완료했습니다.\n\n- 변경: a.py", "48장 수집을 완료했습니다."),
+    ("\n## **결과**: `a.py` 수정\n", "결과: a.py 수정"),
+    ("- 첫 항목", "첫 항목"),
+    ("가" * 50, "가" * 37 + "..."),
+    ("", ""),
+    (None, ""),
+])
+def test_summary(message, expected):
+    assert orca._summary(message) == expected
+
+
+@pytest.mark.parametrize("state, has_summary", [("done", True), ("waiting", True), ("working", False), ("permission", False)])
+def test_read_sends_summary_only_when_finished(o, state, has_summary):
+    terminals = [{"handle": "term_a1", "tabId": "t", "leafId": "l", "connected": True, "title": "세션", "worktreePath": "/p"}]
+    ps = {"worktrees": [{"agents": [{"paneKey": "t:l", "mainAgent": {"state": state}, "lastAssistantMessage": "끝났습니다"}]}]}
+    o._run = lambda *a, **k: ps if a[:2] == ("worktree", "ps") else {"terminals": terminals}
+    row = o._read()["list"][0]
+    assert row.get("m") == ("끝났습니다" if has_summary else None)
+
+
 @pytest.mark.parametrize("reply, state, expected", [
     ("allow", "permission", [("terminal", "send", "--terminal", "term_abc", "--text", "1")]),
     ("deny", "permission", [("terminal", "send", "--terminal", "term_abc", "--text", "\x1b")]),
@@ -283,3 +304,23 @@ def test_send_key_esc_without_enter(o):
     o.send_key("abc", "esc")
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "\x1b")]
     assert o.pending_toast == "보냈습니다: Esc"
+
+
+def test_pending_follows_pc_selection_without_full_poll(o, monkeypatch):
+    original = {"ok": True, "a": "a", "list": [{"id": "a"}, {"id": "b"}]}
+    o.state = original
+    o.sent = original
+    o.handles = {"a": "term_a", "b": "term_b"}
+    o.tabs = {"term_a": "tab-a", "term_b": "tab-b"}
+    monkeypatch.setattr(orca, "active_tab", lambda: "tab-b")
+    assert o.pending()["a"] == "b"
+    assert original["a"] == "a"
+    assert o.pending() is None
+    monkeypatch.setattr(orca, "active_tab", lambda: "non-agent-tab")
+    assert o.pending()["a"] == ""
+
+
+def test_pending_keeps_selection_when_pc_state_unavailable(o, monkeypatch):
+    o.state = {"ok": True, "a": "a", "list": [{"id": "a"}]}
+    monkeypatch.setattr(orca, "active_tab", lambda: None)
+    assert o.pending()["a"] == "a"

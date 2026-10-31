@@ -14,6 +14,7 @@
 #include "ui.h"
 #include "usb_link.h"
 #include "video.h"
+#include "quickpanel.h"
 
 // 창이 이만큼 아무 말이 없으면 (닫혔거나 도우미가 꺼짐) 끈다
 #define KEEP_MS 6000
@@ -217,6 +218,13 @@ static void device_refresh() {
     lv_label_set_text_fmt(dev_clock, "%02d:%02d", t.tm_hour, t.tm_min);
   }
   int w = display_width(), h = display_height();
+  lv_obj_update_layout(dev_btn);
+  lv_obj_t *status = quickpanel_status_before(dev_btn);
+  lv_obj_align_to(dev_clock, status, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+  lv_obj_update_layout(dev_clock);
+  lv_obj_set_width(dev_title, LV_MAX(1, lv_obj_get_x(dev_clock) - 16));
+  lv_obj_set_height(dev_title, 16);
+  lv_label_set_long_mode(dev_title, LV_LABEL_LONG_DOT);
   if (dev_version == ui_usage_version() && dev_w == w && dev_h == h && lv_obj_get_child_cnt(dev_body)) return;
   // 넘기는 중에 다시 만들면 손 밑의 페이지가 사라지므로 다음 번으로 미룬다
   if (display_device_pressed() || lv_anim_get(dev_body, NULL)) return;
@@ -226,7 +234,7 @@ static void device_refresh() {
   lv_obj_set_size(dev_body, w, h - DEVICE_STATUS_H);
   // 화면 방향이 바뀌면 버튼 자리도 바뀌므로 시계를 다시 버튼 왼쪽에 둔다
   lv_obj_update_layout(dev_btn);
-  lv_obj_align_to(dev_clock, dev_btn, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+  lv_obj_align_to(dev_clock, status, LV_ALIGN_OUT_LEFT_MID, -8, 0);
   ui_usage_pages(dev_body);
 }
 

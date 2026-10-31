@@ -21,6 +21,7 @@
 #include "saver.h"
 #include "quickpanel.h"
 #include "standby_state.h"
+#include "usb_drive.h"
 #include "sd_video.h"
 #include "settings.h"
 #include "askpanel.h"
@@ -185,12 +186,18 @@ static void enter_standby() {
   Serial.println("[power] standby: screen off, links kept (touch/BOOT wakes)");
 }
 
+// 빠른 설정 > USB 드라이브
+static void start_usb_drive() {
+  const char *why = usb_drive_start();
+  if (why) ui_toast(why);
+}
+
 static void power_save() {
   static uint8_t shown = 255;
   static bool shown_saver = false;
   bool manual = standby.update(display_wake_sequence());
   uint32_t idle = millis() - display_last_touch_ms();
-  bool busy = camera_ui_open() || video_recording() || (manual && gallery_open());
+  bool busy = camera_ui_open() || video_recording() || (manual && gallery_open()) || usb_drive_active();
   bool powered = battery_pct() < 0 || battery_external_power();  // 배터리가 없으면 USB 전원으로 켜진 것
   bool battery_only = settings_auto_dim() && !powered && !busy;
   bool idle_long = !busy && settings_saver_ms() && idle > settings_saver_ms();
@@ -321,8 +328,10 @@ void setup() {
   // 512 바이트 이상의 malloc 은 PSRAM 에서 받는다 (기본 4KB). 내부 RAM 이 잘게 쪼개지는 것을 줄인다.
   // 내부 RAM 이 꼭 필요한 곳은 드라이버가 따로 지정해서 받으므로 영향이 없다.
   heap_caps_malloc_extmem_enable(512);
+  bool after_drive = usb_drive_boot();
   usb_link_init();
   Serial.begin(115200);
+  if (after_drive) usb_reconnect("leaving USB drive mode");  // PC 가 저장장치를 잊고 시리얼을 다시 알아보게
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
     Serial.println("[power] woke from deep sleep (BOOT button)");
     rtc_gpio_deinit((gpio_num_t)BTN_BOOT);  // 잠들 때 깨우기용(RTC)으로 바꾼 핀을 다시 보통 입력으로
@@ -341,7 +350,7 @@ void setup() {
   gallery_init();
   mem_log("camera_ui");
   saver_init();
-  quickpanel_init(enter_standby);
+  quickpanel_init(enter_standby, start_usb_drive);
   ui_set_home_actions(camera_ui_show);
   imu_init();
   battery_init();
@@ -421,6 +430,7 @@ void loop() {
   askpanel_loop();
   speaker_loop(settings_speaker_page());
   show_info();
+  usb_drive_loop();
   if (ui_settings_visible()) settings_loop();
   power_save();
   saver_loop();
