@@ -8,6 +8,7 @@ void ui_init(void (*on_mic_toggle)(), void (*on_rotate)());
 
 // 상태줄 왼쪽 글자 (현재 연결 방식)
 void ui_set_status(const char *text);
+const char *ui_status_text();  // 상태줄 왼쪽의 연결 상태 글자
 
 // 상태줄 오른쪽(배터리 옆)의 날짜와 시각. 자리가 모자라면 날짜는 빼고 시각만 보인다.
 void ui_set_clock(const char *date, const char *time);
@@ -24,6 +25,7 @@ void ui_set_wifi_info(const char *text);
 // 서비스 하나: {"name", "note", "headline", "sub", "bars": [{"label", "note", "text", "pct", "resets"}], "rows": [[이름, 값]]}
 // resets(초기화 시각, 초)가 있으면 지금 속도로 그 전에 한도가 찰 때 "16:40 소진" 을 함께 보인다.
 void ui_set_usage(JsonArrayConst services);
+void ui_usage_received();  // PC·클라우드에서 지금 받은 값이다 (저장해 둔 값을 다시 그릴 때는 부르지 않는다)
 
 // 화면 방향이 바뀐 뒤(display_set_rotation) 부르면 가로/세로에 맞게 다시 배치한다.
 void ui_layout();

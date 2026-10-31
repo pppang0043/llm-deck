@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from pathlib import Path
 import typer
 
 POLL_SECONDS = 2  # 직접 묻기는 수십 ms 라 자주 읽어도 된다
+OFF_POLL_SECONDS = 10  # ORCA 를 못 읽는 동안 (꺼져 있으면 CLI 를 띄워 묻기만 하다 실패한다)
 # ORCA 는 탭을 바꾸면 이만큼 뒤에 화면 상태를 저장한다 (재 보니 1~1.5초)
 ACTIVE_TAB_LAG_SECONDS = 2.0
 MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
@@ -139,6 +141,7 @@ def find_orca() -> str | None:
 
 # Windows: orca.exe 실행을 막거나 늦추는 보안 프로그램을 피하려고 CLI 와 같은 pipe 요청을 쓴다.
 CLI_CLIENT = {"id": "orca-cli", "type": "desktop"}
+READ_METHODS = ("worktree.ps", "terminal.list")
 DONE_STATES = ("waiting", "awaiting-input", "done")  # 펌웨어 orcapanel.cpp 의 is_waiting
 SUMMARY_CHARS = 40
 
@@ -160,13 +163,17 @@ def _rpc_request(args: tuple) -> tuple[str, dict] | None:
 
 
 def _runtime_pipe() -> tuple[str, str] | None:
-    """ORCA 가 기록한 Windows pipe 주소와 인증 토큰. 다른 OS 는 기존 CLI 를 쓴다."""
-    if sys.platform != "win32":
+    """ORCA 가 기록한 pipe(Windows) 또는 소켓(Mac) 주소와 인증 토큰. 다른 OS 는 기존 CLI 를 쓴다."""
+    if sys.platform == "win32":
+        default, kind = os.path.join(os.environ.get("APPDATA", ""), "orca"), "named-pipe"
+    elif sys.platform == "darwin":
+        default, kind = os.path.expanduser("~/Library/Application Support/orca"), "unix"
+    else:
         return None
-    base = os.environ.get("ORCA_USER_DATA_PATH") or os.path.join(os.environ.get("APPDATA", ""), "orca")
+    base = os.environ.get("ORCA_USER_DATA_PATH") or default
     try:
         meta = json.loads(Path(base, "orca-runtime.json").read_text(encoding="utf-8"))
-        pipe = next(t["endpoint"] for t in meta["transports"] if t.get("kind") == "named-pipe")
+        pipe = next(t["endpoint"] for t in meta["transports"] if t.get("kind") == kind)
         return pipe, meta["authToken"]
     except (OSError, ValueError, KeyError, TypeError, StopIteration):
         return None
@@ -179,7 +186,13 @@ def _pipe_call(method: str, params: dict, timeout: float) -> tuple[str, dict | N
         return "unsent", None
     pipe, token = target
     try:
-        f = open(pipe, "r+b", buffering=0)
+        if sys.platform == "win32":
+            f = open(pipe, "r+b", buffering=0)
+        else:
+            with socket.socket(socket.AF_UNIX) as sock:
+                sock.settimeout(timeout)
+                sock.connect(pipe)
+                f = sock.makefile("rwb", buffering=0)  # 소켓은 f 를 닫을 때 함께 닫힌다
     except OSError:
         return "unsent", None
     rid = str(uuid.uuid4())
@@ -508,7 +521,8 @@ class Orca:
     def _run(self, *args: str, timeout: float = 30) -> dict | None:
         # 보낸 입력은 응답을 잃어도 다시 보내지 않는다 (중복 입력 방지).
         request = _rpc_request(args)
-        if request:
+        # Mac 은 2초마다 하는 상태 읽기만 직접 묻는다 (CLI 는 한 번에 코어를 0.2초쯤 쓴다). 입력은 CLI 로 보낸다
+        if request and (sys.platform == "win32" or request[0] in READ_METHODS):
             status, result = _pipe_call(*request, timeout)
             if status == "answered" or (status == "lost" and request[0] == "terminal.send"):
                 return result
@@ -535,7 +549,7 @@ class Orca:
                 self.state = self._read()
             except Exception as e:  # 읽기 실패로 도우미가 멈추지 않게 한다
                 print(f"[orca] 상태 읽기 실패: {e}")
-            self._wake.wait(POLL_SECONDS)
+            self._wake.wait(POLL_SECONDS if self.state and self.state.get("ok") else OFF_POLL_SECONDS)
             self._wake.clear()
 
     def _read(self) -> dict:
@@ -563,6 +577,10 @@ class Orca:
             if agent:
                 # state 는 안에서 돌린 하위 작업까지 섞인 값이라, 세션 자체의 상태(mainAgent)를 먼저 본다
                 state = (agent.get("mainAgent") or {}).get("state") or agent.get("state") or "idle"
+                # 권한 질문도 state 는 waiting 으로 온다. 실제로 묻는 중인지는 programStatus 에 있다
+                program = agent.get("programStatus") or {}
+                if state in DONE_STATES and program.get("state") == "blocked" and program.get("kind") == "permission":
+                    state = "permission"
             else:
                 state = "working" if term.get("agentIdentity") else "shell"
             path = term.get("worktreePath") or ""

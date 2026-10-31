@@ -37,6 +37,8 @@ static bool auto_dim = true;
 // 오래 안 쓰면 깊은 잠(꺼짐). 배터리 절약(화면 어둡게·끄기)과 따로 둔다. 충전기는 전압으로만 짐작해서
 // 꽂혀 있어도 배터리로 잘못 알 수 있어 기본은 끔
 static bool auto_off = false;
+// 들어 올리면 꺼진 화면을 켜고, 깊은 잠에서도 깨운다
+static bool pickup_wake = true;
 static bool limit_alerts = true;
 static bool sd_photos = true;
 static bool sd_videos = true;
@@ -79,6 +81,7 @@ static lv_obj_t *bright_slider, *bright_value;
 static lv_obj_t *mic_sw;
 static void (*mic_handler)(bool on) = nullptr;
 static lv_obj_t *rotate_sw, *restore_sw, *sound_sw, *mirror_sw, *dim_sw, *off_sw, *alert_sw, *sd_sw, *sd_video_sw;
+static lv_obj_t *pickup_sw;
 static lv_obj_t *saver_lbl, *cam_value;
 static lv_obj_t *wifi_status, *wifi_ip, *wifi_signal, *wifi_list;
 static lv_obj_t *ble_status, *ble_none;
@@ -138,6 +141,7 @@ void settings_init() {
   mic_sound = prefs.getBool("mic_sound", true);
   auto_dim = prefs.getBool("auto_dim", true);
   auto_off = prefs.getBool("auto_off", false);
+  pickup_wake = prefs.getBool("pickup", true);
   limit_alerts = prefs.getBool("lim_alert", true);
   sd_photos = prefs.getBool("sd_photos", true);
   sd_videos = prefs.getBool("sd_videos", true);
@@ -212,6 +216,10 @@ bool settings_auto_dim() {
 
 bool settings_auto_off() {
   return auto_off;
+}
+
+bool settings_pickup_wake() {
+  return pickup_wake;
 }
 
 bool settings_limit_alerts() {
@@ -472,6 +480,11 @@ static void dim_changed(lv_event_t *e) {
 static void off_changed(lv_event_t *e) {
   auto_off = lv_obj_has_state(off_sw, LV_STATE_CHECKED);
   prefs.putBool("auto_off", auto_off);
+}
+
+static void pickup_changed(lv_event_t *e) {
+  pickup_wake = lv_obj_has_state(pickup_sw, LV_STATE_CHECKED);
+  prefs.putBool("pickup", pickup_wake);
 }
 
 static void alert_changed(lv_event_t *e) {
@@ -832,7 +845,9 @@ static void build_battery(lv_obj_t *parent) {
   bat_left = add_info(p, "남은 시간");
   dim_sw = add_switch(add_row(p, "배터리 절약", "1분 어둡게, 3분 끄기"), auto_dim, dim_changed);
   off_sw = add_switch(add_row(p, "자동 꺼짐", "20분 안 쓰면 끄기"), auto_off, off_changed);
+  pickup_sw = add_switch(add_row(p, "들어 올려 깨우기", "꺼진 화면·꺼진 기기 켜기"), pickup_wake, pickup_changed);
   add_note(p, "배터리 절약은 화면만 어둡게 하고 끕니다. 자동 꺼짐을 켜면 배터리로만 쓸 때 20분 동안 안 만지면 기기가 꺼지고, BOOT 버튼으로 켭니다. 충전기는 꽂고 뺄 때의 전압 변화로 알아봐서 놓칠 수 있으니, 전원에 꽂아 두고 쓰면 자동 꺼짐은 끄세요. 배터리 절약은 배터리로만 쓸 때 동작합니다. 잔량은 전압으로 짐작하며, 충전이 끝난 채 USB에 20분 꽂혀 있으면 스스로 보정합니다. 배터리로 쓸 때는 잔량이 줄기만 하고, 충전 중에는 늘기만 합니다.");
+  add_note(p, "들어 올려 깨우기: 화면이 꺼졌거나 보호기일 때 기기를 들면 터치한 것처럼 켜지고, 자동 꺼짐으로 꺼진 뒤에도 들면 다시 켜집니다. 책상 진동이나 타자로는 켜지지 않게 잠깐 이어진 움직임만 봅니다.");
 }
 
 static void build_camera(lv_obj_t *parent) {
@@ -1181,6 +1196,7 @@ void settings_refresh() {
   set_checked(restore_sw, rotate_restore);
   set_checked(dim_sw, auto_dim);
   set_checked(off_sw, auto_off);
+  set_checked(pickup_sw, pickup_wake);
   set_checked(alert_sw, limit_alerts);
   set_checked(sound_sw, mic_sound);
   set_checked(sd_sw, sd_photos);

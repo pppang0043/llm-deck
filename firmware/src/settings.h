@@ -21,6 +21,8 @@ bool settings_mic_sound();
 bool settings_auto_dim();
 // 배터리로만 쓸 때 20분 안 만지면 깊은 잠에 드는지 (배터리 절약과 따로, 기본 끔)
 bool settings_auto_off();
+// 들어 올리면 꺼진 화면을 켜고(터치처럼), 깊은 잠에서도 깨우는지 (기본 켬)
+bool settings_pickup_wake();
 // 만지지 않은 지 이만큼 지나면 화면 보호기를 띄운다 (0 이면 끔)
 uint32_t settings_saver_ms();
 // 사용률이 80%, 90% 를 넘거나 초기화되면 알릴지

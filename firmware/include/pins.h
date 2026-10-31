@@ -16,8 +16,10 @@
 // 터치 (CST816D, I2C)
 #define TP_SDA 48
 #define TP_SCL 47
+// 터치 INT 는 GPIO46 (RTC 핀이 아니라 깊은 잠에서는 깨우지 못하고, 가벼운 잠에서만 깨울 수 있다). 지금은 쓰지 않는다.
 
 // 기울기 센서 (QMI8658, 터치와 같은 I2C 선).
+// 센서 INT1 은 GPIO3 (RTC 핀이라 깊은 잠에서 깨울 수 있다), INT2 는 연결 안 됨. 출처: ESP32-S3-Touch-LCD-2-SchDoc.pdf
 // 센서의 각 축이 아래(중력 방향)를 향할 때 화면을 몇 번 돌려야 바로 보이는지 (90도 단위, 시계 방향).
 #define IMU_ROT_Y_POS 1
 #define IMU_ROT_Y_NEG 3

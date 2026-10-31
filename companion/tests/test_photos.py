@@ -142,3 +142,28 @@ def test_open_new_falls_back(tmp_path, monkeypatch):
     path, f = photos.open_new(blocked / "sub", "a.jpg", "d.jpg", "photos")
     f.close()
     assert path == tmp_path / "fb/photos/a.jpg"
+
+
+def test_device_qr_is_delivered_like_pc_result(tmp_path, monkeypatch):
+    # 기기가 스스로 읽은 QR(QR_*.txt, firmware qr.cpp): 저장하지 않고 PC 가 읽었을 때처럼 클립보드·입력 후 알림.
+    # PC 판독기(opencv)가 없어도 된다
+    import threading
+
+    import orca
+    import scanner
+    import typer
+
+    copied, typed = [], []
+    monkeypatch.setattr(orca, "_copy", lambda t: copied.append(t) or True)
+    monkeypatch.setattr(typer, "_type", lambda text, enter=True, tab=False: typed.append((text, enter)))
+    monkeypatch.setattr(scanner, "available", False)
+    r = photos.PhotoReceiver({"dir": str(tmp_path / "pics")}, tmp_path / "vids", {"type": True})
+    send(r, "QR_3.txt", "https://예시.kr/a".encode())
+    for _ in range(200):
+        if r.pending_toast:
+            break
+        threading.Event().wait(0.05)
+    assert copied == ["https://예시.kr/a"] and typed == [("https://예시.kr/a", True)]
+    assert r.pending_toast == "QR: https://예시.kr/a\n커서 자리에 입력했습니다"
+    assert r.pending_scan is None
+    assert not (tmp_path / "pics").exists()

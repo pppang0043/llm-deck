@@ -9,6 +9,7 @@
 #include "gallery.h"
 #include "imu.h"
 #include "photo.h"
+#include "qr.h"
 #include "sd_video.h"
 #include "ui.h"
 #include "link.h"
@@ -29,7 +30,8 @@ static lv_obj_t *adjust_btn;
 // 가운데 안내 네모: QR·바코드를 대략 이 안에 두면 된다 (자리는 스캔이 찾는다, companion/scanner.py)
 static lv_obj_t *guide, *guide_lbl;
 // 스캔 (2단계): 넓은 장(LOC_)을 보내면 PC 가 바코드 자리를 돌려주고({"scan_roi"}), 그 자리만 원본 화소로 찍은
-// 장(SCAN_)을 보낸다. PC 가 읽으면({"scan"}) 멈춘다. 갤러리·SD 에는 남기지 않는다
+// 장(SCAN_)을 보낸다. PC 가 읽으면({"scan"}) 멈춘다. 갤러리·SD 에는 남기지 않는다.
+// QR 은 넓은 장마다 기기가 먼저 읽어 본다 (qr.h): PC 가 없어도 QR 은 읽히고, 바코드만 PC 가 있어야 한다
 static lv_obj_t *scan_btn;
 static bool scanning = false;
 enum ScanStage { SCAN_LOCATE, SCAN_WAIT_ROI, SCAN_FOCUS, SCAN_ZOOM };
@@ -39,6 +41,7 @@ static int zoom_shots = 0;
 #define SCAN_LIMIT_MS 30000
 #define SCAN_ROI_WAIT_MS 3000  // PC 가 자리를 이만큼 안에 안 알려 주면 다시 넓게 찍는다
 #define SCAN_ZOOM_SHOTS 4      // 2단계에서 이만큼 못 읽으면 다시 자리부터 (바코드를 옮겼을 수 있다)
+#define SCAN_QR_GAP_MS 400     // PC 없이 QR 만 찾을 때 장 사이에 미리보기를 보여 주는 시간 (찍는 동안은 멈춘다)
 // 스캔으로 읽은 뒤에는 카메라를 금방 닫는다 (센서가 뜨거워진다: 2026-10-24 시험 중 발열로 중단)
 #define SCAN_DONE_IDLE_MS 20000
 static uint32_t scan_done_at = 0;  // 마지막으로 읽은 시각 (0 이면 아직)
@@ -53,6 +56,7 @@ static uint8_t *job_jpg = nullptr;
 static size_t job_len = 0;
 static uint8_t job_rot = 0;
 static int job_box[4];
+static char *job_qr = nullptr;  // JOB_LOCATE 장에서 기기가 읽은 QR 글 (ps_malloc, 없으면 nullptr)
 static TaskHandle_t job_task = nullptr;
 
 static void job_worker(void *) {
@@ -60,7 +64,10 @@ static void job_worker(void *) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     switch (job) {
       case JOB_PHOTO: job_ok = camera_capture(job_rot, &job_jpg, &job_len); break;
-      case JOB_LOCATE: job_ok = camera_scan_locate(job_rot, &job_jpg, &job_len); break;
+      case JOB_LOCATE:
+        job_ok = camera_scan_locate(job_rot, &job_jpg, &job_len);
+        if (job_ok) job_qr = qr_decode_jpeg(job_jpg, job_len);
+        break;
       case JOB_GRAB: job_ok = camera_scan_grab(job_rot, &job_jpg, &job_len); break;
       case JOB_ZOOM: job_ok = camera_scan_zoom(job_box[0], job_box[1], job_box[2], job_box[3]); break;
       default: job_ok = false; break;
@@ -77,14 +84,16 @@ static uint8_t photo_rot() {
 
 static bool job_start(CamJob j) {
   if (job != JOB_NONE) return false;
+  // 스택은 PSRAM 에: QR 판독(quirc)이 12KB 넘게 쓴다
   if (!job_task &&
-      xTaskCreatePinnedToCoreWithCaps(job_worker, "camjob", 6144, NULL, 3, &job_task, 0, MALLOC_CAP_SPIRAM) != pdPASS) {
+      xTaskCreatePinnedToCoreWithCaps(job_worker, "camjob", 16384, NULL, 3, &job_task, 0, MALLOC_CAP_SPIRAM) != pdPASS) {
     job_task = nullptr;
     return false;
   }
   job_rot = photo_rot();
   job_ok = false;
   job_jpg = nullptr;
+  job_qr = nullptr;
   job_done = false;
   job = j;
   xTaskNotifyGive(job_task);
@@ -96,7 +105,9 @@ static void job_wait_drop() {
   uint32_t t0 = millis();
   while (job != JOB_NONE && !job_done && millis() - t0 < 8000) delay(10);
   if (job_done && job_ok && job_jpg) free(job_jpg);
+  if (job_done) free(job_qr);
   job_jpg = nullptr;
+  job_qr = nullptr;
   job_done = false;
   job = JOB_NONE;
 }
@@ -252,23 +263,24 @@ static void overlay_gesture(lv_event_t *e) {
   lv_indev_wait_release(lv_indev_get_act());
 }
 
+// 스캔 장을 PC 로 보낼 수 있는지 (photo_send_file 은 USB·블루투스만). 없으면 기기에서 QR 만 읽는다
+static bool scan_pc() {
+  return link_active() == LINK_USB || link_active() == LINK_BLE;
+}
+
 static void scan_clicked(lv_event_t *e) {
   if (scanning) {
     scan_stop("스캔을 멈췄습니다");
     return;
   }
   if (!camera_running() || video_recording()) return;
-  if (link_active() != LINK_USB && link_active() != LINK_BLE) {
-    show_message("스캔은 PC가 USB나 블루투스로\n연결되어 있어야 합니다", 2500);
-    return;
-  }
   scanning = true;
   scan_started = millis();
   scan_stage = SCAN_LOCATE;
   scan_frames = 0;
   lv_obj_set_style_border_color(guide, lv_color_hex(0x3CD070), 0);
   show_guide(true);
-  show_message("위치 찾는 중...", 0);
+  show_message(scan_pc() ? "위치 찾는 중..." : "QR 찾는 중...\n(바코드는 PC에 연결해야 읽습니다)", 0);
 }
 
 static bool scan_send(const char *prefix, uint8_t *jpg, size_t len) {
@@ -283,7 +295,9 @@ static bool scan_send(const char *prefix, uint8_t *jpg, size_t len) {
 static void scan_step() {
   if (!scanning || photo_sending() || job != JOB_NONE) return;
   if (millis() - scan_started > SCAN_LIMIT_MS) {
-    scan_stop("30초 동안 찾지 못했습니다\n20cm 이상 떨어져, 밝은 곳에서", 4000);
+    scan_stop(scan_pc() ? "30초 동안 찾지 못했습니다\n20cm 이상 떨어져, 밝은 곳에서"
+                        : "30초 동안 QR을 찾지 못했습니다\n바코드는 PC에 연결해야 읽습니다",
+              4000);
     return;
   }
   if (scan_stage == SCAN_WAIT_ROI) {
@@ -294,6 +308,7 @@ static void scan_step() {
     scan_stage = SCAN_LOCATE;  // 넓게 찍으면서 2단계 창도 풀린다
     show_message("위치 찾는 중...", 0);
   }
+  if (scan_stage == SCAN_LOCATE && !scan_pc() && millis() - scan_stage_at < SCAN_QR_GAP_MS) return;
   if (scan_stage == SCAN_LOCATE) job_start(JOB_LOCATE);
   else if (scan_stage == SCAN_ZOOM) job_start(JOB_GRAB);
 }
@@ -314,6 +329,40 @@ void camera_ui_scan_roi(const int *box, bool found) {
   show_message("초점 맞추는 중...", 0);
 }
 
+// 기기에서 QR 을 읽었다: PC 가 읽었을 때(camera_ui_scan_result)처럼 보이고 멈춘다. PC 가 이어져 있으면
+// 글을 QR_n.txt 로 보내 PC 가 스스로 읽었을 때처럼 클립보드에 넣고 ([scan] type 이면) 입력하게 한다 (companion/photos.py).
+// 알림(이벤트)은 USB 로 한 번에 200바이트까지라 긴 QR 이 들어가지 않아 사진과 같은 파일로 보낸다. text 는 여기서 해제한다
+static void scan_qr_found(char *text) {
+  // 화면 글: "QR: " + 40자 (넘으면 37자 + "..."), 줄바꿈 등은 띄어쓰기로 (companion/scanner.py describe 와 같게)
+  char msg[200] = "QR: ";
+  size_t o = strlen(msg);
+  int chars = 0, total = 0;
+  for (const char *p = text; *p; p++) total += ((uint8_t)*p & 0xC0) != 0x80;
+  for (const char *p = text; *p && o + 8 < sizeof(msg); p++) {
+    bool lead = ((uint8_t)*p & 0xC0) != 0x80;
+    if (lead && total > 40 && chars == 37) break;
+    if (lead) chars++;
+    msg[o++] = (uint8_t)*p < 0x20 ? ' ' : *p;
+  }
+  msg[o] = 0;
+  if (total > 40) strlcat(msg, "...", sizeof(msg));
+  bool sent = false;
+  size_t n = strlen(text);
+  if (scan_pc()) {
+    char name[24];
+    snprintf(name, sizeof(name), "QR_%lu.txt", (unsigned long)++scan_frames);
+    sent = photo_send_file(name, (uint8_t *)text, n);  // 보내는 쪽이 해제한다
+  } else {
+    free(text);
+  }
+  if (sent) strlcat(msg, "\nPC로 보냈습니다", sizeof(msg));
+  Serial.printf("[scan] QR read on device in %lu ms after %lu shots (%u bytes%s)\n",
+                (unsigned long)(millis() - scan_started), (unsigned long)scan_frames, (unsigned)n,
+                sent ? ", sent to PC" : "");
+  scan_done_at = millis();
+  scan_stop(msg, 5000);
+}
+
 // 작업 태스크가 끝낸 결과를 받는다 (화면 루프에서)
 static void job_finish() {
   if (job == JOB_NONE || !job_done) return;
@@ -321,7 +370,9 @@ static void job_finish() {
   bool ok = job_ok;
   uint8_t *jpg = job_jpg;
   size_t len = job_len;
+  char *qr = job_qr;
   job_jpg = nullptr;
+  job_qr = nullptr;
   job_done = false;
   job = JOB_NONE;
   if (j == JOB_PHOTO) {
@@ -336,10 +387,21 @@ static void job_finish() {
   }
   if (!scanning) {  // 그 사이 스캔을 멈췄다
     if (ok && jpg) free(jpg);
+    free(qr);
     if (j == JOB_ZOOM && ok) camera_scan_end();
     return;
   }
   if (j == JOB_LOCATE) {
+    if (qr) {  // 기기가 QR 을 읽었다: PC 에 장을 보내지 않는다
+      if (ok && jpg) free(jpg);
+      scan_qr_found(qr);
+      return;
+    }
+    if (!scan_pc()) {  // PC 없이 QR 만 찾는 중: 미리보기를 조금 보인 뒤 다음 장 (scan_step)
+      if (ok && jpg) free(jpg);
+      scan_stage_at = millis();
+      return;
+    }
     if (ok && scan_send("LOC", jpg, len)) {
       scan_stage = SCAN_WAIT_ROI;
       scan_stage_at = millis();

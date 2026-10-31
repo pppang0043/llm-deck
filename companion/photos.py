@@ -193,6 +193,9 @@ class PhotoReceiver:
         if name.startswith("LOC_"):  # 스캔 1단계(넓은 장): 읽히면 끝, 아니면 바코드 자리를 알려 준다
             self._scan_frame(name, data, locate=True)
             return None
+        if name.startswith("QR_"):  # 기기가 스스로 읽은 QR 글 (firmware qr.cpp): PC 가 읽었을 때처럼 넣는다
+            self._device_qr(name, data)
+            return None
         same = self._same(name, len(data), lambda: hashlib.sha256(data).digest())
         if same:
             self._skip(name, same)
@@ -238,18 +241,31 @@ class PhotoReceiver:
                 else:
                     print(f"[scan] {name}: 못 찾음")
                 return
-            from orca import _copy
+            self.pending_scan = self._deliver(name, found)
 
-            copied = _copy("\n".join(text for _, text in found))
-            typed = None
-            if self.type_scan:
-                import typer
+        threading.Thread(target=run, daemon=True).start()
 
-                error = typer._type(found[0][1], enter=True)
-                typed = "커서 자리에 입력했습니다" if not error else f"입력하지 못했습니다: {error}"
-            print(f"[scan] {name}: {found}{' (클립보드에 넣음)' if copied else ''}{f' ({typed})' if typed else ''}")
-            note = typed or ("클립보드에 넣었습니다" if copied else "")
-            self.pending_scan = scanner.describe(found) + (f"\n{note}" if note else "")
+    def _deliver(self, name: str, found: list[tuple[str, str]]) -> str:
+        """읽은 값을 클립보드에 넣고 ([scan] type 이면) 커서 자리에 입력한다. 기기에 보일 글을 돌려준다"""
+        from orca import _copy
+
+        copied = _copy("\n".join(text for _, text in found))
+        typed = None
+        if self.type_scan:
+            import typer
+
+            error = typer._type(found[0][1], enter=True)
+            typed = "커서 자리에 입력했습니다" if not error else f"입력하지 못했습니다: {error}"
+        print(f"[scan] {name}: {found}{' (클립보드에 넣음)' if copied else ''}{f' ({typed})' if typed else ''}")
+        note = typed or ("클립보드에 넣었습니다" if copied else "")
+        return scanner.describe(found) + (f"\n{note}" if note else "")
+
+    def _device_qr(self, name: str, data: bytes) -> None:
+        """기기가 읽은 QR: 판독기(opencv)가 없어도 된다. 기기는 이미 스캔을 멈췄으므로 결과는 알림으로"""
+        text = data.decode("utf-8", errors="replace")
+
+        def run():  # 입력은 몇 초 걸릴 수 있어 받는 쪽이 멈추지 않게 따로
+            self.pending_toast = self._deliver(name, [("QRCode", text)])
 
         threading.Thread(target=run, daemon=True).start()
 

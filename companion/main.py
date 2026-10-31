@@ -59,6 +59,7 @@ import sync
 import version
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
+from collectors import orca_usage
 from transports import TRANSPORTS, frames
 from transports.commands import CommandTransport, CommandError
 
@@ -125,6 +126,13 @@ def collect_limits(cfg: dict) -> list:
             pages.append(limits_page(module.NAME, snapshot))
         elif hasattr(module, "hint") and module.hint():
             pages.append(module.hint())
+    # 기존 CLI/공유 페이지는 유지하고, 현재 PC의 ORCA Codex를 별도 페이지로 추가한다.
+    if cfg.get("orca", {}).get("usage", True) and cfg.get("codex", {}).get("enabled", True):
+        orca_data = orca_usage.read()
+        if orca_data:
+            page = orca_usage.pages(orca_data, {**cfg, "claude_code": {"enabled": False}}).get("codex")
+            if page:
+                pages.append(page)
     return pages
 
 

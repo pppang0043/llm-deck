@@ -1,5 +1,10 @@
-"""Windows direct RPC: fallback must never duplicate terminal input."""
+"""Direct RPC (Windows pipe, Mac socket): fallback must never duplicate terminal input."""
 import json
+import os
+import shutil
+import socket
+import tempfile
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +36,7 @@ def test_combined_text_enter_uses_cli():
     ("answered", False, False), ("answered", True, False),
 ])
 def test_fallback_and_no_duplicate_input(monkeypatch, status, send, fallback):
+    monkeypatch.setattr(orca.sys, "platform", "win32")
     inst = orca.Orca({"enabled": False})
     inst.cli = "orca.exe"
     monkeypatch.setattr(orca, "_pipe_call", lambda *args: (status, None))
@@ -56,10 +62,69 @@ def test_runtime_metadata(tmp_path, monkeypatch):
     }))
     assert orca._runtime_pipe() == ("test-pipe", "test-token")
     monkeypatch.setattr(orca.sys, "platform", "darwin")
+    assert orca._runtime_pipe() is None  # Mac 은 unix 소켓만 쓴다
+    (tmp_path / "orca-runtime.json").write_text(json.dumps({
+        "authToken": "test-token", "transports": [{"kind": "unix", "endpoint": "/tmp/test.sock"}]
+    }))
+    assert orca._runtime_pipe() == ("/tmp/test.sock", "test-token")
+    monkeypatch.setattr(orca.sys, "platform", "linux")
     assert orca._runtime_pipe() is None
 
 
+def test_mac_reads_directly_and_sends_by_cli(monkeypatch):
+    monkeypatch.setattr(orca.sys, "platform", "darwin")
+    inst = orca.Orca({"enabled": False})
+    inst.cli = "orca"
+    asked = []
+    monkeypatch.setattr(orca, "_pipe_call", lambda *a: (asked.append(a[0]), ("answered", {"direct": True}))[1])
+    ran = []
+
+    def cli(args, **kwargs):
+        ran.append(args)
+        return SimpleNamespace(stdout='{"ok":true,"result":{"cli":true}}')
+
+    monkeypatch.setattr(orca.subprocess, "run", cli)
+    assert inst._run("worktree", "ps") == {"direct": True}
+    assert inst._run("terminal", "list") == {"direct": True}
+    assert asked == ["worktree.ps", "terminal.list"] and not ran
+    assert inst._run("terminal", "send", "--terminal", "x", "--text", "hi") == {"cli": True}
+    assert asked == ["worktree.ps", "terminal.list"] and len(ran) == 1
+
+
+def test_unix_socket_call(monkeypatch):
+    # 짧은 주소가 필요하다 (Mac 의 소켓 경로는 104바이트까지)
+    folder = tempfile.mkdtemp(dir="/tmp")
+    path = os.path.join(folder, "o.sock")
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(path)
+    server.listen(1)
+    seen = {}
+
+    def serve():
+        conn, _ = server.accept()
+        with conn:
+            request = json.loads(conn.makefile().readline())
+            seen.update(request)
+            conn.sendall(b'{"_keepalive":true}\n')
+            conn.sendall(json.dumps({"id": request["id"], "ok": True, "result": {"terminals": []}}).encode() + b"\n")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    monkeypatch.setattr(orca.sys, "platform", "darwin")
+    monkeypatch.setattr(orca, "_runtime_pipe", lambda: (path, "test-token"))
+    try:
+        assert orca._pipe_call("terminal.list", {}, 2) == ("answered", {"terminals": []})
+        assert seen["authToken"] == "test-token" and seen["method"] == "terminal.list"
+        monkeypatch.setattr(orca, "_runtime_pipe", lambda: (path + ".gone", "test-token"))
+        assert orca._pipe_call("terminal.list", {}, 1) == ("unsent", None)
+    finally:
+        thread.join(2)
+        server.close()
+        shutil.rmtree(folder)
+
+
 def test_pipe_unavailable(monkeypatch):
+    monkeypatch.setattr(orca.sys, "platform", "win32")
     monkeypatch.setattr(orca, "_runtime_pipe", lambda: ("missing", "test"))
 
     def unavailable(*a, **kw):
@@ -100,6 +165,7 @@ def test_pipe_framing_and_error(monkeypatch, reply, expected):
             self.closed = True
 
     pipe = Pipe()
+    monkeypatch.setattr(orca.sys, "platform", "win32")
     monkeypatch.setattr(orca, "_runtime_pipe", lambda: ("test-pipe", "test-token"))
     monkeypatch.setattr("builtins.open", lambda *a, **kw: pipe)
     assert orca._pipe_call("terminal.list", {}, 1) == expected

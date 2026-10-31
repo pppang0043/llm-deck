@@ -109,7 +109,7 @@ static void mic_task(void *) {
     // INMP441 은 32비트 칸에 24비트 값을 담아 보낸다. 16비트로 줄이면서 소리를 키운다.
     int32_t peak = 0, lo = INT32_MAX, hi = INT32_MIN;
     for (int i = 0; i < MIC_FRAME_SAMPLES; i++) {
-      int32_t s = constrain(raw[i] >> 14, -32768, 32767);
+      int32_t s = constrain(raw[i] >> 15, -32768, 32767);
       packet.pcm[i] = s;
       if (abs(s) > peak) peak = abs(s);
       lo = min(lo, s);

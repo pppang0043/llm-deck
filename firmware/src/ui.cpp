@@ -446,7 +446,10 @@ static void fit_forecast(lv_obj_t *lbl) {
 struct Remain {
   lv_obj_t *label;
   time_t resets;
+  lv_obj_t *number, *bar, *soon;  // 초기화 시각이 지나면 고치는 큰 숫자, 막대, 소진 예상 (없으면 nullptr)
 };
+#define USAGE_STALE_MS 600000  // PC·클라우드에서 이만큼 못 받으면 숫자를 흐리게 (평소 30~60초마다 온다)
+static uint32_t usage_received_ms = 0;  // 0 이면 켠 뒤 아직 못 받았다 (저장해 둔 값을 보여 주는 중)
 #define MAX_REMAINS 12
 static Remain remains[MAX_REMAINS];
 static lv_timer_t *remain_timer;
@@ -456,7 +459,22 @@ static lv_timer_t *remain_timer;
 static void remain_update(Remain &r) {
   time_t now = time(nullptr);
   long left = (long)(r.resets - now);
-  if (left < 0) left = 0;
+  // 오래된 값은 흐리게: 지금 값이 아닐 수 있다
+  bool stale = !usage_received_ms || millis() - usage_received_ms > USAGE_STALE_MS;
+  lv_opa_t opa = stale ? LV_OPA_50 : LV_OPA_COVER;
+  if (r.number) lv_obj_set_style_opa(r.number, opa, 0);
+  if (r.bar) lv_obj_set_style_opa(r.bar, opa, 0);
+  // 초기화 시각이 지났다: 새 값을 받을 때까지 지난 구간의 값을 그대로 두지 않는다 (fmt.py 의 limit_bar 와 같다)
+  if (left <= 0) {
+    if (strcmp(lv_label_get_text(r.label), "초기화됨") != 0) lv_label_set_text(r.label, "초기화됨");
+    if (r.number) {
+      lv_label_set_text(r.number, "0%");
+      lv_obj_set_style_text_color(r.number, lv_color_white(), 0);
+    }
+    if (r.bar) lv_bar_set_value(r.bar, 0, LV_ANIM_OFF);
+    if (r.soon) lv_obj_add_flag(r.soon, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
   long days = left / 86400, hours = left % 86400 / 3600, mins = left % 3600 / 60;
   struct tm t, today;
   localtime_r(&r.resets, &t);
@@ -509,12 +527,13 @@ static void remain_deleted(lv_event_t *e) {
 
 // label 에 남은 시간을 쓰고 계속 고쳐 나간다. 초기화 시각을 모르면 아무것도 하지 않는다.
 // 처음 글자는 페이지 배치가 끝난 뒤(칸 폭을 알 때) 정한다.
-static void add_remain(lv_obj_t *label, uint32_t resets) {
+static void add_remain(lv_obj_t *label, uint32_t resets, lv_obj_t *number, lv_obj_t *bar, lv_obj_t *soon) {
   if (!resets) return;
   for (Remain &r : remains) {
     if (r.label) continue;
     r.label = label;
     r.resets = (time_t)resets;
+    r.number = number, r.bar = bar, r.soon = soon;
     lv_obj_add_event_cb(label, remain_deleted, LV_EVENT_DELETE, NULL);
     if (!remain_timer) remain_timer = lv_timer_create(remain_tick, 30000, NULL);
     lv_async_call([](void *) { remain_tick(nullptr); }, nullptr);
@@ -546,8 +565,7 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
                              known ? lv_color_white() : COLOR_DIM);
   lv_obj_set_width(note, lv_pct(100));
   lv_label_set_long_mode(note, LV_LABEL_LONG_CLIP);
-  add_remain(note, bar["resets"] | 0u);
-  add_label(row, bar["text"] | "", &lv_font_montserrat_48, color);
+  lv_obj_t *number = add_label(row, bar["text"] | "", &lv_font_montserrat_48, color);
   if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
     strlcpy(k.service, service, sizeof(k.service));
@@ -563,7 +581,8 @@ static void add_gauge(lv_obj_t *parent, const char *service, JsonObjectConst bar
   lv_bar_set_value(b, pct, LV_ANIM_OFF);
   if (pct >= 70) lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
   char soon[32];
-  if (forecast(service, bar, soon, sizeof(soon))) add_label(parent, soon, &font_ko_14, COLOR_WARN);
+  lv_obj_t *soon_lbl = forecast(service, bar, soon, sizeof(soon)) ? add_label(parent, soon, &font_ko_14, COLOR_WARN) : nullptr;
+  add_remain(note, bar["resets"] | 0u, number, b, soon_lbl);
 }
 
 // 한도 막대만 있는 페이지(Claude Code, Codex 같은 구독)인지
@@ -590,7 +609,7 @@ static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst b
 
   int pct = constrain(bar["pct"] | 0, 0, 100);
   lv_color_t color = pct >= 90 ? COLOR_FULL : pct >= 70 ? COLOR_WARN : lv_color_white();
-  add_label(cell, bar["text"] | "", &lv_font_montserrat_28, color);
+  lv_obj_t *number = add_label(cell, bar["text"] | "", &lv_font_montserrat_28, color);
   lv_obj_t *b = lv_bar_create(cell);
   lv_obj_set_size(b, lv_pct(100), 8);
   lv_bar_set_range(b, 0, 100);
@@ -602,14 +621,15 @@ static void add_limit_cell(lv_obj_t *row, const char *service, JsonObjectConst b
   lv_obj_t *note = add_label(cell, when[0] ? when : "-", &font_ko_14, known ? lv_color_white() : COLOR_DIM);
   lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
   lv_obj_set_style_max_width(note, lv_pct(100), 0);
-  add_remain(note, bar["resets"] | 0u);  // 칸 폭에 맞는 한 줄을 고른다
   char soon[32];
+  lv_obj_t *soon_lbl = nullptr;
   if (forecast(service, bar, soon, sizeof(soon))) {
-    lv_obj_t *lbl = add_label(cell, soon, &font_ko_14, COLOR_WARN);
+    lv_obj_t *lbl = soon_lbl = add_label(cell, soon, &font_ko_14, COLOR_WARN);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_max_width(lbl, lv_pct(100), 0);
     if (table_forecast_count < 8) table_forecasts[table_forecast_count++] = lbl;
   }
+  add_remain(note, bar["resets"] | 0u, number, b, soon_lbl);  // 칸 폭에 맞는 한 줄을 고른다
   if (!no_history && gauge_count < MAX_GAUGES) {
     GaugeKey &k = gauge_keys[gauge_count];
     strlcpy(k.service, service, sizeof(k.service));
@@ -1185,6 +1205,10 @@ void ui_layout() {
   }
 }
 
+const char *ui_status_text() {
+  return lv_label_get_text(status_lbl);
+}
+
 void ui_set_status(const char *text) {
   if (strcmp(lv_label_get_text(status_lbl), text) == 0) return;
   lv_label_set_text(status_lbl, text);
@@ -1261,6 +1285,12 @@ static void usage_retry(lv_timer_t *t) {
   if (touch_busy()) return;
   lv_timer_pause(t);
   render_usage();
+}
+
+void ui_usage_received() {
+  bool was_stale = !usage_received_ms || millis() - usage_received_ms > USAGE_STALE_MS;
+  usage_received_ms = millis() | 1;
+  if (was_stale) remain_tick(nullptr);
 }
 
 void ui_set_usage(JsonArrayConst services) {

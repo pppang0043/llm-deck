@@ -529,6 +529,7 @@ void link_loop() {
       if (doc["services"].is<JsonArrayConst>() && from == active && usage) {
         JsonArrayConst services = doc["services"];
         ui_set_usage(services);
+        ui_usage_received();
         alerts_check(services);
         shown.clear();
         serializeJson(services, shown);

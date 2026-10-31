@@ -16,6 +16,7 @@
 #include "imu.h"
 #include "link.h"
 #include "mic.h"
+#include "motion_logic.h"
 #include "net.h"
 #include "photo.h"
 #include "saver.h"
@@ -78,12 +79,23 @@ static int tilt = 0;
 static void apply_rotation() {
   uint8_t rotation = (tilt + rotate_offset) & 3;
   if (rotation == display_rotation()) return;
+  uint32_t t[7];
+  t[0] = millis();
   display_set_rotation(rotation);
+  t[1] = millis();
   ui_layout();
+  t[2] = millis();
   camera_ui_layout();
+  t[3] = millis();
   gallery_layout();
+  t[4] = millis();
   saver_layout();
   quickpanel_layout();
+  t[5] = millis();
+  lv_refr_now(nullptr);
+  t[6] = millis();
+  Serial.printf("[tilt] rotate %lu, ui %lu, camera %lu, gallery %lu, saver+panel %lu, draw %lu ms\n", t[1] - t[0],
+                t[2] - t[1], t[3] - t[2], t[4] - t[3], t[5] - t[4], t[6] - t[5]);
   Serial.printf("[main] screen rotation %d (tilt %d + button %d)\n", rotation, tilt, rotate_offset);
 }
 
@@ -98,26 +110,34 @@ static void rotate_by_button() {
   apply_rotation();
 }
 
-// 기기를 돌려 세우면 화면도 따라 돈다. 같은 방향이 1초쯤 유지되어야 바꾼다 (들고 옮길 때 흔들림에 반응하지 않도록).
+// 기기를 돌려 세우면 화면도 따라 돈다. 손으로 크게 돌린 뒤 멈추면 약 0.2초 만에, 아니면 같은 방향이 1초쯤
+// 유지되어야 바꾼다. 자이로가 계속 움직이면(걷기·흔들기) 바꾸지 않는다 (motion_logic.h).
 // 눕혀 놓았거나 애매하게 기울어 있으면 마지막 방향을 유지한다.
+// 같은 값으로 들어 올림도 본다: 화면이 쉬는 동안 들면 lifted 를 세운다 (wake_on_pickup).
+static TurnSettle turn;
+static PickupDetect pickup;
+static bool lifted = false;
+
 static void follow_tilt() {
   static uint32_t checked_ms = 0;
-  static int candidate = -1;
-  static uint8_t count = 0;
+  static uint32_t restore_ms = 0;
 
-  if (millis() - checked_ms < 150 || !settings_auto_rotate()) return;
+  if (millis() - checked_ms < 40) return;
   checked_ms = millis();
-  int now = imu_rotation();
+  float x, y, z;
+  if (!imu_read(&x, &y, &z)) return;
+  if (pickup.sample(x, y, z)) lifted = true;
+  if (!settings_auto_rotate()) return;
+  float gx, gy, gz;
+  float rate = imu_read_gyro(&gx, &gy, &gz) ? sqrtf(gx * gx + gy * gy + gz * gz) : -1;
+  int now = imu_rotation_of(x, y);
   // 버튼으로 돌려 둔 상태: 기기가 움직이지 않고 5분 동안 그대로면 기울기 방향(눕혀 두었으면 마지막으로 세웠던 방향)으로
-  // 되돌린다. 들거나 흔들리거나 다른 방향으로 세우면 처음부터 다시 센다.
-  if (rotate_offset && settings_rotate_restore()) {
+  // 되돌린다. 들거나 흔들리거나 다른 방향으로 세우면 처음부터 다시 센다. (전처럼 0.15초마다 비교)
+  if (rotate_offset && settings_rotate_restore() && millis() - restore_ms >= 150) {
+    restore_ms = millis();
     static float last_x = 0, last_y = 0, last_z = 0;
-    float x, y, z;
-    bool moved = true;
-    if (imu_read(&x, &y, &z)) {
-      moved = fabsf(x - last_x) + fabsf(y - last_y) + fabsf(z - last_z) > 0.15f;
-      last_x = x, last_y = y, last_z = z;
-    }
+    bool moved = fabsf(x - last_x) + fabsf(y - last_y) + fabsf(z - last_z) > 0.15f;
+    last_x = x, last_y = y, last_z = z;
     if (moved || (now >= 0 && now != tilt)) {
       stable_since = millis();
     } else if (millis() - stable_since >= ROTATE_RESTORE_MS) {
@@ -126,17 +146,20 @@ static void follow_tilt() {
       apply_rotation();
     }
   }
-  if (now < 0 || now == tilt) {
-    candidate = -1;
-    return;
-  }
-  count = now == candidate ? count + 1 : 1;
-  candidate = now;
-  if (count >= 7) {
-    tilt = now;
+  // 회전이 얼마나 빨리 되는지 확인용: 자이로 최고값과 움직임이 멈춘 뒤 바뀌기까지 걸린 시간
+  static float peak = -1;
+  static uint32_t moved_ms = 0;
+  if (rate > peak) peak = rate;
+  if (rate >= TurnSettle::QUIET_DPS) moved_ms = millis();
+  int next = turn.sample(millis(), rate, now, tilt);
+  if (next >= 0) {
+    uint32_t t0 = millis();
+    tilt = next;
     rotate_offset = 0;  // 새로 세운 방향은 기울기 그대로 (버튼으로 돌린 것은 잊는다)
-    candidate = -1;
     apply_rotation();
+    Serial.printf("[tilt] gyro peak %.0f dps, rate %.0f, %lu ms after stop, redraw %lu ms\n", peak, rate,
+                  (unsigned long)(t0 - moved_ms), (unsigned long)(millis() - t0));
+    peak = -1;
   }
 }
 
@@ -151,7 +174,7 @@ static void follow_tilt() {
 // 전원이 연결돼 있을 때 안 만지면 낮추는 밝기. 화면이 그대로라 보호기보다 밝게 둔다.
 #define IDLE_BRIGHTNESS 30
 // 칩 절전 (배터리 절약을 켜고 배터리로만 쓸 때): 화면이 꺼졌거나 보호기면 CPU 를 낮추고(발열·전력),
-// 이만큼 안 만지면 깊은 잠에 든다. 깨우기는 BOOT 버튼 (깨면 처음부터 켜진다)
+// 이만큼 안 만지면 깊은 잠에 든다. 깨우기는 BOOT 버튼, 들어 올려 깨우기가 켜져 있으면 움직임도 (깨면 처음부터 켜진다)
 #define CPU_FULL_MHZ 240
 #define CPU_SAVE_MHZ 80
 #define DEEP_SLEEP_AFTER_MS (20 * 60 * 1000UL)
@@ -165,6 +188,12 @@ static void deep_sleep() {
   rtc_gpio_pullup_en((gpio_num_t)BTN_BOOT);
   rtc_gpio_pulldown_dis((gpio_num_t)BTN_BOOT);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_BOOT, 0);
+  // 들어 올려 깨우기: 센서가 움직임을 느끼면 INT1(GPIO3)을 HIGH 로 올린다 (센서가 직접 내보내므로 당김 저항은 쓰지 않는다)
+  if (settings_pickup_wake() && imu_wake_on_motion()) {
+    esp_sleep_enable_ext1_wakeup(1ULL << IMU_INT1, ESP_EXT1_WAKEUP_ANY_HIGH);
+    Serial.println("[power] motion also wakes");
+    Serial.flush();
+  }
   delay(50);
   esp_deep_sleep_start();
 }
@@ -180,6 +209,8 @@ static void cpu_save(bool save) {
 }
 
 static StandbyState standby;
+// 화면이 꺼졌거나(수동 절전·배터리 절약) 보호기인 동안 true. 이때 들어 올리면 켠다.
+static bool screen_resting = false;
 
 static void enter_standby() {
   standby.enter(display_wake_sequence());
@@ -210,6 +241,7 @@ static void power_save() {
     level = 10;
   }
   if (manual) level = 0;
+  screen_resting = manual || level == 0 || saver;
   if (saver && level > 0) level = min(level, (uint8_t)SAVER_BRIGHTNESS);
   if (idle_long && powered && level > 0) level = min(level, (uint8_t)IDLE_BRIGHTNESS);
   // 사진·동영상을 보내거나 카드에 쓰는 중에는 잠들지 않는다
@@ -228,6 +260,16 @@ static void power_save() {
   display_set_sleeping(saver || level < settings_brightness());
   if (!first) Serial.printf("[power] screen %s%s\n", level == 0 ? "off" : level < settings_brightness() ? "dim" : "on",
                             saver ? " (saver)" : "");
+}
+
+// 화면이 쉬는 동안 들어 올리면 터치처럼 깨운다 (BOOT 버튼과 같지만 마이크는 건드리지 않는다)
+static void wake_on_pickup() {
+  if (!lifted) return;
+  lifted = false;
+  if (!screen_resting || !settings_pickup_wake()) return;
+  Serial.println("[power] picked up, screen on");
+  standby.wake();
+  display_poke();
 }
 
 // 상태줄의 날짜와 시각. 시각은 Wi-Fi(인터넷) 또는 PC 도우미에게서 받으며, 받기 전에는 비워 둔다.
@@ -322,6 +364,7 @@ static void mem_log(const char *tag) {
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+  health_watch_feed();  // setup() 도 단계마다 감시한다 (한 단계가 LOOP_LIMIT_MS 를 넘으면 멈춘 것)
 }
 
 void setup() {
@@ -335,9 +378,13 @@ void setup() {
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
     Serial.println("[power] woke from deep sleep (BOOT button)");
     rtc_gpio_deinit((gpio_num_t)BTN_BOOT);  // 잠들 때 깨우기용(RTC)으로 바꾼 핀을 다시 보통 입력으로
+  } else if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+    Serial.println("[power] woke from deep sleep (motion)");
+    rtc_gpio_deinit((gpio_num_t)IMU_INT1);  // 센서는 imu_init() 이 처음 상태로 되돌린다
   }
   pinMode(BTN_BOOT, INPUT_PULLUP);
   health_init();
+  health_watch_start();
   mem_log("start");
 
   display_init();
@@ -393,8 +440,7 @@ void setup() {
   mirror_init();
   mem_log("video");
   speaker_init();
-  health_watch_start();
-  Serial.println("[main] setup done");
+  Serial.printf("[main] setup done (%lu ms)\n", (unsigned long)millis());
 }
 
 void loop() {
@@ -418,6 +464,7 @@ void loop() {
     if (!waking) toggle_mic();
   }
   follow_tilt();
+  wake_on_pickup();
   battery_loop();
   show_clock();
   camera_ui_loop();

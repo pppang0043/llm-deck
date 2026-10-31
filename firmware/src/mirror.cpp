@@ -151,6 +151,8 @@ static lv_obj_t *dev_clock, *dev_body, *dev_btn;
 static uint32_t dev_version = 0;
 static int dev_w = 0, dev_h = 0;
 static lv_obj_t *dev_title = nullptr;
+static lv_obj_t *dev_ring = nullptr;  // 두 번 탭을 알아들었다는 표시
+static lv_point_t ring_at;
 
 static void device_build() {
   lv_obj_t *scr = display_device_screen();
@@ -172,6 +174,37 @@ static void device_build() {
   dev_body = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(dev_body, lv_color_hex(0x101418), 0);
   lv_obj_set_pos(dev_body, 0, DEVICE_STATUS_H);
+  dev_ring = lv_obj_create(scr);
+  lv_obj_set_style_radius(dev_ring, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(dev_ring, lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(dev_ring, LV_OPA_30, 0);
+  lv_obj_set_style_border_color(dev_ring, lv_color_white(), 0);
+  lv_obj_set_style_border_width(dev_ring, 3, 0);
+  lv_obj_clear_flag(dev_ring, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
+  lv_obj_add_flag(dev_ring, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void ring_step(void *, int32_t v) {
+  int size = 16 + 56 * v / 255;
+  lv_obj_set_size(dev_ring, size, size);
+  lv_obj_set_pos(dev_ring, ring_at.x - size / 2, ring_at.y - size / 2);
+  lv_obj_set_style_opa(dev_ring, 255 - v, 0);
+}
+
+// 누른 자리에서 원이 퍼지며 사라진다
+static void show_ring(const lv_point_t &at) {
+  ring_at = at;
+  lv_obj_clear_flag(dev_ring, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(dev_ring);
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, dev_ring);
+  lv_anim_set_exec_cb(&a, ring_step);
+  lv_anim_set_values(&a, 0, 255);
+  lv_anim_set_time(&a, 400);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_set_ready_cb(&a, [](lv_anim_t *) { lv_obj_add_flag(dev_ring, LV_OBJ_FLAG_HIDDEN); });
+  lv_anim_start(&a);
 }
 
 // 기기 화면을 두 번 탭: 받아쓰기 시작, 말하는 중이면 입력. 버튼 위에서 두 번 누른 것은 그 버튼만 눌린다.
@@ -180,6 +213,7 @@ static void device_dictate() {
   if (!display_device_double_tap(&at) || !dev_body) return;
   lv_obj_t *hit = lv_indev_search_obj(display_device_screen(), &at);
   if (hit && lv_obj_check_type(hit, &lv_btn_class)) return;
+  show_ring(at);
   if (askpanel_talk_state() != ASK_TALKING) {
     askpanel_press(true);
   } else if (askpanel_dictating()) {
@@ -191,7 +225,7 @@ static void device_dictate() {
 static void device_title() {
   if (!dev_title) return;
   int st = askpanel_talk_state(), step = askpanel_dictate_step();
-  const char *text = "두 번 탭: 받아쓰기";
+  const char *text = ui_status_text();  // 평소에는 미러링 화면과 같은 연결 상태 (USB, Wi-Fi)
   if (st == ASK_TALKING) {
     text = step == DICTATE_PREPARING ? "마이크 준비 중..." : LV_SYMBOL_AUDIO " 말하세요";
   } else if (step == DICTATE_WRITING) {

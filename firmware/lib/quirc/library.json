@@ -1,0 +1,12 @@
+{
+  "name": "quirc",
+  "version": "1.2.0+927d680",
+  "description": "QR 코드 판독 (https://github.com/dlbeer/quirc 의 lib/ 만, 커밋 927d680904dc95fdff4cd9d022eb374b438ff8f2 그대로). 저장소에 PlatformIO 설명 파일이 없어 demo/ 까지 빌드되므로 lib 만 옮겨 왔다",
+  "license": "ISC",
+  "repository": { "type": "git", "url": "https://github.com/dlbeer/quirc.git" },
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "flags": ["-DQUIRC_FLOAT_TYPE=float", "-DQUIRC_USE_TGMATH", "-O2"]
+  }
+}

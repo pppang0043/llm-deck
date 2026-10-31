@@ -37,6 +37,19 @@ def test_summary(message, expected):
     assert orca._summary(message) == expected
 
 
+@pytest.mark.parametrize("state, program, shown", [
+    ("waiting", {"state": "blocked", "kind": "permission"}, "permission"),  # 실제 권한 질문 (2026-10-31 확인)
+    ("waiting", {"state": "blocked", "kind": "other"}, "waiting"),
+    ("waiting", None, "waiting"),
+    ("working", {"state": "blocked", "kind": "permission"}, "working"),  # 답한 뒤 남은 값
+])
+def test_read_finds_permission_in_program_status(o, monkeypatch, state, program, shown):
+    term = {"handle": "term_abc", "tabId": "t", "leafId": "l", "connected": True, "title": "세션"}
+    ps = {"worktrees": [{"agents": [{"paneKey": "t:l", "mainAgent": {"state": state}, "programStatus": program}]}]}
+    monkeypatch.setattr(o, "_run", lambda *args: ps if args[0] == "worktree" else {"terminals": [term]})
+    assert o._read()["list"][0]["s"] == shown
+
+
 @pytest.mark.parametrize("state, has_summary", [("done", True), ("waiting", True), ("working", False), ("permission", False)])
 def test_read_sends_summary_only_when_finished(o, state, has_summary):
     terminals = [{"handle": "term_a1", "tabId": "t", "leafId": "l", "connected": True, "title": "세션", "worktreePath": "/p"}]

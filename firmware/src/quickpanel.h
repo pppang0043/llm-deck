@@ -8,6 +8,7 @@ void quickpanel_layout();
 // ORCA 완료 알림: 양쪽 화면 가운데 팝업. 팝업 노출은 읽음이 아니며 상단 목록을 열면 읽음 처리.
 void quickpanel_notify(const char *text);
 unsigned quickpanel_unread_count();
+bool quickpanel_is_open();
 // 상태줄의 오른쪽 요소 앞에 알림 아이콘/개수를 놓고 그 요소를 돌려준다 (미확인 0개면 원래 요소).
 lv_obj_t *quickpanel_status_before(lv_obj_t *right);
 // LVGL 에 입력을 넘기기 전에 부른다. true 이면 이번 쓸기는 버튼 입력으로 넘기지 않는다.

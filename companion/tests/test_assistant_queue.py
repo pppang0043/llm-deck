@@ -102,3 +102,51 @@ def test_answer_spoken_after_recording_ends(a, monkeypatch):
     a.on_event({"ask": "stop"})
     assert spoken == ["앞 답"]
     a.release.set()
+
+
+def test_new_chat_does_not_block_receiver(a):
+    # 답하는 중 (lock 을 쥐고 있다) 에 "새 대화" 를 눌러도 USB 받는 스레드가 멈추지 않는다
+    a.session = type("Session", (), {"closed": False, "close": lambda self: setattr(self, "closed", True)})()
+    session = a.session
+    a.lock.acquire()
+    try:
+        receiver = threading.Thread(target=a.on_event, args=({"ask": "new"},), daemon=True)
+        receiver.start()
+        receiver.join(10)  # 부하가 커도 lock 을 쥔 동안 돌아온다
+        assert not receiver.is_alive()
+        assert not session.closed
+    finally:
+        a.lock.release()
+    assert wait_for(lambda: session.closed and a.session is None)
+
+
+@pytest.mark.parametrize("copied,note", [(True, True), (False, False)])
+def test_failed_dictation_is_kept_in_clipboard(a, monkeypatch, copied, note):
+    clipboard = []
+    monkeypatch.setattr(assistant.orca, "_copy", lambda text: (clipboard.append(text), copied)[1])
+    monkeypatch.setattr(assistant.typer, "_type", lambda text, enter: "손쉬운 사용 권한이 없습니다")
+    a.orca = None
+    a._finish_dictation(assistant._Take(True, False, False), "말한 글")
+    assert clipboard == ["말한 글"]
+    assert a.pending_toast.startswith("입력하지 못했습니다\n손쉬운 사용")
+    assert ("클립보드" in a.pending_toast) is note
+
+
+def test_dictation_exception_is_kept_in_clipboard(a, monkeypatch):
+    clipboard = []
+    monkeypatch.setattr(assistant.orca, "_copy", lambda text: (clipboard.append(text), True)[1])
+    a.orca = type("Fake", (), {"commands": lambda self: [], "aliases": {},
+                               "send_text": lambda self, target, text: 1 / 0})()
+    take = assistant._Take(True, False, True)
+    take.orca_target = "term_x"
+    a._finish_dictation(take, "말한 글")
+    assert clipboard == ["말한 글"] and "클립보드" in a.pending_toast
+
+
+def test_successful_dictation_leaves_clipboard_alone(a, monkeypatch):
+    clipboard = []
+    monkeypatch.setattr(assistant.orca, "_copy", lambda text: clipboard.append(text))
+    monkeypatch.setattr(assistant.typer, "_type", lambda text, enter: None)
+    a.orca = None
+    a._finish_dictation(assistant._Take(True, False, False), "말한 글")
+    assert clipboard == [] and a.pending_toast == "입력했습니다: 말한 글"

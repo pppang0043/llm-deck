@@ -1,12 +1,15 @@
 #include "orcapanel.h"
 
 #include "askpanel.h"
+#include "camera_ui.h"
+#include "gallery.h"
 #include "link.h"
 #include "pcpanel.h"
 #include "speaker.h"
 #include "ui.h"
 #include "quickpanel.h"
 #include "mirror.h"
+#include "usb_drive.h"
 
 LV_FONT_DECLARE(font_ko_14);
 LV_FONT_DECLARE(font_ko_20);
@@ -32,6 +35,9 @@ LV_FONT_DECLARE(font_ko_20);
 #define ACTIVE_HOLD_MS 3000  // 탭 저장 지연 동안 PC 의 예전 선택으로 되돌아가지 않는다
 #define KEEP_ORDER_MS 15000  // 누른 뒤 이만큼은 순서를 바꾸지 않는다 (누르려던 자리에 다른 세션이 오지 않게)
 #define ALERT_QUIET_MS 60000  // 한 세션의 같은 알림은 이만큼 안에 다시 내지 않는다 (상태가 오락가락할 때)
+// 권한 요청은 허용한 뒤 곧바로 다음 명령을 또 묻는 일이 흔해 길게 막지 않는다. 그 사이에도 아래 띠는 떠 있다
+#define ASK_QUIET_MS 5000
+#define ASK_STRIP_H 34  // 권한 요청이 있는 동안 화면 아래에 남는 띠
 
 struct Session {
   char id[12];
@@ -82,9 +88,12 @@ static void place_pop();
 static lv_obj_t *qr, *qr_title, *qr_btn[3], *qr_lbl[3];
 static char qr_id[12] = "";  // 빠른 답을 보낼 세션 (비어 있으면 닫혀 있다)
 static bool qr_permission = false;
+static bool qr_tapped = false;  // 권한 요청 세션을 눌러 열었다: 숨기기 대신 보기 (세션을 띄운다)
 static bool long_pressed = false;  // 길게 누른 뒤 손을 떼면 오는 CLICKED 는 무시한다
+static lv_obj_t *ask_strip, *ask_strip_lbl;
 static void close_qr();
 static void place_qr();
+static void set_pop(bool open);
 
 // 작업 상태는 버튼 색으로 (orca.py 의 s)
 struct StateLook {
@@ -146,7 +155,42 @@ static void dictate(const char *id) {
   if (askpanel_press_orca(id)) orcapanel_refresh();
 }
 
+// 그 세션을 ORCA 에서 앞으로 띄우고 키 팝업을 연다
+static void activate_session(const char *id) {
+  char json[64];
+  snprintf(json, sizeof(json), "{\"orca\":\"activate\",\"id\":\"%s\"}", id);
+  link_send_event(json);
+  snprintf(active_id, sizeof(active_id), "%s", id);
+  snprintf(shown_id, sizeof(shown_id), "%s", id);
+  selected_at = lv_tick_get();
+  selection_held = true;
+  set_pop(true);
+  orcapanel_refresh();
+}
+
+// 빠른 답 창을 연다. 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속.
+// tapped 이면 마지막 버튼이 보기, 길게 눌렀으면 숨기기.
+static void open_qr(const Session &s, bool tapped) {
+  set_pop(false);  // 아래에 빠른 답 창이 남으면 창 밖을 눌렀을 때 다른 세션으로 키가 간다
+  snprintf(qr_id, sizeof(qr_id), "%s", s.id);
+  qr_tapped = tapped;
+  qr_permission = is_permission(s.state);
+  bool answer = qr_permission || is_waiting(s.state);  // 빠른 답은 권한 요청이나 입력 기다림일 때만
+  lv_label_set_text(qr_title, s.title);
+  lv_label_set_text(qr_lbl[0], qr_permission ? "허용" : "계속");
+  lv_label_set_text(qr_lbl[1], "거부");
+  lv_label_set_text(qr_lbl[2], tapped ? "보기" : "숨기기");
+  if (answer) lv_obj_clear_flag(qr_btn[0], LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(qr_btn[0], LV_OBJ_FLAG_HIDDEN);
+  if (qr_permission) lv_obj_clear_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
+  place_qr();
+  lv_obj_clear_flag(qr, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(qr);
+}
+
 // 처음 누르면 그 세션을 ORCA 에서 앞으로 띄우기만 한다. 띄운 세션을 다시 누르면 받아쓰기, 또 누르면 넣는다.
+// 권한 요청 중인 세션은 PC 창을 건드리지 않고 바로 허용 / 거부 창을 연다.
 static void btn_event(lv_event_t *e) {
   int i = (intptr_t)lv_obj_get_user_data(lv_event_get_current_target(e));
   if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
@@ -157,20 +201,16 @@ static void btn_event(lv_event_t *e) {
   if (i < 0 || i >= count) return;
   touched_at = lv_tick_get();
   const Session &s = sessions[i];
-  if (!askpanel_dictating() && strcmp(active_id, s.id) != 0) {
+  if (!askpanel_dictating() && (is_permission(s.state) || strcmp(active_id, s.id) != 0)) {
     if (!pc_connected()) {
       ui_toast("연결된 PC가 없습니다", 2000);
       return;
     }
-    char json[64];
-    snprintf(json, sizeof(json), "{\"orca\":\"activate\",\"id\":\"%s\"}", s.id);
-    link_send_event(json);
-    snprintf(active_id, sizeof(active_id), "%s", s.id);
-    snprintf(shown_id, sizeof(shown_id), "%s", s.id);
-    selected_at = lv_tick_get();
-    selection_held = true;
-    set_pop(true);
-    orcapanel_refresh();
+    if (is_permission(s.state)) {
+      open_qr(s, true);
+    } else {
+      activate_session(s.id);
+    }
     return;
   }
   dictate(s.id);
@@ -187,20 +227,7 @@ static void btn_long_event(lv_event_t *e) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
-  snprintf(qr_id, sizeof(qr_id), "%s", s.id);
-  qr_permission = is_permission(s.state);
-  bool answer = qr_permission || is_waiting(s.state);  // 빠른 답은 권한 요청이나 입력 기다림일 때만
-  lv_label_set_text(qr_title, s.title);
-  lv_label_set_text(qr_lbl[0], qr_permission ? "허용" : "계속");
-  lv_label_set_text(qr_lbl[1], "거부");
-  lv_label_set_text(qr_lbl[2], "숨기기");
-  if (answer) lv_obj_clear_flag(qr_btn[0], LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(qr_btn[0], LV_OBJ_FLAG_HIDDEN);
-  if (qr_permission) lv_obj_clear_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(qr_btn[1], LV_OBJ_FLAG_HIDDEN);
-  place_qr();
-  lv_obj_clear_flag(qr, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_move_foreground(qr);
+  open_qr(s, false);
 }
 
 // 빠른 답 버튼: 이름만 보낸다. 보낼 키와 지금 상태 확인은 PC 가 한다 (orca.py 의 REPLIES)
@@ -212,6 +239,11 @@ static void qr_event(lv_event_t *e) {
     return;
   }
   touched_at = lv_tick_get();
+  if (k == 2 && qr_tapped) {
+    activate_session(qr_id);
+    close_qr();
+    return;
+  }
   char json[96];
   if (k == 2) {
     // 숨기기: PC 가 그 터미널을 닫을 때까지 목록에서 뺀다 (orca.py 의 hide)
@@ -805,7 +837,7 @@ static void sync_pc_selection(bool reveal) {
     snprintf(shown_id, sizeof(shown_id), "%s", pc_shown_id);
     int selected = 0;
     while (selected < count && strcmp(sessions[selected].id, shown_id) != 0) selected++;
-    if (mirror_active() && selected < count) {
+    if (mirror_active() && selected < count && !qr_id[0]) {
       close_pop();
       snprintf(active_id, sizeof(active_id), "%s", shown_id);
       set_pop(true);
@@ -845,7 +877,8 @@ static void check_alerts(const Session *next, int n) {
     const char *before = j < seen_count ? seen[j].state : "";
     if (j < seen_count) m.asked_at = seen[j].asked_at, m.done_at = seen[j].done_at;
     if (!seen_ok) continue;
-    if (is_permission(s.state) && !is_permission(before) && !quiet(m.asked_at)) {
+    if (is_permission(s.state) && !is_permission(before) &&
+        !(m.asked_at && lv_tick_elaps(m.asked_at) < ASK_QUIET_MS)) {
       m.asked_at = lv_tick_get() | 1;
       if (!asked_n++) asked = s.title;
     } else if (strcmp(before, "working") == 0 && is_waiting(s.state) && !quiet(m.done_at)) {
@@ -876,6 +909,70 @@ static void check_alerts(const Session *next, int n) {
   char event[48];
   snprintf(event, sizeof(event), "{\"sound\":\"%s\"}", sound);
   link_send_event(event);
+}
+
+// 권한 요청 띠: 그 세션이 답을 받을 때까지 어느 화면에서나 남아 있다. 누르면 허용 / 거부 창.
+static int first_asking(int *total) {
+  int first = -1;
+  *total = 0;
+  if (!orca_ok || !pc_connected()) return first;
+  for (int i = 0; i < count; i++) {
+    if (!is_permission(sessions[i].state)) continue;
+    if (first < 0) first = i;
+    ++*total;
+  }
+  return first;
+}
+
+static void ask_strip_clicked(lv_event_t *e) {
+  int total;
+  int i = first_asking(&total);
+  if (i < 0) return;
+  touched_at = lv_tick_get();
+  ui_show("orca");
+  open_qr(sessions[i], true);
+  reveal_session(sessions[i].id);
+}
+
+static void update_ask_strip() {
+  int total;
+  int i = first_asking(&total);
+  // 카메라·갤러리는 조작 버튼이 아래에 있고, 빠른 답 창이나 키 팝업이 떠 있으면 이미 그 세션을 보고 있다.
+  // 빠른 설정이 열려 있으면 그 판을 가리지 않는다.
+  bool show = i >= 0 && !camera_ui_open() && !gallery_open() && !usb_drive_active() && !quickpanel_is_open() &&
+              !(panel_visible && (pop_open || qr_id[0]));
+  if (!show) {
+    if (ask_strip) lv_obj_add_flag(ask_strip, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  if (!ask_strip) {
+    ask_strip = lv_btn_create(lv_layer_sys());
+    lv_obj_remove_style_all(ask_strip);
+    lv_obj_clear_flag(ask_strip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(ask_strip, lv_color_hex(0xD8433A), 0);
+    lv_obj_set_style_bg_opa(ask_strip, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(ask_strip, 8, 0);
+    lv_obj_add_event_cb(ask_strip, ask_strip_clicked, LV_EVENT_CLICKED, NULL);
+    ask_strip_lbl = add_label(ask_strip, "", &font_ko_14, lv_color_white());
+    lv_label_set_long_mode(ask_strip_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_center(ask_strip_lbl);
+    lv_obj_add_flag(ask_strip, LV_OBJ_FLAG_HIDDEN);
+  }
+  int w = lv_disp_get_hor_res(NULL) - 8;
+  lv_obj_set_size(ask_strip, w, ASK_STRIP_H);
+  lv_obj_align(ask_strip, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_set_width(ask_strip_lbl, w - 16);
+  char text[120];
+  if (total > 1) {
+    snprintf(text, sizeof(text), "권한 요청 %d개: %s", total, sessions[i].title);
+  } else {
+    snprintf(text, sizeof(text), "권한 요청: %s", sessions[i].title);
+  }
+  if (strcmp(lv_label_get_text(ask_strip_lbl), text) != 0) lv_label_set_text(ask_strip_lbl, text);
+  if (lv_obj_has_flag(ask_strip, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_clear_flag(ask_strip, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(ask_strip);
+  }
 }
 
 bool orcapanel_received() {
@@ -986,7 +1083,10 @@ void orcapanel_build(lv_obj_t *parent) {
   }
   build_pop();
   build_qr();
-  lv_timer_create([](lv_timer_t *) { sync_pc_selection(); }, 100, nullptr);
+  lv_timer_create([](lv_timer_t *) {
+    sync_pc_selection();
+    update_ask_strip();
+  }, 100, nullptr);
   orcapanel_refresh();
 }
 

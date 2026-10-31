@@ -782,12 +782,16 @@ class Assistant:
                 self._set("idle")
         elif action == "new":
             self._end_take()
-            with self.lock:
-                if self.session:
-                    self.session.close()
-                    self.session = None
-            print("[assistant] 새 대화")
-            self._set("idle", a="새 대화를 시작합니다")
+            # 답하는 중이면 lock 을 오래 기다린다. 여기(받는 스레드)서 기다리면 USB 수신이 함께 멈춘다
+            threading.Thread(target=self._new_chat, daemon=True).start()
+
+    def _new_chat(self) -> None:
+        with self.lock:
+            if self.session:
+                self.session.close()
+                self.session = None
+        print("[assistant] 새 대화")
+        self._set("idle", a="새 대화를 시작합니다")
 
     @property
     def recording(self) -> bool:
@@ -885,7 +889,8 @@ class Assistant:
         elif state == "ok" and (self.mic_state, self.mic_name) != ("ok", name):
             print(f"[assistant] PC 마이크: {name}")
         self.mic_state, self.mic_name = state, name
-        self.mic, self.mic_reason = state != "none", why
+        # PC 마이크가 안 되어도 아이폰 마이크가 붙어 있으면 말하기 버튼은 켜 둔다 (녹음할 때 마지막에 써 본다)
+        self.mic, self.mic_reason = state != "none" or any(self._phone(n) for n in self._names), why
 
     @staticmethod
     def _mic_privacy_blocked() -> bool:
@@ -936,7 +941,7 @@ class Assistant:
             if self._mic_privacy_blocked():
                 fail(_PRIVACY_REASON, True)
                 return
-            order = self._mic_order()
+            order = self._mic_order(with_phone=True)
             silent: list[str] = []  # 열렸지만 소리가 오지 않은 마이크
             error = None  # 열지 못한 마이크의 마지막 오류
             lid = False  # 덮개가 닫혀 내장 마이크가 0 만 보냈다
@@ -949,7 +954,7 @@ class Assistant:
                     # 녹음 프로세스를 새로 띄워 목록을 다시 읽는다
                     print(f"[assistant] 마이크를 열지 못했습니다: {str(error)[:80]}")
                     self.mics.restart()
-                    order = self._mic_order()
+                    order = self._mic_order(with_phone=True)
                 for i, name in enumerate(order):
                     if not take.recording.is_set():
                         return
@@ -996,6 +1001,8 @@ class Assistant:
                             threading.Thread(target=self._stop, daemon=True).start()
                     finally:
                         self.mics.halt()
+                        if self._phone(name) and not self._phone_ok(name):
+                            self.mics.restart()  # 고르지 않은 아이폰 마이크는 이번 녹음만 쓰고 닫는다
                     if not quiet:
                         take.mic = name
                         if self._phone(name):  # 쓰는 동안은 끊지 않고, 마지막 녹음부터 다시 센다
@@ -1015,10 +1022,14 @@ class Assistant:
     def _mic_works(self, name: str, silent: list[str]) -> None:
         """그 마이크에서 소리가 왔다. 앞 마이크가 조용해서 대신 쓴 것이면 빠질 때까지 먼저 쓴다."""
         self._quiet_until.pop(name, None)
+        self._tries = 0
+        if self._phone(name) and not self._phone_ok(name):
+            # 이번 녹음에만 마지막으로 쓴 아이폰이다. PC 마이크가 된다는 표시로 남기지 않고 녹음 뒤에 다시 들어 본다
+            self._check_due = time.monotonic()
+            return
         if silent and name != self._fallback:
             self._save_fallback(name)
         self._set_mic("ok", name)
-        self._tries = 0
         self._check_due = None
 
     def _mic_silent(self, name: str, silent: list[str]) -> None:
@@ -1041,10 +1052,11 @@ class Assistant:
         """기기에서 골라 허락한 아이폰 마이크이고 마지막 녹음 뒤 아직 PHONE_MIC_SECONDS 가 지나지 않았는지."""
         return self._phone(name) and name == self._picked and time.monotonic() < self._phone_until
 
-    def _mic_order(self) -> list[str]:
+    def _mic_order(self, with_phone: bool = False) -> list[str]:
         """녹음할 마이크 순서: 기기에서 고른 마이크, 앞서 대신 쓴 마이크, config 의 input (없으면 시스템 기본 마이크),
         그다음 이 PC 의 다른 마이크 모두. Mac 은 블루투스 이어폰 마이크를 기본 마이크여도 빼고 (_bt),
-        아이폰 마이크는 기기에서 골라 허락했을 때만 넣는다 (_phone_ok)."""
+        아이폰 마이크는 기기에서 골라 허락했을 때 앞에 넣고 (_phone_ok), 아니면 녹음할 때만 (with_phone) 맨 뒤에 넣는다.
+        미리 들어 볼 때는 아이폰 마이크를 깨우지 않는다."""
         try:
             names, default = self.mics.devices()
         except OSError as e:
@@ -1082,6 +1094,7 @@ class Assistant:
             self._mac_kinds()  # 방금 붙은 마이크의 연결 방식을 다시 본다
         order = [n for n in order if not self._bt(n)]
         self._names = [n for n in order if not any(a in n.lower() for a in _ALIASES)] or order
+        phones = [n for n in order if self._phone(n) and not self._phone_ok(n)] if with_phone else []
         order = [n for n in order if not self._phone(n) or self._phone_ok(n)]
         if self._fallback and self._fallback not in order:
             print(f"[assistant] 대신 쓰던 '{self._fallback}' 마이크가 빠져 기본 마이크로 돌아갑니다")
@@ -1094,7 +1107,7 @@ class Assistant:
         # 얼마 전 소리가 오지 않은 마이크는 맨 뒤로 (다른 마이크도 모두 조용할 때만 써 본다)
         now = time.monotonic()
         quiet = [n for n in order if self._quiet_until.get(n, 0.0) > now]
-        return [n for n in order if n not in quiet] + quiet
+        return [n for n in order if n not in quiet] + quiet + phones
 
     def _save_fallback(self, name: str) -> None:
         """대신 쓸 마이크를 정한다 (빈 글이면 지운다). 도우미를 다시 켜도 이어 쓰게 파일에 적는다."""
@@ -1123,9 +1136,9 @@ class Assistant:
     # --- 쉬는 틈에 마이크 미리 들어 보기 ---
 
     def _device_signature(self) -> tuple:
-        """마이크 장치가 바뀌었는지 알아보는 값. Mac 은 마이크 목록과 기본 마이크, Windows 는 기본 마이크."""
+        """마이크 장치가 바뀌었는지 알아보는 값. Mac 은 마이크 목록, 기본 마이크와 덮개 (닫히면 내장 마이크가 꺼진다), Windows 는 기본 마이크."""
         if sys.platform == "darwin":
-            return _mac_default_input(), tuple(sorted(self._mac_kinds()))
+            return _mac_default_input(), tuple(sorted(self._mac_kinds())), _lid_closed()
         return (_system_default_input(),)
 
     def _mac_kinds(self) -> dict[str, tuple[int, str]]:
@@ -1438,15 +1451,21 @@ class Assistant:
                 print(f"[assistant] / 명령으로 바꿈: {fixed}")
             text = fixed
         target = take.orca_target
-        if target:
-            error = self.orca.send_text(target, text)
-            where = "ORCA에 "
-        elif take.orca_pick:
-            # 고른 세션이 그사이 닫혔으면 엉뚱한 창에 치지 않는다
-            error, where = "ORCA 세션을 찾지 못했습니다", ""
-        else:
-            error = typer._type(text, enter=False)
-            where = ""
+        try:
+            if target:
+                error = self.orca.send_text(target, text)
+                where = "ORCA에 "
+            elif take.orca_pick:
+                # 고른 세션이 그사이 닫혔으면 엉뚱한 창에 치지 않는다
+                error, where = "ORCA 세션을 찾지 못했습니다", ""
+            else:
+                error = typer._type(text, enter=False)
+                where = ""
+        except Exception as e:
+            error, where = str(e)[:80] or "입력 중 오류", ""
+        # 어떤 이유로 못 넣었든 말한 글을 잃지 않는다
+        if error and "클립보드" not in error and orca._copy(text):
+            error += "\n받아 적은 글은 클립보드에 있습니다"
         self._set("idle", mode="dictate")
         self.pending_toast = f"{where}입력했습니다: {text[:40]}" if not error else f"입력하지 못했습니다\n{error}"
 

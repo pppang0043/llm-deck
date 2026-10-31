@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <time.h>
@@ -14,6 +15,15 @@ RTC_NOINIT_ATTR static uint32_t rtc_min_internal;
 
 // loop() 한 바퀴의 한계시간. 평소에는 10ms, 화면을 새로 그릴 때도 0.2초 안쪽이다.
 #define LOOP_LIMIT_MS 20000
+
+// 무선으로 받은 새 펌웨어가 이만큼 돌아야 정상으로 친다. 그 전에 다시 켜지면 부트로더가 앞 펌웨어로 되돌린다.
+// (이 시간 안에는 다음 무선 업로드도 받지 않는다)
+#define OTA_CONFIRM_MS 30000
+
+// 프레임워크 기본값은 setup() 전에 새 펌웨어를 정상으로 표시해서, setup() 에서 죽으면 되돌아가지 못한다
+extern "C" bool verifyRollbackLater() {
+  return true;
+}
 
 static Preferences prefs;
 static bool watching = false;
@@ -97,6 +107,14 @@ void health_init() {
                 (int)reason, have_rtc ? ", ran " : "", have_rtc ? up : "", (unsigned)prev_min,
                 (unsigned long)err_count);
 
+  esp_ota_img_states_t state;
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  if (esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
+    Serial.printf("[ota] new firmware on trial for %us (%s)\n", OTA_CONFIRM_MS / 1000, running->label);
+  }
+  const esp_partition_t *invalid = esp_ota_get_last_invalid_partition();
+  if (invalid) Serial.printf("[ota] %s failed and was rolled back, running %s\n", invalid->label, running->label);
+
   rtc_magic = RTC_MAGIC;
   rtc_uptime_s = 0;
   rtc_min_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -108,6 +126,16 @@ void health_loop() {
   checked_ms = millis();
   rtc_uptime_s = millis() / 1000;
   rtc_min_internal = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+  static bool ota_checked = false;
+  if (!ota_checked && millis() > OTA_CONFIRM_MS) {
+    ota_checked = true;
+    esp_ota_img_states_t state;
+    if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &state) == ESP_OK &&
+        state == ESP_OTA_IMG_PENDING_VERIFY) {
+      esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+      Serial.printf("[ota] new firmware confirmed (%s)\n", esp_err_to_name(err));
+    }
+  }
   // 오류로 켜졌으면, 시계가 맞춰진 뒤 그 시각(=이번에 켜진 시각)을 적어 둔다
   if (error_reset && !when_saved && time(nullptr) > 1700000000) {
     when_saved = true;

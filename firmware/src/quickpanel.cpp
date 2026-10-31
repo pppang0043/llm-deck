@@ -277,6 +277,11 @@ void quickpanel_notify(const char *text) {
   lv_timer_resume(banner_timer);
 }
 
+bool quickpanel_is_open() {
+  for (QuickPanel &p : panels) if (p.open) return true;
+  return false;
+}
+
 void quickpanel_layout() {
   for (QuickPanel &p : panels) {
     p.swipe.reset();

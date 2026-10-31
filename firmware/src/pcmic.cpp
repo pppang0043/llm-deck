@@ -1,6 +1,7 @@
 #include "pcmic.h"
 
 #include "link.h"
+#include "mic.h"
 #include "ui.h"
 
 LV_FONT_DECLARE(font_ko_14);
@@ -100,7 +101,10 @@ static void add_row(const char *label, const char *value, bool selected) {
 static void render_panel() {
   if (!panel || lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) return;
   char text[460];
-  if (state == MIC_OK) {
+  // 기기 마이크가 1순위다. PC 마이크는 그것이 안 될 때 쓴다
+  if (mic_present()) {
+    snprintf(text, sizeof(text), "쓰는 중: 기기 마이크\n안 되면 PC 마이크, 그다음 휴대폰을 씁니다");
+  } else if (state == MIC_OK) {
     snprintf(text, sizeof(text), "쓰는 중: %s", name);
   } else if (state == MIC_NONE) {
     snprintf(text, sizeof(text), "연결 불가\n%s", why[0] ? why : "소리가 오는 마이크가 없습니다");
@@ -108,7 +112,7 @@ static void render_panel() {
     snprintf(text, sizeof(text), "마이크를 들어 보는 중...");
   }
   lv_label_set_text(panel_state, text);
-  lv_obj_set_style_text_color(panel_state, state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING, 0);
+  lv_obj_set_style_text_color(panel_state, mic_present() || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING, 0);
 
   lv_obj_clean(panel_list);
   static const char AUTO[] = "";
@@ -214,9 +218,9 @@ void pcmic_refresh() {
     lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
     return;
   }
-  lv_color_t color = state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING;
+  lv_color_t color = mic_present() || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING;
   for (lv_obj_t *part : {capsule, stem, base}) lv_obj_set_style_bg_color(part, color, 0);
-  if (state == MIC_NONE) {
+  if (state == MIC_NONE && !mic_present()) {
     lv_obj_clear_flag(cross, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(cross, LV_OBJ_FLAG_HIDDEN);
@@ -245,7 +249,7 @@ void pcmic_set(JsonObjectConst mic) {
   // 상태줄 오른쪽(시각)이 표시와 겹치지 않게 다시 놓는다
   if (was_hidden) ui_layout_status();
   render_panel();
-  if (lost) ui_toast("PC 마이크를 쓸 수 없습니다\n위 마이크 표시를 눌러 확인하세요", 3000);
+  if (lost && !mic_present()) ui_toast("PC 마이크를 쓸 수 없습니다\n위 마이크 표시를 눌러 확인하세요", 3000);
 }
 
 const char *pcmic_why() {
