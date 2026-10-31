@@ -889,8 +889,8 @@ static void build_alerts(lv_obj_t *parent) {
 }
 
 static void show_alerts() {
-  static char buf[TOAST_HISTORY_SIZE];
-  ui_toast_history(buf, sizeof(buf));
+  static char *buf = (char *)ps_malloc(TOAST_HISTORY_SIZE);
+  ui_toast_history(buf, TOAST_HISTORY_SIZE);
   lv_label_set_text(alerts_text, buf[0] ? buf : "아직 알림이 없습니다");
 }
 

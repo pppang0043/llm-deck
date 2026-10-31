@@ -40,6 +40,8 @@ bool display_split_on();
 lv_obj_t *display_device_screen();
 // 나눠 쓰는 동안 기기 화면을 누르고 있는지
 bool display_device_pressed();
+// 기기 화면을 두 번 탭했으면 한 번만 true 와 그 자리를 돌려준다
+bool display_device_double_tap(lv_point_t *at);
 
 // 화면 밝기 (10~100%)
 void display_set_brightness(uint8_t pct);

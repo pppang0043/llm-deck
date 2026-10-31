@@ -410,18 +410,20 @@ def test_phone_mic_not_used_until_picked(phone, fallback_file):
     assert "‘내 폰’ 마이크" in status["list"] and status["limited"] == ["‘내 폰’ 마이크"] and "left" not in status
 
 
-def test_picked_phone_mic_used_for_30_minutes(phone, mic_files, monkeypatch):
+def test_picked_phone_mic_dropped_after_2_idle_hours(phone, mic_files, monkeypatch):
     sd, a = phone
     a.on_event({"mic_pick": "‘내 폰’ 마이크"})
     assert a._mic_order()[0] == "‘내 폰’ 마이크"
-    assert a.mic_status()["left"] == 30
+    assert a.mic_status()["left"] == 120
+    a._phone_until = time.monotonic() + 60  # 쉬다가 녹음하면 2시간을 새로 센다
     assert record(a, 1.0).mic == "‘내 폰’ 마이크"
+    assert a.mic_status()["left"] == 120
     monkeypatch.setattr(a, "_probe_round", lambda: setattr(a, "_probing", False))
-    a._phone_until = time.monotonic() - 1  # 30분이 지났다
+    a._phone_until = time.monotonic() - 1  # 2시간 동안 녹음하지 않았다
     a._watched -= 2
     a._watch_mics()
     assert a._picked == "" and not (mic_files / "picked_mic.txt").exists()
-    assert "30분" in a.pending_toast and not a._fresh  # 녹음 프로세스를 새로 띄워 아이폰 마이크를 닫는다
+    assert "2시간" in a.pending_toast and not a._fresh  # 녹음 프로세스를 새로 띄워 아이폰 마이크를 닫는다
     assert a._mic_order() == ["MacBook Pro 마이크"]
 
 

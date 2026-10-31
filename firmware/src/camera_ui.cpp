@@ -154,6 +154,17 @@ static void start_recording() {
   lv_obj_add_flag(gallery_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
+// QR·바코드 네모와 안내 글은 스캔할 때만 보인다 (사진·동영상을 찍을 때는 가린다)
+static void show_guide(bool on) {
+  if (on) {
+    lv_obj_clear_flag(guide, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(guide_lbl, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(guide, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(guide_lbl, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 static void scan_stop(const char *msg, uint32_t ms = 3000) {
   if (scanning) {
     job_wait_drop();
@@ -161,6 +172,7 @@ static void scan_stop(const char *msg, uint32_t ms = 3000) {
   }
   scanning = false;
   lv_obj_set_style_border_color(guide, lv_color_white(), 0);
+  show_guide(false);
   if (msg) {
     show_message(msg, ms);
   } else {
@@ -174,6 +186,7 @@ static void close_camera() {
   job_wait_drop();
   if (scanning) camera_scan_end();
   scanning = false;
+  show_guide(false);
   is_open = false;
   lv_obj_add_flag(adjust_panel, LV_OBJ_FLAG_HIDDEN);
   camera_stop();
@@ -220,7 +233,7 @@ static bool take_photo() {
     return false;
   }
   if (!job_start(JOB_PHOTO)) return false;  // 결과는 job_finish 가 저장한다
-  show_message("찍는 중...", 0);
+  show_message("찍는 중...\n움직이지 마세요", 0);  // 초점 맞추기(1.3초)부터 마지막 장까지
   return true;
 }
 
@@ -254,6 +267,7 @@ static void scan_clicked(lv_event_t *e) {
   scan_stage = SCAN_LOCATE;
   scan_frames = 0;
   lv_obj_set_style_border_color(guide, lv_color_hex(0x3CD070), 0);
+  show_guide(true);
   show_message("위치 찾는 중...", 0);
 }
 
@@ -311,7 +325,13 @@ static void job_finish() {
   job_done = false;
   job = JOB_NONE;
   if (j == JOB_PHOTO) {
-    show_message(ok ? photo_save(jpg, len) : "찍지 못했습니다", 2500);
+    if (ok) {
+      show_message(photo_save(jpg, len), 2500);
+      return;
+    }
+    // 장이 버퍼를 넘으면 카메라가 장을 더 내지 않는다: 다시 켠다
+    camera_stop();
+    show_message(camera_start() ? "찍지 못했습니다\n카메라를 다시 켰습니다" : "찍지 못했습니다", 2500);
     return;
   }
   if (!scanning) {  // 그 사이 스캔을 멈췄다
@@ -500,6 +520,7 @@ void camera_ui_init() {
   lv_obj_set_style_bg_opa(guide_lbl, LV_OPA_50, 0);
   lv_obj_set_style_pad_hor(guide_lbl, 4, 0);
   lv_label_set_text(guide_lbl, "QR/바코드는 네모 안에 (20cm 이상)");
+  show_guide(false);
 
   // 촬영 버튼: 흰 테두리의 동그란 버튼
   shutter = lv_btn_create(overlay);

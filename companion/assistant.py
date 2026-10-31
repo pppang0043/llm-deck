@@ -69,9 +69,9 @@ PROBE_TRIES = 3
 PROBE_GAP = 3
 # 연결 불가일 때 다시 들어 보는 간격 (덮개를 열었을 때처럼 장치 목록은 그대로인데 되살아나는 때)
 RECHECK_SECONDS = 60
-# Mac 의 아이폰 마이크(연속성 카메라)는 기기에서 골라 허락했을 때만 쓰고, 그때부터 이만큼 지나면 끊는다.
+# Mac 의 아이폰 마이크(연속성 카메라)는 기기에서 골라 허락했을 때만 쓰고, 그 마이크로 녹음하지 않은 채 이만큼 지나면 끊는다.
 # 자동으로 고르거나 미리 들어 보면 아이폰이 마이크를 수시로 켰다 (아이폰에 마이크 표시, 배터리)
-PHONE_MIC_SECONDS = 30 * 60
+PHONE_MIC_SECONDS = 2 * 60 * 60
 # 아이폰 마이크로 알아본 이름들. 막 붙는 동안은 연결 방식이 비어 있어 못 알아보므로 한 번 알아본 이름은 적어 둔다
 PHONE_MICS_FILE = Path.home() / ".llm-deck" / "phone_mics.txt"
 # 처리를 기다리며 줄 설 수 있는 녹음 수. 넘으면 새로 누른 것은 받지 않는다
@@ -712,7 +712,7 @@ class Assistant:
         self._bt_names: set[str] = set()  # Mac 의 블루투스 마이크 (_device_signature 가 채운다)
         # Mac 의 아이폰 마이크 (_mac_kinds 가 채우고 잊지 않는다)
         self._phone_names: set[str] = set(filter(None, _read_text(PHONE_MICS_FILE).splitlines()))
-        self._phone_until = 0.0  # 고른 아이폰 마이크를 이때까지 쓴다 (monotonic, 0 이면 허락하지 않았다)
+        self._phone_until = 0.0  # 고른 아이폰 마이크를 이때까지 쓴다, 녹음하면 늘어난다 (monotonic, 0 이면 허락하지 않았다)
         # 마이크 장치가 바뀌었는지 2초마다 본다 (_watch_mics). 바뀌면 쉬는 틈에 미리 들어 본다
         self._watched = 0.0
         self._signature = None
@@ -871,7 +871,7 @@ class Assistant:
         """기기 상태줄의 마이크 표시와 마이크 고르기 창에 보낼 것 {"pc_mic": ...}"""
         status = {"state": self.mic_state, "name": self.mic_name[:40], "why": self.mic_reason[:120],
                   "list": [n[:40] for n in self._names[:8]], "pick": self._picked[:40]}
-        # 고르면 PHONE_MIC_SECONDS 동안만 쓰는 마이크 (아이폰), 허락한 것이면 남은 분
+        # 고른 뒤 PHONE_MIC_SECONDS 동안 녹음하지 않으면 끊는 마이크 (아이폰), 허락한 것이면 남은 분
         limited = [n[:40] for n in self._names[:8] if self._phone(n)]
         if limited:
             status["limited"] = limited
@@ -998,6 +998,8 @@ class Assistant:
                         self.mics.halt()
                     if not quiet:
                         take.mic = name
+                        if self._phone(name):  # 쓰는 동안은 끊지 않고, 마지막 녹음부터 다시 센다
+                            self._phone_until = time.monotonic() + PHONE_MIC_SECONDS
                         self._mic_works(name, silent)
                         return
                     print(f"[assistant] '{name}' 에서 소리가 오지 않습니다")
@@ -1036,7 +1038,7 @@ class Assistant:
         return sys.platform == "darwin" and bool(name) and (name in self._phone_names or _phone_name(name))
 
     def _phone_ok(self, name: str) -> bool:
-        """기기에서 골라 허락한 아이폰 마이크이고 아직 PHONE_MIC_SECONDS 가 지나지 않았는지."""
+        """기기에서 골라 허락한 아이폰 마이크이고 마지막 녹음 뒤 아직 PHONE_MIC_SECONDS 가 지나지 않았는지."""
         return self._phone(name) and name == self._picked and time.monotonic() < self._phone_until
 
     def _mic_order(self) -> list[str]:
@@ -1104,12 +1106,12 @@ class Assistant:
     def _pick(self, name: str) -> None:
         """기기의 마이크 고르기 창에서 고른 마이크 (빈 글이면 자동). 바로 다시 들어 보고 상태를 알린다."""
         phone = self._phone(name)
-        if name == self._picked and not phone:  # 아이폰 마이크는 다시 고르면 30분을 새로 센다
+        if name == self._picked and not phone:  # 아이폰 마이크는 다시 고르면 시간을 새로 센다
             return
         print(f"[assistant] 기기에서 마이크를 골랐습니다: {name or '자동'}")
         self._phone_until = time.monotonic() + PHONE_MIC_SECONDS if phone else 0.0
         if phone:
-            print(f"[assistant] '{name}' 를 {PHONE_MIC_SECONDS // 60}분 동안 씁니다")
+            print(f"[assistant] '{name}' 를 씁니다 ({PHONE_MIC_SECONDS // 3600}시간 동안 녹음하지 않으면 끊습니다)")
         self._picked = name
         _write_text(PICKED_MIC_FILE, name)
         if name:
@@ -1163,13 +1165,13 @@ class Assistant:
         threading.Thread(target=self._probe_round, daemon=True).start()
 
     def _drop_phone(self) -> None:
-        """허락한 30분이 지났거나 (도우미를 다시 켜서) 허락이 없는 아이폰 마이크를 놓고 자동으로 돌아간다.
+        """허락한 아이폰 마이크로 PHONE_MIC_SECONDS 동안 녹음하지 않았거나 (도우미를 다시 켜서) 허락이 없는 아이폰 마이크를 놓고 자동으로 돌아간다.
         녹음 프로세스를 새로 띄워 열려 있던 아이폰 마이크를 닫는다."""
         expired = self._phone_until > 0
         print(f"[assistant] 아이폰 마이크 '{self._picked}' 를 끊고 자동으로 돌아갑니다"
-              + (f" ({PHONE_MIC_SECONDS // 60}분이 지났습니다)" if expired else ""))
+              + (f" ({PHONE_MIC_SECONDS // 3600}시간 동안 쓰지 않았습니다)" if expired else ""))
         if expired:
-            self.pending_toast = f"아이폰 마이크를 {PHONE_MIC_SECONDS // 60}분 써서 끊었습니다\n다시 쓰려면 위 마이크 표시에서 고르세요"
+            self.pending_toast = f"아이폰 마이크를 {PHONE_MIC_SECONDS // 3600}시간 쓰지 않아 끊었습니다\n다시 쓰려면 위 마이크 표시에서 고르세요"
         self._picked, self._phone_until = "", 0.0
         _write_text(PICKED_MIC_FILE, "")
         self._fresh = False

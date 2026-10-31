@@ -21,7 +21,7 @@ enum { MIC_UNKNOWN, MIC_CHECKING, MIC_OK, MIC_NONE };
 static int state = MIC_UNKNOWN;
 static char name[128] = "", why[384] = "", pick[128] = "";
 static char list[MIC_MAX][128];
-static bool limited[MIC_MAX];  // 고르면 30분만 쓰는 마이크 (Mac 의 아이폰 마이크)
+static bool limited[MIC_MAX];  // 고른 뒤 2시간 안 쓰면 끊는 마이크 (Mac 의 아이폰 마이크)
 static int count = 0, left = 0;  // left: 고른 아이폰 마이크를 쓸 수 있는 남은 분
 
 static lv_obj_t *icon, *capsule, *stem, *base, *cross;
@@ -72,7 +72,7 @@ static void row_clicked(lv_event_t *e) {
   bool timed = false;
   for (int i = 0; i < count; i++) timed = timed || (limited[i] && strcmp(list[i], chosen) == 0);
   char text[180];
-  snprintf(text, sizeof(text), timed ? "PC 마이크: %s\n30분 동안 씁니다" : "PC 마이크: %s\n들어 보는 중...",
+  snprintf(text, sizeof(text), timed ? "PC 마이크: %s\n2시간 안 쓰면 끊습니다" : "PC 마이크: %s\n들어 보는 중...",
            chosen[0] ? chosen : "자동");
   ui_toast(text, 2500);
 }
@@ -122,7 +122,7 @@ static void render_panel() {
       if (selected && left > 0) {
         snprintf(label, sizeof(label), "%s (%d분 남음)", list[i], left);
       } else {
-        snprintf(label, sizeof(label), "%s (30분만)", list[i]);
+        snprintf(label, sizeof(label), "%s (안 쓰면 2시간)", list[i]);
       }
       add_row(label, list[i], selected);
     } else {

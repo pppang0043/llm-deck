@@ -4,6 +4,7 @@
 #include <lvgl.h>
 #include <time.h>
 
+#include "askpanel.h"
 #include "display.h"
 #include "link.h"
 #include "mic.h"
@@ -148,17 +149,18 @@ static void send_task(void *) {
 static lv_obj_t *dev_clock, *dev_body, *dev_btn;
 static uint32_t dev_version = 0;
 static int dev_w = 0, dev_h = 0;
+static lv_obj_t *dev_title = nullptr;
 
 static void device_build() {
   lv_obj_t *scr = display_device_screen();
   lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_t *title = lv_label_create(scr);
-  lv_label_set_text(title, "PC 미러링 중");
-  lv_obj_set_style_text_font(title, &font_ko_14, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0x8A939E), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 8, 8);
+  dev_title = lv_label_create(scr);
+  lv_label_set_text(dev_title, "");
+  lv_obj_set_style_text_font(dev_title, &font_ko_14, 0);
+  lv_obj_set_style_text_color(dev_title, lv_color_hex(0x8A939E), 0);
+  lv_obj_align(dev_title, LV_ALIGN_TOP_LEFT, 8, 8);
   dev_clock = lv_label_create(scr);
   lv_label_set_text(dev_clock, "");
   lv_obj_set_style_text_font(dev_clock, &font_ko_14, 0);
@@ -169,6 +171,37 @@ static void device_build() {
   dev_body = lv_tileview_create(scr);
   lv_obj_set_style_bg_color(dev_body, lv_color_hex(0x101418), 0);
   lv_obj_set_pos(dev_body, 0, DEVICE_STATUS_H);
+}
+
+// 기기 화면을 두 번 탭: 받아쓰기 시작, 말하는 중이면 입력. 버튼 위에서 두 번 누른 것은 그 버튼만 눌린다.
+static void device_dictate() {
+  lv_point_t at;
+  if (!display_device_double_tap(&at) || !dev_body) return;
+  lv_obj_t *hit = lv_indev_search_obj(display_device_screen(), &at);
+  if (hit && lv_obj_check_type(hit, &lv_btn_class)) return;
+  if (askpanel_talk_state() != ASK_TALKING) {
+    askpanel_press(true);
+  } else if (askpanel_dictating()) {
+    askpanel_release();
+  }
+}
+
+// 받아쓰기 버튼이 없는 화면이라 제목 자리에 진행을 보인다
+static void device_title() {
+  if (!dev_title) return;
+  int st = askpanel_talk_state(), step = askpanel_dictate_step();
+  const char *text = "두 번 탭: 받아쓰기";
+  if (st == ASK_TALKING) {
+    text = step == DICTATE_PREPARING ? "마이크 준비 중..." : LV_SYMBOL_AUDIO " 말하세요";
+  } else if (step == DICTATE_WRITING) {
+    text = "받아 적는 중...";
+  } else if (st == ASK_NO_PC) {
+    text = "PC 연결 없음";
+  } else if (st == ASK_NO_MIC) {
+    text = "PC 마이크 없음";
+  }
+  if (strcmp(lv_label_get_text(dev_title), text)) lv_label_set_text(dev_title, text);
+  lv_obj_set_style_text_color(dev_title, st == ASK_TALKING ? lv_color_white() : lv_color_hex(0x8A939E), 0);
 }
 
 // 1초마다: 시각, 그리고 사용량이나 화면 방향이 바뀌었으면 페이지를 새로 만든다
@@ -201,7 +234,7 @@ void mirror_init() {
   grab = (uint16_t *)ps_malloc(MAX_PIXELS * 2);
   // 가장 나쁜 경우 (모든 점이 달라 그대로 쓸 때) 128 점마다 머리 1 바이트가 붙는다
   packed = (uint8_t *)ps_malloc(MAX_PIXELS * 2 + MAX_PIXELS / 128 + 16);
-  if (grab && packed) xTaskCreatePinnedToCore(send_task, "mirror", 6144, nullptr, 1, &task, 0);
+  if (grab && packed) xTaskCreatePinnedToCoreWithCaps(send_task, "mirror", 6144, nullptr, 1, &task, 0, MALLOC_CAP_SPIRAM);
 }
 
 void mirror_keep(bool on) {
@@ -255,7 +288,11 @@ void mirror_loop() {
     show_orca = false;
     if (split_on) ui_show("orca");
   }
-  if (split_on) device_refresh();
+  if (split_on) {
+    device_refresh();
+    device_dictate();
+    device_title();
+  }
   display_split(split_on);
   // 기기 화면에서 PC 상태를 보는 동안만 PC 에 계속 보내 달라고 한다
   pcpanel_device_watch(split_on && dev_body && ui_usage_pages_on_pc(dev_body));

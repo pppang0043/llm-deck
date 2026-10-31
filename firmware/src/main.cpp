@@ -318,6 +318,9 @@ static void mem_log(const char *tag) {
 }
 
 void setup() {
+  // 512 바이트 이상의 malloc 은 PSRAM 에서 받는다 (기본 4KB). 내부 RAM 이 잘게 쪼개지는 것을 줄인다.
+  // 내부 RAM 이 꼭 필요한 곳은 드라이버가 따로 지정해서 받으므로 영향이 없다.
+  heap_caps_malloc_extmem_enable(512);
   usb_link_init();
   Serial.begin(115200);
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {

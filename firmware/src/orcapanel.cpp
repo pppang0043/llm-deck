@@ -37,7 +37,7 @@ struct Session {
   char project[64];
   char state[16];
 };
-static Session sessions[MAX_ROWS];
+static Session *sessions;  // 내부 RAM 을 아끼려고 PSRAM 에 둔다 (orcapanel_build)
 static int count = 0;
 static char active_id[12] = "";  // 이 기기에서 마지막으로 띄운 세션 (한 번 더 누르면 받아쓰기)
 // PC 화면 강조와 팝업/받아쓰기 대상을 구분한다. PC 가 바뀌었다고 입력을 보내지 않는다.
@@ -879,7 +879,7 @@ void orcapanel_set(JsonObjectConst orca) {
   received = true;
   orca_ok = orca["ok"] | false;
   snprintf(pc_shown_id, sizeof(pc_shown_id), "%s", orca_ok ? (orca["a"] | "") : "");
-  static Session next[MAX_ROWS];
+  static Session *next = (Session *)ps_malloc(sizeof(Session) * MAX_ROWS);
   int n = 0;
   for (JsonObjectConst item : orca["list"].as<JsonArrayConst>()) {
     if (n >= MAX_ROWS) break;
@@ -917,6 +917,7 @@ void orcapanel_set(JsonObjectConst orca) {
 }
 
 void orcapanel_build(lv_obj_t *parent) {
+  sessions = (Session *)ps_calloc(MAX_ROWS, sizeof(Session));
   panel = lv_obj_create(parent);
   lv_obj_remove_style_all(panel);
   lv_obj_set_style_bg_color(panel, COLOR_BG, 0);

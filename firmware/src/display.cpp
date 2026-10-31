@@ -15,7 +15,7 @@
 #define CST816_REG_DIS_AUTO_SLEEP 0xFE
 
 // 한 번에 그리는 줄 수. 클수록 빠르지만 메모리를 더 쓴다.
-#define DRAW_BUF_LINES 40
+#define DRAW_BUF_LINES 24
 
 // SD 카드와 같은 SPI 선(HSPI)을 함께 쓴다. 그리기는 SPIClass 트랜잭션 잠금을 잡아 SD 쓰기와 겹치지 않게 한다.
 static SPIClass spi(HSPI);
@@ -248,6 +248,36 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   }
 }
 
+// 나눠 쓰는 동안 기기 화면을 두 번 탭했는지 본다 (같은 자리, 짧게 두 번)
+static bool double_tap = false;
+static lv_point_t double_tap_at;
+
+static void track_double_tap(bool down) {
+  static bool was_down = false, moved = false;
+  static uint32_t down_ms = 0, up_ms = 0;
+  static lv_point_t down_at, first_at;
+  uint32_t now = millis();
+  if (down && !was_down) {
+    down_ms = now;
+    down_at = finger_at;
+    moved = false;
+  }
+  if (down && (abs(finger_at.x - down_at.x) > 12 || abs(finger_at.y - down_at.y) > 12)) moved = true;
+  if (!down && was_down) {
+    if (moved || now - down_ms > 300) {
+      up_ms = 0;
+    } else if (up_ms && now - up_ms < 400 && abs(down_at.x - first_at.x) < 40 && abs(down_at.y - first_at.y) < 40) {
+      double_tap = true;
+      double_tap_at = down_at;
+      up_ms = 0;
+    } else {
+      up_ms = now;
+      first_at = down_at;
+    }
+  }
+  was_down = down;
+}
+
 // 나눠 쓰는 동안의 기기 화면 터치. 칩은 touch_cb 가 읽고 (같은 주기로 먼저 돈다), 여기서는 그 값을 쓴다.
 static void device_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   bool down = split && finger_down;
@@ -257,6 +287,7 @@ static void device_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     data->state = LV_INDEV_STATE_RELEASED;
     return;
   }
+  track_double_tap(down);
   if (quickpanel_touch(drv->disp, finger_at.x, finger_at.y, down)) {
     data->state = LV_INDEV_STATE_RELEASED;
     return;
@@ -430,6 +461,13 @@ void display_split(bool on) {
 
 bool display_device_pressed() {
   return split && finger_down;
+}
+
+bool display_device_double_tap(lv_point_t *at) {
+  if (!double_tap) return false;
+  double_tap = false;
+  *at = double_tap_at;
+  return true;
 }
 
 bool display_split_on() {

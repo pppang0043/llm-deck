@@ -26,6 +26,7 @@ static framesize_t preview_size = FRAMESIZE_QVGA;
 // 사진은 센서 최대(2560x1920)로: 바코드 막대 하나가 1600 일 때 3화소도 안 되어 읽히지 않았다 (2026-10-24 시험)
 #define PHOTO_SIZE FRAMESIZE_QSXGA
 #define PHOTO_W 2560
+#define PHOTO_MAX_EXPO 295  // 사진 노출 상한 (줄): 1/30초
 // 사진 크기일 때 센서 창 (켤 때 읽어 둔다). 스캔은 이 창의 가운데만 같은 배율로 읽는다
 static int full_hts = 0, full_vts = 0, full_x0 = 0, full_y0 = 0, full_x1 = 0, full_y1 = 0, full_ox = 0, full_oy = 0;
 static bool video_mode = false;
@@ -134,7 +135,7 @@ static void af_focus_once(sensor_t *s, char *note, size_t size) {
 // 카메라는 켤 때 내부 RAM 에서 16KB 짜리 연속 덩어리(DMA)가 필요하다. 오래 켜 두면 내부 RAM 이
 // 잘게 쪼개져 이 덩어리를 못 얻을 수 있으므로, 부팅 때 자리를 미리 잡아 두었다가 카메라를 켜기
 // 직전에 내놓고, 끄면 다시 잡는다.
-#define RESERVE_BYTES (20 * 1024)
+#define RESERVE_BYTES (17 * 1024)
 static void *reserve = nullptr;
 
 static void hold_reserve() {
@@ -646,36 +647,99 @@ static uint8_t *add_orientation(const uint8_t *jpg, size_t len, uint8_t k, size_
   return out;
 }
 
+static void set_lens(sensor_t *s, int pos);
+
 bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len, bool focus) {
   // 녹화 중에 크기를 바꾸면 녹화 크기로 돌아오지 않는다
   if (!running || video_mode) return false;
   sensor_t *s = esp_camera_sensor_get();
   uint32_t t0 = millis();
-  s->set_framesize(s, PHOTO_SIZE);  // 초점도 사진 크기에서 맞춘다
-  char note[64] = "focus kept";
-  if (focus) af_focus_once(s, note, sizeof(note));
-  // 크기를 바꾼 직전 몇 장은 이전 크기가 섞여 나오므로 버린다
-  // 큰 크기로 나온 첫 장을 쓴다 (보통 2~3장 뒤)
-  camera_fb_t *fb = nullptr;
-  for (int i = 0; i < 10; i++) {
-    feed_wdt();  // 최대 크기는 한 장이 느리다
-    fb = esp_camera_fb_get();
-    int jw = 0, jh = 0;
-    if (fb && jpeg_size(fb->buf, fb->len, &jw, &jh) && jw == PHOTO_W && i >= 1) break;
-    if (fb) esp_camera_fb_return(fb);
-    fb = nullptr;
+  // 미리보기의 계속 맞추기가 이미 맞춰 두었으면(0x10) 다시 맞추지 않고 렌즈를 그 자리에 멈춘다 (1.3초 아낌)
+  int caf = af_on ? s->get_reg(s, OV5640_CMD_FW_STATUS, 0xff) : -1;
+  bool kept = focus && caf == 0x20;  // 계속 맞추기가 맞춘 상태 (한 번 맞추기는 0x10)
+  // 찍는 동안 렌즈가 움직이지 않게: 초점 MCU 를 풀고(0x08) 그 자리를 직접 쓴다. 멈춤(0x06)은 답이 없어 5초를 기다렸다
+  int hold = kept ? af_position(s) : -1;
+  if (kept) {
+    af_command(s, 0x08);
+    set_lens(s, hold);
   }
+  s->set_framesize(s, PHOTO_SIZE);  // 초점도 사진 크기에서 맞춘다
+  uint32_t t_size = millis();
+  // 노출을 1/30초 안으로: 밤 실내에서 자동 노출이 885줄(1/10초)·게인 1.3배로 찍어 손에 들면 번졌다
+  // (2026-10-27, 사진 크기는 한 줄 0.114ms = 1968줄에 224ms). 깜빡임 막기(banding)가 켜져 있어 노출은
+  // 밴드 단위이고 상한도 밴드 수(0x3A0D 60Hz, 0x3A0E 50Hz)로 정해진다 (줄 상한 0x3A02·0x3A14 를 줄여도 그대로였다).
+  // 이 크기에서 밴드는 246/295줄이라 1밴드(295줄 ≈ 34ms)가 가장 짧다. 모자란 밝기는 게인(상한 15.5배)으로 채우고,
+  // 미리보기는 한 줄 길이가 달라 찍은 뒤 되돌린다
+  auto reg = [&](int r) { return s->get_reg(s, r, 0xff); };
+  auto exposure = [&]() { return (reg(0x3500) & 0x0f) << 12 | reg(0x3501) << 4 | reg(0x3502) >> 4; };
+  int step60 = (reg(0x3A0A) & 0x03) << 8 | reg(0x3A0B), step50 = (reg(0x3A08) & 0x03) << 8 | reg(0x3A09);
+  int bands60 = reg(0x3A0D), bands50 = reg(0x3A0E);
+  s->set_reg(s, 0x3A0D, 0xff, step60 ? max(1, PHOTO_MAX_EXPO / step60) : bands60);
+  s->set_reg(s, 0x3A0E, 0xff, step50 ? max(1, PHOTO_MAX_EXPO / step50) : bands50);
+  char note[64] = "focus kept";
+  if (kept) snprintf(note, sizeof(note), "focus kept (lens %d -> %d)", hold, af_position(s));
+  else if (focus) af_focus_once(s, note, sizeof(note));  // 그동안 자동 노출이 새 상한으로 내려온다
+  // 크기를 바꾼 직후 몇 장은 이전 크기가 섞여 나오므로 버리고, 노출이 상한 안으로 내려온 다음 장부터 쓴다.
+  // 어두워 게인이 8배를 넘으면 잡음 때문에 JPEG 가 커진다: 게인 15.5배에서 865KB 까지 커졌고, 버퍼(약 980KB)를
+  // 넘은 장은 오지 않고 카메라가 멈췄다 (52초 뒤 실패, 미리보기 0 fps, 2026-10-28). 그럴 때만 압축을 15 이상으로
+  int quality = s->status.quality;
+  bool noisy = ((reg(0x350A) & 0x03) << 8 | reg(0x350B)) >= 8 * 16;
+  if (noisy && quality < 15) s->set_quality(s, 15);
+  // 큰 크기로 나온 장을 2장 받아 더 선명한(JPEG 가 더 큰) 장을 쓴다: 손에 들고 찍으면 장마다 흔들림이 다르다.
+  // 노출이 1/5초일 때는 장마다 크기가 30% 넘게 달랐고, 1/15초로 줄인 뒤 3장은 2% 안이라 셋째 장(0.45초)은 뺐다 (2026-10-28)
+  camera_fb_t *fb = nullptr;
+  int got = 0, settled = -1, missed = 0;
+  char sizes[40] = "";
+  uint32_t t_frames = millis();
+  int64_t prev_ts = 0, gap_ms = 0;
+  for (int i = 0; i < 14 && got < 2; i++) {
+    feed_wdt();  // 최대 크기는 한 장이 느리다
+    camera_fb_t *f = esp_camera_fb_get();
+    if (!f && ++missed >= 2) break;  // 장이 안 온다 (한 번에 4초쯤 기다린다): 카메라가 멈췄다
+    if (f) missed = 0;
+    // 버퍼에 있던 장은 그 전 노출이라 다음 장부터. 수동 노출이거나 6장이 지나도 안 내려오면 그냥 쓴다
+    if (settled < 0 && (exposure() <= PHOTO_MAX_EXPO || !s->status.aec || i >= 6)) settled = i;
+    int jw = 0, jh = 0;
+    if (!f || i < 1 || settled < 0 || i <= settled || !jpeg_size(f->buf, f->len, &jw, &jh) || jw != PHOTO_W) {
+      if (f) esp_camera_fb_return(f);
+      continue;
+    }
+    int64_t ts = (int64_t)f->timestamp.tv_sec * 1000 + f->timestamp.tv_usec / 1000;
+    if (prev_ts) gap_ms = ts - prev_ts;
+    prev_ts = ts;
+    got++;
+    snprintf(sizes + strlen(sizes), sizeof(sizes) - strlen(sizes), "%s%u", got > 1 ? "/" : "", (unsigned)(f->len / 1000));
+    if (!fb || f->len > fb->len) std::swap(fb, f);
+    if (f) esp_camera_fb_return(f);
+  }
+  int gain = (reg(0x350A) & 0x03) << 8 | reg(0x350B);
+  Serial.printf("[camera] photo frames %sKB in %lu ms (gap %lld, q %d), expo %d lines, gain %d/16, band step %d/%d max %d/%d\n",
+                sizes, (unsigned long)(millis() - t_frames), (long long)gap_ms, s->status.quality, exposure(), gain, step60, step50, bands60,
+                bands50);
+  Serial.printf("[camera] pll 3034=%02x 3035=%02x 3036=%02x 3037=%02x 3108=%02x 3824=%02x 460c=%02x 4837=%02x hts %d\n",
+                reg(0x3034), reg(0x3035), reg(0x3036), reg(0x3037), reg(0x3108), reg(0x3824), reg(0x460C), reg(0x4837),
+                reg(0x380C) << 8 | reg(0x380D));
+  s->set_reg(s, 0x3A0D, 0xff, bands60);
+  s->set_reg(s, 0x3A0E, 0xff, bands50);
+  if (s->status.quality != quality) s->set_quality(s, quality);
   bool ok = false;
   if (fb && fb->format == PIXFORMAT_JPEG) {
     *jpg = add_orientation(fb->buf, fb->len, turns_for(screen_rot), len);
     ok = *jpg != nullptr;
   }
   if (fb) esp_camera_fb_return(fb);
+  uint32_t t_shot = millis();
   s->set_framesize(s, preview_size);
-  if (af_on) af_command(s, AF_CONTINUE_AUTO_FOCUS);
+  // 계속 맞추기로 돌려놓기만 하고 답(1초 넘게 걸린다)은 기다리지 않는다: 사진은 이미 찍었다
+  if (af_on) {
+    s->set_reg(s, OV5640_CMD_ACK, 0xff, 0x01);
+    s->set_reg(s, OV5640_CMD_MAIN, 0xff, AF_CONTINUE_AUTO_FOCUS);
+  }
   // 초점: 0x10 맞음, 0x00~0x0F·0x80~0x8F 맞추는 중, 0x70 쉼
-  Serial.printf("[camera] capture %s (%u bytes, %lu ms, screen rot %d, turns %d, %s)\n", ok ? "ok" : "failed",
-                ok ? (unsigned)*len : 0, (unsigned long)(millis() - t0), screen_rot, turns_for(screen_rot), note);
+  Serial.printf("[camera] capture %s (%u bytes, %lu ms = size %lu + focus %lu + frames %lu + back %lu, screen rot %d, turns %d, caf 0x%02x, %s)\n",
+                ok ? "ok" : "failed", ok ? (unsigned)*len : 0, (unsigned long)(millis() - t0),
+                (unsigned long)(t_size - t0), (unsigned long)(t_frames - t_size), (unsigned long)(t_shot - t_frames),
+                (unsigned long)(millis() - t_shot), screen_rot, turns_for(screen_rot), caf & 0xff, note);
   return ok;
 }
 
