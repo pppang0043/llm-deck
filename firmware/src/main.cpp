@@ -304,7 +304,7 @@ static void show_clock() {
     snprintf(hm, sizeof(hm), "%02d:%02d", local.tm_hour, local.tm_min);
   }
   ui_set_clock(date, hm);
-  ui_set_battery(battery_pct(), battery_charging());
+  ui_set_battery(battery_pct(), battery_external_power());
   ui_set_wifi(net_wifi_bars());
 }
 

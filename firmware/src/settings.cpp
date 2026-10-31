@@ -991,7 +991,7 @@ static void refresh_list() {
   if (pct < 0) {
     set_text(battery_value, "없음");
   } else {
-    snprintf(buf, sizeof(buf), "%s%d%%", battery_charging() ? LV_SYMBOL_CHARGE " " : "", pct);
+    snprintf(buf, sizeof(buf), "%s%d%%", battery_external_power() ? LV_SYMBOL_CHARGE " " : "", pct);
     set_text(battery_value, buf);
   }
 }
@@ -1080,7 +1080,6 @@ static void refresh_live() {
         set_text(bat_level, buf);
         set_text(bat_state, battery_charging()           ? "충전 중"
                             : battery_full()           ? "USB (충전 완료)"
-                            : battery_external_power() ? "USB (전원 확인 중)"
                                                        : "배터리 사용 중");
         int left = battery_minutes_left();
         if (left >= 0) {

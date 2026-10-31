@@ -41,7 +41,7 @@ int main() {
     assert(level.update(4146, true, false, 2000) < 90);
   }
   {
-    // 전압이 이미 오른 뒤에야 전원을 확인했으면 (battery.cpp check_trend) 오름 폭을 다시 재지 않고 지난 값(100 mV)을 쓴다.
+    // 켤 때 이미 꽂혀 있어 전압이 오른 뒤에야 전원을 확인했으면 (battery.cpp update) 오름 폭을 다시 재지 않고 지난 값(100 mV)을 쓴다.
     // 다시 재면 거의 0 이 되어 잔량을 높게 짐작했다
     BatteryLevel measured, kept;
     kept.skip_offset_measure();

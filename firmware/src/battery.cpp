@@ -21,12 +21,12 @@ static BatteryLevel level;
 //    4.1V 아래로 내려가면 다시 충전을 시작하므로, 이때 실제 전압은 4.1~4.2V 사이 → FULL_REST_MV(4.15V) 로 본다.
 //    그런데 PC USB 전원이 약하면 충전이 덜 된 채로도 전압이 그대로여서, 그렇게 평탄했던 값(보정 전 4018~4158mV)에
 //    맞추다 배율이 1.003~1.031 로 흔들리고 잔량이 10% 넘게 높게 보였다 (2026-10-27 로그). 충전 칩이 맞추는 전압은
-//    늘 같으므로, 지금까지 평탄했던 값 중 가장 높은 값(full_raw)만 충전 끝으로 보고 그 값으로 배율을 정한다.
-//    그보다 FULL_NEAR_MV 넘게 낮게 평탄하면 충전이 덜 끝난 것이다.
+//    늘 같으므로, 지금까지 평탄했던 값 중 가장 높은 값(full_raw)만 배율을 정하는 데 쓴다.
+//    100% 표시는 따로 본다: 충전이 끝나면 칩이 쉬면서 전압이 4.1V 대로 내려와 그대로 있어서 (2026-10-31, 보정 전 4125mV 로 16시간)
+//    full_raw 근처만 인정하면 꽂아 둔 채 94% 에 머물렀다. FULL_MIN_RAW 위에서 평탄하면 충전 끝으로 본다.
 //  - 수동: PC 도우미로 멀티미터 값을 알려 주면 그 값으로 맞춘다 (자동보다 우선).
 #define FLAT_MINUTES 20  // 이 시간 동안
 #define FLAT_RANGE_MV 12 // 이 폭 안에서만 움직이면 "그대로"
-#define FULL_NEAR_MV 30
 // 충전 칩은 4.1V 아래면 다시 충전하므로 충전 끝은 그보다 높다. 보정 전 값으로도 이보다 낮으면 덜 찬 것이다
 #define FULL_MIN_RAW 4100
 static Preferences prefs;
@@ -44,10 +44,11 @@ static bool full = false;
 //     그동안에도 그대로 이어져 있어서 "배터리 사용 중" 으로 잘못 바뀌곤 했다.
 //     단, 그 뒤에 전압이 갑자기 떨어졌으면 케이블을 뽑은 것이다.
 //  3) 꽂는 순간 전압이 갑자기 오르고, 뽑는 순간 갑자기 떨어진다 (충전기만 꽂았을 때는 이것뿐이다)
-// USB 신호는 기기 쪽 전원(배터리)으로도 오갈 수 있어서, 케이블이 이어져 있어도 전원은 안 들어올 수 있다.
-// 그래서 1), 2) 는 "PC 와 이어짐" 으로만 보고 (꺼지지 않게만 한다), 충전 중은 전압이 뛰었거나(3)
-// 이어진 뒤 전압이 꾸준히 올랐을 때(check_trend)만 보인다.
-#define PC_RX_MS 45000  // 도우미는 30초마다 보낸다
+// PC 와 이어져 있으면(1, 2) 전원이 들어오는 것으로 본다. 전압이 올라야 인정하던 때는 충전이 거의 끝난 4.1V 대에서
+// 전압이 그대로라 꽂혀 있어도 표시가 안 나왔다. 이어진 채 전압은 400분·967분 그대로였고, 배터리만 쓸 때는 12분에 36mV 씩 떨어졌다 (2026-10-31 로그)
+// 도우미는 30초마다 보낸다. PC 가 잠들면 신호가 1~2분 끊기는 일이 잦아 (전압은 그대로) 넉넉히 기다린다
+#define PC_RX_MS 180000
+#define USB_SETTLE_MS 5000  // usb_host_present() 는 켠 뒤 3초 동안 무조건 true 라 그동안은 보지 않는다
 // 2026-10-26 충전기(어댑터)로 잰 값: 잔량 75% 쯤에서 뽑을 때 73mV 떨어지고 꽂을 때 62mV 올랐다 (80 이면 못 알아봤다).
 // 평소 흔들림은 10mV 안쪽이다
 #define JUMP_MV 40
@@ -56,9 +57,8 @@ static int recent[WINDOW];
 static int recent_n = 0;
 static bool charger_by_voltage = false;
 static uint32_t dropped_ms = 0;  // USB 신호가 없을 때 전압이 갑자기 떨어진 때
-static bool linked = false;         // 1), 2): PC 와 USB 로 이어져 있다 (전원은 모른다)
-static bool usb_rise_seen = false;  // 이어져 있는 동안 전압이 꾸준히 올라 전원이 들어오는 것을 확인했다
-static bool charging = false;       // 전원이 들어오는 것을 확인했다
+static bool linked = false;         // 1), 2): PC 와 USB 로 이어져 있다
+static bool charging = false;       // 전원이 들어온다 (1, 2, 3 중 하나)
 
 // 한 번 잴 때 보정 전 전압 (mV). 무선 송신 때 잠깐 출렁이는 값에 덜 걸리도록 약 5ms 동안 나눠 32번 재고,
 // 크고 작은 쪽 1/4 씩을 버리고 가운데만 평균한다.
@@ -188,7 +188,7 @@ static void check_full(int raw) {
   }
   if (minute_n < FLAT_MINUTES || hi - lo > FLAT_RANGE_MV) return;
   int avg = sum / minute_n;
-  if (avg < FULL_MIN_RAW || avg < full_raw - FULL_NEAR_MV) return;  // 전원이 약해 덜 찬 채 멈춤
+  if (avg < FULL_MIN_RAW) return;  // 전원이 약해 덜 찬 채 멈춤
   full = true;
   Serial.printf("[battery] charge looks complete (raw %d..%d mV)\n", lo, hi);
   if (avg <= full_raw) return;
@@ -256,7 +256,6 @@ static void detect_charger(int mv) {
       recent_n = 0;
     } else if (!(load_ignore & LOAD_UP) && hi - mv >= JUMP_MV && hi - prev >= JUMP_MV) {
       charger_by_voltage = false;
-      usb_rise_seen = false;  // PC 와 이어진 채 전압이 떨어졌으면 그 USB 로는 전원이 안 들어온다
       if (!usb_host_present()) dropped_ms = millis() ? millis() : 1;
       recent_n = 0;
     }
@@ -280,20 +279,17 @@ static bool usb_linked() {
   return !dropped_ms || (int32_t)(rx - dropped_ms) > 0;
 }
 
-// 1분마다. 꽂는 순간을 못 봤을 때(켤 때 이미 꽂혀 있었음, 카메라를 쓰는 중이나 화면이 바뀌는 순간에 꽂고 뺌)
-// 전압이 꾸준히 오르는지 내리는지로 전원이 정말 들어오는지 확인한다.
-//  - PC 와 이어져 있는데 TREND_RISE_MV 넘게 올랐다 → 그 USB 로 전원이 들어온다 (충전 중)
-//  - 충전 중으로 알았는데 TREND_FALL_MV 넘게 내려갔다 → 전원이 안 들어온다 (뽑은 것을 놓쳤거나 잘못 알아봄).
-//    충전이 끝난 뒤에는 충전기가 꽂혀 있어도 4.1V 근처까지 천천히 내려가므로 TREND_FALL_BELOW_MV 아래에서만 본다
+// 1분마다. 충전기(PC 없이)가 꽂혀 있다고 알았는데 뽑는 순간을 못 봤을 때(카메라를 쓰는 중이나 화면이 바뀌는 순간에 뺌)
+// 전압이 TREND_FALL_MV 넘게 내려갔으면 전원이 안 들어오는 것으로 고친다.
+// 충전이 끝난 뒤에는 충전기가 꽂혀 있어도 4.1V 근처까지 천천히 내려가므로 TREND_FALL_BELOW_MV 아래에서만 본다
 #define TREND_MINUTES 10
-#define TREND_RISE_MV 20
 #define TREND_FALL_MV 25
 #define TREND_FALL_BELOW_MV 4050
 static int trend_mv[TREND_MINUTES];
 
 static void check_trend(int raw) {
   // 화면·CPU 등이 바뀐 직후(load_ignore)는 가운데 값에 바뀌기 전 값이 섞여 있어 오르내림으로 잘못 보인다
-  if (!(linked || charging) || load_ignore || camera_ui_open() || video_recording()) {
+  if (!charger_by_voltage || linked || load_ignore || camera_ui_open() || video_recording()) {
     trend_n = 0;
     return;
   }
@@ -302,23 +298,11 @@ static void check_trend(int raw) {
     trend_n--;
   }
   trend_mv[trend_n++] = raw;
-  int lo = trend_mv[0], hi = trend_mv[0];
-  for (int i = 1; i < trend_n; i++) {
-    lo = min(lo, trend_mv[i]);
-    hi = max(hi, trend_mv[i]);
-  }
-  if (!charging && raw - lo >= TREND_RISE_MV) {
-    usb_rise_seen = true;
-    // 오르기 시작한 뒤라 꽂는 순간의 오름 폭을 잴 수 없다
-    level.skip_offset_measure();
-    Serial.printf("[battery] USB power confirmed (+%d mV)\n", raw - lo);
-  } else if (charging && !full && hi - raw >= TREND_FALL_MV && battery_mv() < TREND_FALL_BELOW_MV) {
-    charger_by_voltage = false;
-    usb_rise_seen = false;
-    Serial.printf("[battery] voltage falling (-%d mV): no power after all\n", hi - raw);
-  } else {
-    return;
-  }
+  int hi = trend_mv[0];
+  for (int i = 1; i < trend_n; i++) hi = max(hi, trend_mv[i]);
+  if (full || hi - raw < TREND_FALL_MV || battery_mv() >= TREND_FALL_BELOW_MV) return;
+  charger_by_voltage = false;
+  Serial.printf("[battery] voltage falling (-%d mV): no power after all\n", hi - raw);
   trend_n = 0;
 }
 
@@ -333,9 +317,11 @@ static void update(int mv) {
   }
   bool was_charging = charging, was_linked = linked;
   detect_charger(mv);
-  linked = usb_linked();
-  if (!linked) usb_rise_seen = false;
-  charging = charger_by_voltage || (linked && usb_rise_seen);
+  linked = millis() >= USB_SETTLE_MS && usb_linked();
+  if (was_linked && !linked) charger_by_voltage = false;  // 전압이 뛴 것이 그 USB 였다면 함께 끊겼다
+  // 켤 때 이미 꽂혀 있었으면 꽂는 순간의 오름 폭을 잴 수 없다
+  if (linked && !was_linked && millis() < USB_SETTLE_MS + 5000) level.skip_offset_measure();
+  charging = charger_by_voltage || linked;
   if (charging != was_charging) {
     restart_readings();
     full = false;
@@ -343,7 +329,7 @@ static void update(int mv) {
   }
   if (charging != was_charging || linked != was_linked) {
     trend_n = 0;
-    Serial.printf("[battery] %s (%d mV)\n", charging ? "charging" : linked ? "USB linked, no power seen yet" : "on battery", mv);
+    Serial.printf("[battery] %s (%d mV)\n", linked ? "USB power" : charging ? "charger" : "on battery", mv);
   }
   // 무선 송신 등으로 전압이 출렁이므로 천천히 따라간다
   smooth_mv = smooth_mv == 0 ? mv : smooth_mv * 0.8f + mv * 0.2f;
@@ -462,7 +448,7 @@ void battery_loop() {
     track_drain();
     Serial.printf("[battery] %d mV (now %d, raw %d), %d%% (voltage %d%%), %s%s\n", battery_mv(), mv, raw_mv,
                   battery_pct(), battery_mv_to_pct(battery_mv()),
-                  charging ? "charging" : linked ? "USB linked, no power seen" : "on battery",
+                  linked ? "USB power" : charging ? "charger" : "on battery",
                   full ? ", full" : "");
     if (charging) Serial.printf("[battery] charge offset %d mV\n", level.charge_offset_mv());
   }
@@ -482,7 +468,7 @@ bool battery_charging() {
 }
 
 bool battery_external_power() {
-  return charging || linked;
+  return charging;
 }
 
 bool battery_full() {
