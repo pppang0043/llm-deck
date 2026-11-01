@@ -18,7 +18,6 @@ from pathlib import Path
 
 PORT = 4013  # 4012 는 도우미가 하나만 돌게 잡는 포트 (main.py)
 URL = f"http://127.0.0.1:{PORT}/"
-OLD_URL_FILE = Path.home() / ".llm-deck" / "mirror_url.txt"  # 예전에 주소가 바뀌던 때 쓰던 파일
 # 브라우저 대신 쓰는 미러링 창 (항상 위). Mac 은 도우미 앱(macos/app.swift)을 한 번 더 열면 창이 뜬다
 MAC_APP = Path.home() / "Applications" / "LLM Deck.app"
 WIN_APP = Path(__file__).resolve().parent / "windows" / "app.pyw"  # Windows 도우미 앱. --mirror 로 창만 연다
@@ -190,7 +189,6 @@ class Mirror:
             return
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        OLD_URL_FILE.unlink(missing_ok=True)
         print(f"[mirror] 미러링 창: {URL} (uv run main.py --mirror 로도 열린다)")
         self.auto_open = cfg.get("auto_open", True)
 

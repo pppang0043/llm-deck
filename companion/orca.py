@@ -1,7 +1,7 @@
 """ORCA 에 열린 세션들의 작업 상태를 기기로 보내고, 기기에서 고른 세션에 받아쓰기한 글을 입력한다.
 
-  - 2초마다 orca CLI 로 세션 목록과 상태를 읽는다 (orca worktree ps, orca terminal list). 바뀌었을 때만 기기로 보낸다.
-    Windows 는 CLI 의 named pipe 로 직접 묻고, 안 되면 orca 명령으로 보낸다.
+  - 2초마다 세션 목록과 상태를 읽는다 (orca worktree ps, orca terminal list). 바뀌었을 때만 기기로 보낸다.
+    ORCA 의 소켓(Windows 는 named pipe)으로 직접 묻고, 안 되면 orca 명령으로 보낸다.
       PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태, "m": 끝난 세션의 마지막 답변 요약 (없으면 뺀다), "q": 사용자에게 질문하는 중이면 true (아니면 뺀다)}], "a": ORCA 에 지금 보이는 세션 id 또는 ""}}
       s: working(작업 중) / waiting(입력 기다림) / permission(권한 요청) / blocked / done / idle / shell(AI 없는 터미널)
   - 기기에서 세션을 누르면 {"ask": "start", "mode": "dictate", "orca": id}: 그 세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다.

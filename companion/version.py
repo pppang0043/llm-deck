@@ -10,6 +10,7 @@ PROTO 는 서로 주고받는 내용(메시지 칸, 인증 방식)이 바뀔 때
 """
 
 import subprocess
+import sys
 from pathlib import Path
 
 PROTO = 6
@@ -26,8 +27,10 @@ def version() -> str:
     global _version
     if _version is None:
         try:
-            out = subprocess.run(["git", "describe", "--tags", "--always", "--dirty"], cwd=Path(__file__).parent,
-                                 capture_output=True, text=True, timeout=3)
+            # 태그 이름은 쓰지 않는다. 길어서 잘리면 커밋이 달라도 같은 버전으로 보인다
+            out = subprocess.run(["git", "describe", "--always", "--dirty", "--exclude", "*"], cwd=Path(__file__).parent,
+                                 capture_output=True, text=True, timeout=3,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
             _version = out.stdout.strip()[:23] if out.returncode == 0 else ""
         except (OSError, subprocess.SubprocessError):
             _version = ""

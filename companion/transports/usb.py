@@ -28,7 +28,7 @@ SILENT_SECONDS = 150
 # 다시 켜도 안 살아나면 되풀이하지 않게, 다시 켜는 것은 이 간격에 한 번까지
 RESET_GAP_SECONDS = 600
 _last_reset = 0.0
-# 펌웨어를 올리는 동안 (firmware/flash.sh 가 만들고 지운다) 포트를 열지 않는다. 올리기 도구와 같이 읽으면
+# 펌웨어를 올리는 동안 (firmware/scripts/flash_guard.py 가 만들고 지운다) 포트를 열지 않는다. 올리기 도구와 같이 읽으면
 # 올리기가 중간에 끊겨 기기가 반쯤 써진 채 멈춘다. 올리기가 죽어 남은 표시는 이 시간이 지나면 무시한다.
 FLASHING_FILE = Path.home() / ".llm-deck" / "flashing"
 FLASHING_MAX_SECONDS = 600
