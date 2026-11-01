@@ -236,7 +236,7 @@ void link_init(void (*set_mic)(bool on)) {
 // 명령이 하나라도 섞였으면 전체를 FIFO 에 보존한다 (촬영 직전 화면 갱신 등).
 static uint32_t snapshot_key(JsonObjectConst doc) {
   static const char *const fields[] = {"services", "updated", "host", "now", "utc_offset", "helper",
-                                      "ask_mic", "keywords", "os", "pc", "orca", "sync_url", "pc_mic"};
+                                      "ask_mic", "keywords", "os", "pc", "orca", "sync_url", "pc_mic", "pop"};
   uint32_t mask = 0;
   for (JsonPairConst item : doc) {
     bool known = false;
@@ -449,6 +449,9 @@ static void apply_owner_state(JsonObjectConst doc, Link from) {
   if (doc["pc"].is<JsonObjectConst>()) pcpanel_set_status(doc["pc"], doc["host"] | "");
   if (doc["os"].is<const char *>()) pcpanel_set_os(doc["os"]);
   if (doc["keywords"].is<JsonArrayConst>()) pcpanel_set_keywords(doc["keywords"]);
+  if (doc["pop_set"].is<JsonArrayConst>()) orcapanel_save_edits(doc["pop_set"]);
+  if (doc["pop_sync"] | false) orcapanel_send_saved();
+  if (doc["pop"].is<JsonArrayConst>()) orcapanel_set_pop(doc["pop"]);
   if (doc["toast"].is<const char *>()) ui_toast(doc["toast"], 3000);
   if (doc["scan"].is<const char *>()) camera_ui_scan_result(doc["scan"]);
   if (doc["scan_roi"].is<JsonArrayConst>()) {
@@ -628,7 +631,7 @@ static bool send_event_udp(const char *json) {
   return sent;
 }
 
-void link_send_event(const char *json) {
+bool link_send_event(const char *json) {
   Link link = active;
   bool sent;
   switch (link) {
@@ -642,7 +645,8 @@ void link_send_event(const char *json) {
       sent = send_event_udp(json);
       break;
     default:
-      return;
+      return false;
   }
   Serial.printf(sent ? "[link] event to %s: %s\n" : "[link] event to %s NOT sent: %s\n", link_tag(link), json);
+  return sent;
 }

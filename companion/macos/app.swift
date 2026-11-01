@@ -1,11 +1,25 @@
 // LLM Deck.app 의 실행 파일. install.sh 가 swiftc 로 컴파일한다.
 // 블루투스·마이크 권한은 "앱" 단위로만 받을 수 있어서, 파이썬 도우미(main.py)를 이 앱의 자식 프로세스로 띄워 둔다.
-// 메뉴 막대 아이콘에서 미러링 창을 연다. 앱이 이미 떠 있을 때 한 번 더 열어도 (Finder, Spotlight, `uv run main.py --mirror`) 연다.
-// 미러링 창은 도우미가 띄운 http://127.0.0.1:4013/ (mirror.py) 에서 화면을 받아 오고 누르기를 보낸다. 서버 쪽 규칙은 mirror.py 의 PAGE 와 같다.
-// 창이 열려 있는 동안(화면을 받아 가는 동안)만 기기가 화면을 보낸다.
+// 메뉴 막대 아이콘에서 기기별 미러링 창을 연다 (S3 미러링, S31 미러링). 앱이 이미 떠 있을 때 한 번 더 열어도 (Finder, Spotlight, `uv run main.py --mirror`) S3 창만 연다.
+// 미러링 창은 기기마다 따로 도우미가 띄운 http://127.0.0.1:4013/ (S3), :4015/ (S31) (mirror.py) 에서 화면을 받아 오고 누르기를 보낸다. 서버 쪽 규칙은 mirror.py 의 PAGE 와 같다.
+// 창이 열려 있는 동안(화면을 받아 가는 동안)만 기기가 화면을 보낸다. 도우미(파이썬 자식 프로세스)는 S3 것만 이 앱이 띄운다. pppang31 은 launchd 서비스라 건드리지 않는다.
 import AppKit
 
-let BASE = URL(string: "http://127.0.0.1:4013/")!
+// 미러링 창을 여는 기기. 도우미(미러 서버)마다 포트가 다르다 (mirror.py 의 [mirror] port)
+struct Device {
+  let name: String
+  let base: URL
+  let suffix: String  // 저장 설정(UserDefaults) 키 뒤에 붙인다. S3 는 예전 키를 그대로 써서 쓰던 설정이 남는다
+  let width: Int  // 첫 장이 오기 전에 잡는 화면 크기
+  let height: Int
+  let right: Double  // 처음 창 위치: 메인 화면 오른쪽 아래 모서리에서 떨어진 거리
+  let bottom: Double
+
+  static let s3 = Device(name: "S3", base: URL(string: "http://127.0.0.1:4013/")!, suffix: "", width: 320, height: 240, right: 12, bottom: 12)
+  // S3 창(오른쪽 아래, 320 폭)의 왼쪽 옆에 둔다
+  static let s31 = Device(name: "S31", base: URL(string: "http://127.0.0.1:4015/")!, suffix: "s31", width: 480, height: 480, right: 12 + 320 + 12, bottom: 12)
+}
+
 let LOG = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".llm-deck/companion.log")
 let OFFLINE = "도우미와 연결이 끊겼습니다. 도우미가 켜져 있는지 확인하세요"
 
@@ -164,38 +178,170 @@ final class ScreenView: NSView {
   override func menu(for event: NSEvent) -> NSMenu? { app?.makeMenu() }
 }
 
+// ORCA 팝업 버튼의 표시명·입력 내용을 고치는 창 (기기에는 키보드가 없다). 서버 쪽 규칙은 popbuttons.py, 하는 일은 mirror.py 의 PAGE 와 같다.
+// 미러링 창을 눌러도 가리지 않게 따로 띄우고, 화면 받기를 막지 않게 모달로 돌리지 않는다
+@MainActor
+final class EditPanel: NSObject, NSWindowDelegate {
+  let session: URLSession
+  let base: URL
+  let deviceName: String
+  let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 160), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+  let name = NSTextField(string: "")
+  let text = NSTextField(string: "")
+  let textTitle = NSTextField(labelWithString: "입력 내용 (띄어쓰기로 끝나면 Enter 없이 넣습니다)")
+  let error = NSTextField(wrappingLabelWithString: "")
+  let saveButton = NSButton(title: "저장", target: nil, action: nil)
+  let cancelButton = NSButton(title: "취소", target: nil, action: nil)
+  let stack = NSStackView()
+  var seq = 0
+  var id = ""
+
+  init(session: URLSession, device: Device) {
+    self.session = session
+    base = device.base
+    deviceName = device.name
+    super.init()
+    let width: CGFloat = 332
+    panel.title = "\(device.name) 버튼 수정"
+    panel.isReleasedWhenClosed = false
+    panel.hidesOnDeactivate = false
+    panel.level = .modalPanel
+    panel.delegate = self
+    error.textColor = .systemRed
+    error.preferredMaxLayoutWidth = width
+    saveButton.target = self
+    saveButton.action = #selector(save)
+    saveButton.keyEquivalent = "\r"
+    cancelButton.target = self
+    cancelButton.action = #selector(cancel)
+    cancelButton.keyEquivalent = "\u{1b}"
+    let spacer = NSView()
+    spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+    let buttons = NSStackView(views: [spacer, cancelButton, saveButton])
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.spacing = 6
+    stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+    for view in [NSTextField(labelWithString: "표시명"), name, textTitle, text, error, buttons] { stack.addArrangedSubview(view) }
+    for view in [name, text, error, buttons] { view.widthAnchor.constraint(equalToConstant: width).isActive = true }
+    panel.contentView = stack
+  }
+
+  // 1초마다 읽은 요청. 요청이 사라지면 (다른 창에서 먼저 답함) 닫고, 새 요청이면 띄운다
+  func update(_ req: [String: Any]) {
+    guard let next = req["seq"] as? Int else {
+      seq = 0
+      panel.orderOut(nil)
+      return
+    }
+    if next == seq { return }
+    seq = next
+    id = req["id"] as? String ?? ""
+    panel.title = "\(deviceName) \(req["new"] as? Bool == true ? "새 버튼" : "버튼 수정")"
+    name.stringValue = req["name"] as? String ?? ""
+    text.stringValue = req["text"] as? String ?? ""
+    let hasText = req["has_text"] as? Bool ?? false
+    textTitle.isHidden = !hasText
+    text.isHidden = !hasText
+    say(nil)
+    panel.center()
+    panel.makeKeyAndOrderFront(nil)
+    panel.makeFirstResponder(name)
+    if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
+  }
+
+  func say(_ message: String?) {
+    error.stringValue = message ?? ""
+    error.isHidden = message == nil
+    stack.layoutSubtreeIfNeeded()
+    panel.setContentSize(stack.fittingSize)
+  }
+
+  func request(_ body: [String: Any]) -> URLRequest {
+    var req = URLRequest(url: URL(string: "edit", relativeTo: base)!)
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    return req
+  }
+
+  @objc func save() {
+    saveButton.isEnabled = false
+    let req = request(["seq": seq, "id": id, "name": name.stringValue, "text": text.isHidden ? "" : text.stringValue])
+    let asked = seq, session = session
+    Task {
+      var code = 0
+      var data = Data()
+      if let (body, res) = try? await session.data(for: req), let r = res as? HTTPURLResponse { (code, data) = (r.statusCode, body) }
+      saveButton.isEnabled = true
+      if asked != seq { return }  // 그 사이 다른 요청을 띄웠다
+      if code == 200 || code == 409 {  // 409: 새 요청이 왔다. 곧 다시 읽는다
+        panel.orderOut(nil)
+      } else if code == 0 {
+        say(OFFLINE)
+      } else {
+        let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        say(answer?["error"] as? String ?? "저장하지 못했습니다")
+      }
+    }
+  }
+
+  @objc func cancel() {
+    guard panel.isVisible else { return }
+    panel.orderOut(nil)
+    let req = request(["seq": seq, "cancel": true]), session = session
+    Task { _ = try? await session.data(for: req) }
+  }
+
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    cancel()
+    return false  // 다시 띄울 창이라 숨기기만 한다
+  }
+}
+
 @MainActor
 final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
+  // 기기마다 하나씩 만든다. 세션, 화면 받기, 보내기, 저장 설정이 서로 섞이지 않는다
+  let device: Device
   let defaults = UserDefaults.standard
   let session: URLSession
+  let editor: EditPanel
   var window: NSWindow?
-  let view = ScreenView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
-  // 첫 장이 오기 전에는 320x240 으로 둔다
-  var w = 320, h = 240, seq = 0
+  let view: ScreenView
+  // 첫 장이 오기 전에는 기기의 기본 크기로 둔다
+  var w: Int, h: Int, seq = 0
   var got = false
   var sending: Task<Void, Never>?
   var polling: Task<Void, Never>?
+  var editPolling: Task<Void, Never>?
   // 창이 열려 있는 동안은 다른 앱을 쓰고 있어도(항상 위) macOS 가 이 앱을 쉬게 하거나(App Nap) 화면 받기를 늦추지 않게 한다
   var awake: NSObjectProtocol?
 
-  override init() {
+  init(_ device: Device) {
+    self.device = device
+    (w, h) = (device.width, device.height)
+    view = ScreenView(frame: NSRect(x: 0, y: 0, width: device.width, height: device.height))
     let config = URLSessionConfiguration.ephemeral
     config.requestCachePolicy = .reloadIgnoringLocalCacheData
     config.timeoutIntervalForRequest = 10  // 서버는 1.5초 안에 답한다
     session = URLSession(configuration: config)
+    editor = EditPanel(session: session, device: device)
     super.init()
-    // 예전 미러링 앱(LLM Deck Mirror.app)에 저장해 둔 배율·항상 위를 한 번 옮겨 온다
-    if defaults.object(forKey: "zoom") == nil, let old = UserDefaults(suiteName: "com.llmdeck.mirror") {
+    // 예전 미러링 앱(LLM Deck Mirror.app)에 저장해 둔 배율·항상 위를 한 번 옮겨 온다 (S3 만 쓰던 앱이다)
+    if device.suffix.isEmpty, defaults.object(forKey: "zoom") == nil, let old = UserDefaults(suiteName: "com.llmdeck.mirror") {
       for key in ["zoom", "onTop"] {
         if let v = old.object(forKey: key) { defaults.set(v, forKey: key) }
       }
     }
-    defaults.register(defaults: ["onTop": true, "zoom": 1, "mirrorRight": 12.0, "mirrorBottom": 12.0])
+    defaults.register(defaults: [key("onTop"): true, key("zoom"): 1, key("mirrorRight"): device.right, key("mirrorBottom"): device.bottom])
   }
 
-  // 배율. 메뉴의 1·2·3배, 또는 창 가장자리를 끌어 맞춘 크기 (0.5~4배)
-  var zoom: Double { min(max(defaults.double(forKey: "zoom"), 0.5), 4) }
-  var onTop: Bool { defaults.bool(forKey: "onTop") }
+  // 저장 설정 키. S3 는 예전 이름 그대로, 다른 기기는 뒤에 기기 이름을 붙인다
+  func key(_ name: String) -> String { device.suffix.isEmpty ? name : "\(name).\(device.suffix)" }
+
+  // 배율. 메뉴의 1·2·3배, 또는 창 가장자리를 끌어 맞춘 크기 (0.5~4배). 화면보다 크면 fit() 이 줄여서 보여 준다
+  var zoom: Double { min(max(defaults.double(forKey: key("zoom")), 0.5), 4) }
+  var onTop: Bool { defaults.bool(forKey: key("onTop")) }
 
   // 창을 연다 (열려 있으면 앞으로). 창이 떠 있는 동안만 Dock 아이콘과 메뉴 막대 메뉴를 보인다
   @objc func open() {
@@ -210,13 +356,14 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     if polling == nil {
       awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "기기 화면 미러링")
       polling = Task { await poll() }
+      editPolling = Task { await pollEdit() }
     }
   }
 
   func makeWindow() -> NSWindow {
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: device.width, height: device.height), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
-    window.title = "LLM Deck 미러링"
+    window.title = "\(device.name) 미러링"
     window.isReleasedWhenClosed = false
     window.contentView = view
     window.delegate = self
@@ -235,12 +382,12 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     let size = window.frame.size
     var corner: NSPoint
     var area: NSRect
-    let last = defaults.string(forKey: "mirrorFrame").map(NSRectFromString)
+    let last = defaults.string(forKey: key("mirrorFrame")).map(NSRectFromString)
     if let last, let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(NSPoint(x: last.midX, y: last.midY)) }) {
       corner = NSPoint(x: last.maxX, y: last.minY)
       area = screen.visibleFrame
     } else if let main = mainArea {
-      corner = NSPoint(x: main.maxX - defaults.double(forKey: "mirrorRight"), y: main.minY + defaults.double(forKey: "mirrorBottom"))
+      corner = NSPoint(x: main.maxX - defaults.double(forKey: key("mirrorRight")), y: main.minY + defaults.double(forKey: key("mirrorBottom")))
       area = main
     } else { return }
     var origin = NSPoint(x: corner.x - size.width, y: corner.y)
@@ -253,10 +400,10 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
   func windowDidMove(_ note: Notification) {
     guard let window else { return }
     let frame = window.frame
-    defaults.set(NSStringFromRect(frame), forKey: "mirrorFrame")
+    defaults.set(NSStringFromRect(frame), forKey: key("mirrorFrame"))
     if let main = mainArea, main.contains(NSPoint(x: frame.midX, y: frame.midY)) {
-      defaults.set(main.maxX - frame.maxX, forKey: "mirrorRight")
-      defaults.set(frame.minY - main.minY, forKey: "mirrorBottom")
+      defaults.set(main.maxX - frame.maxX, forKey: key("mirrorRight"))
+      defaults.set(frame.minY - main.minY, forKey: key("mirrorBottom"))
     }
   }
 
@@ -264,31 +411,49 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
   func windowWillClose(_ note: Notification) {
     polling?.cancel()
     polling = nil
+    editPolling?.cancel()
+    editPolling = nil
+    editor.cancel()
     if let awake { ProcessInfo.processInfo.endActivity(awake) }
     awake = nil
-    NSApp.setActivationPolicy(.accessory)
+    // 다른 기기의 창이 남아 있으면 Dock 아이콘과 메뉴를 그대로 둔다
+    let closing = note.object as? NSWindow
+    let others = NSApp.windows.contains { $0 !== closing && $0.delegate is Mirror && ($0.isVisible || $0.isMiniaturized) }
+    if !others { NSApp.setActivationPolicy(.accessory) }
+  }
+
+  // 창이 둘이면 메뉴 막대의 메뉴가 앞에 있는 창의 기기를 따라가게 한다
+  func windowDidBecomeKey(_ note: Notification) {
+    NSApp.mainMenu = makeMainMenu()
   }
 
   // 창 가장자리를 끌어 크기를 바꾸면 그 배율을 기억한다
   func windowDidEndLiveResize(_ note: Notification) {
     guard let window else { return }
-    defaults.set(window.contentRect(forFrameRect: window.frame).width / CGFloat(w), forKey: "zoom")
+    defaults.set(window.contentRect(forFrameRect: window.frame).width / CGFloat(w), forKey: key("zoom"))
     fit()
   }
 
   // 창 내용 크기를 기기 화면 × 배율로 맞춘다 (창 오른쪽 아래 모서리는 그대로, 화면 밖으로는 안 나가게)
   func fit() {
     guard let window, !window.inLiveResize else { return }  // 끄는 동안 새 장이 와도 되돌리지 않는다
+    // 배율은 창(제목 줄 포함)이 화면에 들어오는 만큼까지만 (S31 은 480x480 이라 3배는 화면보다 크다). 저장한 배율은 그대로 둔다
+    let area = (window.screen ?? NSScreen.main)?.visibleFrame
+    let chrome = window.frameRect(forContentRect: .zero).size
+    var limit = 4.0
+    if let area { limit = min(limit, (area.width - chrome.width) / Double(w), (area.height - chrome.height) / Double(h)) }
+    limit = max(limit, 0.5)
     // 끌어서 크기를 바꿀 때도 기기 화면 비율을 지킨다
     window.contentAspectRatio = NSSize(width: w, height: h)
     window.contentMinSize = NSSize(width: Double(w) * 0.5, height: Double(h) * 0.5)
-    window.contentMaxSize = NSSize(width: Double(w) * 4, height: Double(h) * 4)
-    let size = NSSize(width: (Double(w) * zoom).rounded(), height: (Double(h) * zoom).rounded())
+    window.contentMaxSize = NSSize(width: Double(w) * limit, height: Double(h) * limit)
+    let scale = min(zoom, limit)
+    let size = NSSize(width: (Double(w) * scale).rounded(), height: (Double(h) * scale).rounded())
     let now = window.frame
     if window.contentRect(forFrameRect: now).size == size { return }
     var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
     frame.origin = NSPoint(x: now.maxX - frame.width, y: now.minY)
-    if let area = (window.screen ?? NSScreen.main)?.visibleFrame {
+    if let area {
       frame.origin.x = max(area.minX, frame.origin.x)
       frame.origin.y = min(frame.origin.y, area.maxY - frame.height)
     }
@@ -302,7 +467,7 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
   // 새 장을 계속 받아 간다. 이 요청이 이어지는 동안만 도우미가 기기에 화면을 보내 달라고 한다
   func poll() async {
     while !Task.isCancelled {
-      var req = URLRequest(url: URL(string: "frame?after=\(seq)", relativeTo: BASE)!)
+      var req = URLRequest(url: URL(string: "frame?after=\(seq)", relativeTo: device.base)!)
       req.cachePolicy = .reloadIgnoringLocalCacheData
       do {
         let (data, res) = try await session.data(for: req)
@@ -330,9 +495,20 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
   }
 
+  // ORCA 팝업 버튼 수정 요청을 1초마다 읽는다
+  func pollEdit() async {
+    while !Task.isCancelled {
+      if let (data, _) = try? await session.data(for: URLRequest(url: URL(string: "edit", relativeTo: device.base)!)),
+         let req = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+        editor.update(req)
+      }
+      try? await Task.sleep(for: .seconds(1))
+    }
+  }
+
   // 보낸 차례대로 도우미에 닿게 하나씩 보낸다
   func post(_ path: String, _ body: [String: Any]) {
-    var req = URLRequest(url: URL(string: path, relativeTo: BASE)!)
+    var req = URLRequest(url: URL(string: path, relativeTo: device.base)!)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
     req.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -360,12 +536,12 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
   @objc func home() { post("home", [:]) }
 
   @objc func toggleOnTop() {
-    defaults.set(!onTop, forKey: "onTop")
+    defaults.set(!onTop, forKey: key("onTop"))
     applyOnTop()
   }
 
   @objc func setZoom(_ item: NSMenuItem) {
-    defaults.set(item.tag, forKey: "zoom")
+    defaults.set(item.tag, forKey: key("zoom"))
     fit()
   }
 
@@ -404,11 +580,22 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     let top = NSMenuItem()
     top.submenu = makeMenu()
     bar.addItem(top)
+    // 수정 창의 입력칸에서 붙여넣기 등을 쓰려면 메뉴에 있어야 한다
+    let edit = NSMenu(title: "편집")
+    edit.addItem(withTitle: "오려두기", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "복사하기", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(withTitle: "모두 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    let editItem = NSMenuItem()
+    editItem.submenu = edit
+    bar.addItem(editItem)
     return bar
   }
 
   // 메뉴를 열 때마다 체크 표시를 지금 설정에 맞춘다
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    // 수정 창이 떠 있으면 Esc 는 그 창의 취소다 (기기가 홈으로 가지 않게)
+    if item.action == #selector(home) { return !editor.panel.isVisible }
     if item.action == #selector(toggleOnTop) {
       item.state = onTop ? .on : .off
     } else if item.action == #selector(setZoom(_:)) {
@@ -537,7 +724,8 @@ final class Helper {
 @MainActor
 final class App: NSObject, NSApplicationDelegate {
   let helper = Helper()
-  let mirror = Mirror()
+  let mirror = Mirror(.s3)  // 다시 열기, SIGUSR1 (S3 도우미의 자동 열기)는 S3 창만 연다
+  let mirror31 = Mirror(.s31)
   var status: NSStatusItem?
   var errorItem: NSMenuItem?
   var signals: [DispatchSourceSignal] = []
@@ -570,8 +758,11 @@ final class App: NSObject, NSApplicationDelegate {
       let it = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
       it.target = target
     }
-    add("미러링 열기", mirror, #selector(Mirror.open))
-    add("항상 위", mirror, #selector(Mirror.toggleOnTop))
+    add("S3 미러링", mirror, #selector(Mirror.open))
+    add("S31 미러링", mirror31, #selector(Mirror.open))
+    menu.addItem(.separator())
+    add("S3 항상 위", mirror, #selector(Mirror.toggleOnTop))
+    add("S31 항상 위", mirror31, #selector(Mirror.toggleOnTop))
     menu.addItem(.separator())
     add("도우미 다시 시작", helper, #selector(Helper.restart))
     add("기록 보기", self, #selector(showLog))

@@ -140,9 +140,16 @@ def test_send_key_keyword_and_unknown(o):
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/orchestration ")]
     assert o.pending_toast == "보냈습니다: /orchestration"
     o.sent_cmds.clear()
-    o.send_key("abc", "skill:minipc")  # 팝업 /스킬 의 스킬: 글만 보내고 Enter 는 치지 않는다
+    o.send_key("abc", "skill:minipc")  # 팝업 스킬 버튼의 스킬: 글만 보내고 Enter 는 치지 않는다
     assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/minipc ")]
     assert o.pending_toast == "보냈습니다: /minipc"
+    o.sent_cmds.clear()
+    o.send_key("abc", "skill:proto-design")  # 팝업 proto 버튼
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/proto-design ")]
+    o.sent_cmds.clear()
+    o.send_key("abc", "resume")  # 팝업 /resume 버튼: 글 + Enter
+    assert o.sent_cmds == [("terminal", "send", "--terminal", "term_abc", "--text", "/resume"),
+                           ("terminal", "send", "--terminal", "term_abc", "--enter")]
     o.sent_cmds.clear()
     o.send_key("abc", "skill:rm -rf")  # SKILLS 에 없는 스킬은 입력하지 않는다
     assert o.sent_cmds == [] and "모르는 키워드" in o.pending_toast

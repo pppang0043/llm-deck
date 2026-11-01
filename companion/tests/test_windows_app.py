@@ -44,3 +44,35 @@ def test_mirror_origin_keeps_bottom_right_corner_on_screen():
     assert app.mirror_origin((336, 279), (2500, 1500), area) == (1584, 761)
     # 왼쪽 위 모니터 (음수 좌표)
     assert app.mirror_origin((336, 279), (-100, -50), (-1920, -1080, 0, 0)) == (-436, -329)
+
+
+def test_post_edit_returns_reason_or_none(monkeypatch):
+    import io
+    import json
+    import urllib.error
+
+    app = load()
+
+    def opener(status, body=b""):
+        def fake(req, timeout):
+            assert req.full_url.endswith("/edit") and req.get_method() == "POST"
+            assert req.headers["Content-type"] == "application/json"  # 도우미가 이 형식만 받는다
+            if status == 200:
+                return io.BytesIO()
+            raise urllib.error.HTTPError(req.full_url, status, "", {}, io.BytesIO(body))
+        return fake
+
+    monkeypatch.setattr(app.OPENER, "open", opener(200))
+    assert app.post_edit({"seq": 1, "cancel": True}) is None
+    monkeypatch.setattr(app.OPENER, "open", opener(409))
+    assert app.post_edit({"seq": 1}) is None  # 새 요청이 왔다. 이 창은 닫는다
+    monkeypatch.setattr(app.OPENER, "open", opener(400, json.dumps({"error": "표시명을 적어 주세요"}).encode()))
+    assert app.post_edit({"seq": 1}) == "표시명을 적어 주세요"
+    monkeypatch.setattr(app.OPENER, "open", opener(500, b"?"))
+    assert app.post_edit({"seq": 1}) == "저장하지 못했습니다"
+
+    def down(req, timeout):
+        raise OSError("끊김")
+
+    monkeypatch.setattr(app.OPENER, "open", down)
+    assert app.post_edit({"seq": 1}) == app.DISCONNECTED

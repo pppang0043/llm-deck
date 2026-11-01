@@ -21,9 +21,9 @@ DEFAULT_KEYWORDS = [
     ("deploy", "배포", "배포해줘"),
     ("push", "푸쉬", "푸쉬해줘"),
     ("error", "에러 확인", "에러 확인"),
-    ("orchestration", "/orch", "/orchestration "),
-    ("clear", "/clear", "/clear"),
-    ("compact", "/compact", "/compact"),
+    ("orchestration", "orch", "/orchestration "),
+    ("clear", "clr", "/clear"),
+    ("compact", "컴팩", "/compact"),
 ]
 MAX_KEYWORDS = 7  # 기기 단축키 화면은 8칸 (마지막 칸은 Tab + Enter)
 MAX_NAME = 12  # 버튼 이름 글자 수
@@ -33,6 +33,8 @@ MAX_TEXT = 200  # 입력할 글 글자 수
 KEYWORDS = {kid: text for kid, _, text in DEFAULT_KEYWORDS}
 # 기기에 보내는 목록 [{"id", "name", "obj"}] (글은 PC 에만 둔다. obj 는 기기 알림 "PC에 ○○ 입력합니다" 의 ○○)
 ITEMS: list[dict] = []
+# configure() 가 고른 키워드 (id, 이름, 글). ORCA 팝업에서 고쳐 저장한 것을 덮기 전 (popbuttons.py)
+BASE_ENTRIES: list[tuple[str, str, str]] = []
 
 
 def _bad(value) -> bool:
@@ -67,7 +69,7 @@ def _item(kid: str, name: str, text: str) -> dict:
 
 def configure(section: dict | None) -> None:
     """config.toml 의 [keywords] items = [{name, text}, ...] 를 읽는다. 없거나 쓸 것이 없으면 기본 목록."""
-    global KEYWORDS, ITEMS
+    global BASE_ENTRIES
     raw = (section or {}).get("items")
     chosen = []
     if isinstance(raw, list):
@@ -84,7 +86,14 @@ def configure(section: dict | None) -> None:
             chosen.append((f"k{len(chosen)}", name.strip(), text))
         if not chosen:
             print("[type] [keywords] 쓸 수 있는 키워드가 없어 기본 목록을 씁니다.")
-    entries = chosen or DEFAULT_KEYWORDS
+    BASE_ENTRIES = list(chosen or DEFAULT_KEYWORDS)
+    apply_saved({}, {})
+
+
+def apply_saved(names: dict[str, str], texts: dict[str, str]) -> None:
+    """고쳐 저장한 표시명·글을 키워드에 덮는다. 단축키 화면과 기기 알림도 이것을 쓴다."""
+    global KEYWORDS, ITEMS
+    entries = [(kid, names.get(kid, name), texts.get(kid, text)) for kid, name, text in BASE_ENTRIES]
     KEYWORDS = {kid: text for kid, _, text in entries}
     ITEMS = [_item(*e) for e in entries]
 

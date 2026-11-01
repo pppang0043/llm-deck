@@ -210,6 +210,80 @@ def unpack(src: bytes, n: int) -> bytes:
 
 # ---- 미러링 창 ----
 
+def post_edit(body: dict) -> str | None:
+    """팝업 버튼 수정 답을 도우미에 보낸다. 끝났으면 None (409 는 새 요청이 온 것이라 이 창은 닫는다), 안 되면 창에 보일 이유"""
+    req = urllib.request.Request(BASE + "edit", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        OPENER.open(req, timeout=5).close()
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            return None
+        try:
+            return json.loads(e.read())["error"]
+        except (ValueError, KeyError, TypeError, OSError):
+            return "저장하지 못했습니다"
+    except OSError:
+        return DISCONNECTED
+    return None
+
+
+class EditDialog:
+    """ORCA 팝업 버튼의 표시명·입력 내용을 고치는 창 (기기에는 키보드가 없다). 규칙은 도우미 popbuttons.py"""
+
+    def __init__(self, owner, req: dict):
+        tk = owner.tk
+        self.owner = owner
+        self.seq, self.id, self.has_text = req["seq"], req["id"], req["has_text"]
+        self.name, self.text = tk.StringVar(value=req["name"]), tk.StringVar(value=req["text"])
+        self.error = tk.StringVar()
+        win = self.win = tk.Toplevel(owner.win)
+        win.title("새 버튼" if req.get("new") else "버튼 수정")
+        win.configure(background=BACK, padx=12, pady=10)
+        win.resizable(False, False)
+        win.attributes("-topmost", True)  # 항상 위인 미러링 창에 가리지 않게
+        win.protocol("WM_DELETE_WINDOW", self.cancel)
+        font = ("Malgun Gothic", 10)
+
+        def label(variable=None, text="", color="#c8d0d8"):
+            tk.Label(win, text=text, textvariable=variable, background=BACK, foreground=color, font=font,
+                     justify="left", wraplength=320).pack(anchor="w")
+
+        label(text="표시명")
+        first = tk.Entry(win, textvariable=self.name, font=font, width=38)
+        first.pack(fill="x", pady=(2, 8))
+        if self.has_text:
+            label(text="입력 내용 (띄어쓰기로 끝나면 Enter 없이 넣습니다)")
+            tk.Entry(win, textvariable=self.text, font=font).pack(fill="x", pady=(2, 8))
+        label(self.error, color="#ff8a80")
+        row = tk.Frame(win, background=BACK)
+        row.pack(fill="x", pady=(6, 0))
+        self.save_button = tk.Button(row, text="저장", font=font, width=8, command=self.save)
+        self.save_button.pack(side="right")
+        tk.Button(row, text="취소", font=font, width=8, command=self.cancel).pack(side="right", padx=6)
+        win.bind("<Return>", lambda e: self.save())
+        win.bind("<Escape>", lambda e: self.cancel())
+        win.lift()
+        first.focus_force()
+        first.select_range(0, "end")
+
+    def save(self) -> None:
+        self.save_button.configure(state="disabled")
+        body = {"seq": self.seq, "id": self.id, "name": self.name.get(), "text": self.text.get() if self.has_text else ""}
+        threading.Thread(target=lambda: self.owner.put("edit_done", (self.seq, post_edit(body))), daemon=True).start()
+
+    def done(self, error: str | None) -> None:
+        if error is None:
+            self.owner.close_edit()
+        else:
+            self.error.set(error)
+            self.save_button.configure(state="normal")
+
+    def cancel(self) -> None:
+        self.owner.post("edit", {"seq": self.seq, "cancel": True})
+        self.owner.close_edit()
+
+
 class MirrorWindow:
     """기기 화면을 띄우고 누르기를 보내는 창. 닫으면 화면 받기를 멈춘다 (열 때마다 새로 만든다)"""
 
@@ -234,6 +308,7 @@ class MirrorWindow:
         self.held: set[str] = set()
         self.placed = False
         self.save_job = None
+        self.editor: EditDialog | None = None  # 팝업 버튼을 고치는 창
 
         win = self.win = tk.Toplevel(root)
         win.title(TITLE)
@@ -274,6 +349,7 @@ class MirrorWindow:
 
         threading.Thread(target=self.poll, daemon=True).start()
         threading.Thread(target=self.send, daemon=True).start()
+        threading.Thread(target=self.poll_edit, daemon=True).start()
         self.draw_state()
         self.pump()
 
@@ -383,6 +459,8 @@ class MirrorWindow:
     def close(self) -> None:
         if self.closing:
             return
+        if self.editor:
+            self.editor.cancel()
         self.closing = True
         self.outbox.put(None)
         if self.save_job:
@@ -446,6 +524,11 @@ class MirrorWindow:
                 kind, value = self.frames.get_nowait()
                 if kind == "frame":
                     self.show_frame(*value)
+                elif kind == "edit":
+                    self.show_edit(value)
+                elif kind == "edit_done":
+                    if self.editor and self.editor.seq == value[0]:
+                        self.editor.done(value[1])
                 else:
                     self.set_state(value)
         except queue.Empty:
@@ -487,6 +570,34 @@ class MirrorWindow:
                 # 도우미가 꺼졌거나 받은 장이 이상하다. 브라우저 페이지처럼 잠시 쉬고 다시 받는다
                 self.put("state", DISCONNECTED)
                 time.sleep(2)
+
+    # ---- 팝업 버튼 수정 ----
+
+    # 1초마다 수정 요청을 읽는다. 바뀌었을 때만 창 스레드에 넘긴다
+    def poll_edit(self) -> None:
+        last = None
+        while not self.closing:
+            try:
+                with OPENER.open(BASE + "edit", timeout=5) as res:
+                    req = json.loads(res.read())
+                if req != last:
+                    last = req
+                    self.put("edit", req)
+            except (OSError, ValueError):
+                pass  # 도우미가 꺼졌다. 화면 받기 쪽에 안내가 뜬다
+            time.sleep(1)
+
+    def show_edit(self, req: dict) -> None:
+        if self.editor and self.editor.seq == req.get("seq"):
+            return
+        self.close_edit()  # 다른 창에서 먼저 답했거나 새 요청이 왔다
+        if req.get("seq"):
+            self.editor = EditDialog(self, req)
+
+    def close_edit(self) -> None:
+        if self.editor:
+            self.editor.win.destroy()
+            self.editor = None
 
     # ---- 누르기 ----
 

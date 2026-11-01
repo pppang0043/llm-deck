@@ -493,6 +493,8 @@ class DeviceLoop:
         self.transport = None
         # 기기 화면 미러링 (브라우저 창). 화면 조각은 연결 쪽에서 바로 넘긴다
         self.view = mirror.Mirror(cfg.get("mirror", {}), lambda: self.transport)
+        self.view.orca = self.sessions  # 미러 창에서 팝업 버튼을 고친다
+        self.sessions.open_editor = self.view.open_editor
         frames.mirror_sink = self.view.on_frame
         self.first = True  # 아직 첫 사용량 메시지를 보내지 못했다
         self.sent_mic = True
@@ -671,6 +673,10 @@ class DeviceLoop:
         orca_state = self.sessions.pending()
         if orca_state:
             extra["orca"] = orca_state
+        extra.update(self.sessions.pending_pop_commands() or {})
+        pop = self.sessions.pending_pop()
+        if pop:  # 고친 키워드 이름은 단축키 화면에도 바로 보이게 함께 보낸다
+            extra["pop"], extra["keywords"] = pop, typer.ITEMS
         answer = self.ask.pending()
         if answer:
             extra["ask"] = answer

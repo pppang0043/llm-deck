@@ -47,9 +47,9 @@ static const Shortcut DEFAULT_KEYWORDS[] = {
     {"deploy", "배포", "\"배포해줘\"를", nullptr, KW_COLOR},
     {"push", "푸쉬", "\"푸쉬해줘\"를", nullptr, KW_COLOR},
     {"error", "에러 확인", "\"에러 확인\"을", nullptr, KW_COLOR},
-    {"orchestration", "/orch", "\"/orchestration\"을", nullptr, KW_SLASH_COLOR},
-    {"clear", "/clear", "\"/clear\"를", nullptr, KW_SLASH_COLOR},
-    {"compact", "/compact", "\"/compact\"을", nullptr, KW_SLASH_COLOR},
+    {"orchestration", "orch", "\"/orchestration\"을", nullptr, KW_SLASH_COLOR},
+    {"clear", "clr", "\"/clear\"를", nullptr, KW_SLASH_COLOR},
+    {"compact", "컴팩", "\"/compact\"을", nullptr, KW_SLASH_COLOR},
 };
 // 리모컨 (블루투스 키보드 모드, ble_hid.h): PC 도우미 없이 발표 슬라이드·영상 등을 다룬다.
 // id 는 아래 remote_send 가 키로 바꾼다
@@ -226,7 +226,9 @@ static void kw_fill() {
   if (kw_store.count) {
     for (; n < kw_store.count; n++) {
       const KwSlot &k = kw_store.slot[n];
-      KEYWORDS[n] = {k.id, k.name, k.obj, nullptr, k.name[0] == '/' ? KW_SLASH_COLOR : KW_COLOR};
+      // 이름에 / 가 없어도 (clr, 컴팩) 입력하는 글이 / 명령이면 청록. obj 는 "입력할 글"을 처럼 온다 (companion/typer.py)
+      bool slash = k.name[0] == '/' || strncmp(k.obj, "\"/", 2) == 0;
+      KEYWORDS[n] = {k.id, k.name, k.obj, nullptr, slash ? KW_SLASH_COLOR : KW_COLOR};
     }
   } else {
     for (; n < COUNT(DEFAULT_KEYWORDS); n++) KEYWORDS[n] = DEFAULT_KEYWORDS[n];

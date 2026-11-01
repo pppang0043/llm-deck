@@ -9,6 +9,7 @@
   - 기기에서 세션을 길게 누르면 빠른 답: {"orca": "reply", "id": id, "reply": "allow" | "deny" | "continue"}.
     정해 둔 답(REPLIES)만 보내고, 보내기 직전에 상태를 다시 읽어 그 답이 맞는 상태일 때만 보낸다.
   - 빠른 답 창의 숨기기: {"orca": "hide", "id": id}. 그 터미널을 목록에서 뺀다 (HIDDEN_FILE 에 적어 도우미를 다시 켜도 빠진다).
+  - 세션 팝업 버튼을 꾹 누른 수정·위치 조정: {"orca": "edit", "key": id}, 보드에 저장된 내용 {"orca": "saved_*"}. popbuttons.py 참고.
   - 받아쓰기에서 "슬래시 커밋" 처럼 말하면 "/commit" 으로 바꾼다 (Claude Code 의 / 명령·스킬). slash_words 참고.
 ORCA 가 꺼져 있거나 orca 명령을 못 찾으면 {"ok": false} 를 보낸다.
 """
@@ -27,6 +28,7 @@ import time
 import uuid
 from pathlib import Path
 
+import popbuttons
 import typer
 
 POLL_SECONDS = 2  # 직접 묻기는 수십 ms 라 자주 읽어도 된다
@@ -48,9 +50,10 @@ WORKER_PROMPT = "You are working inside Orca, a multi-agent IDE."
 KEYS = {"tab": ("Tab", "\t", False), "enter": ("Enter", "", True), "tab_enter": ("Tab + Enter", "\t", True),
         # 이름이 "clear" 면 /clear 키워드(typer.KEYWORDS)와 겹쳐 /clear 를 눌러도 지우기가 됐다
         "erase": ("지우기", None, False),
+        "resume": ("/resume", "/resume", True),
         # Esc 한 번: 일하는 Claude 를 멈추거나 열린 고르기 창을 닫는다 (사용자가 Esc 버튼을 직접 누를 때만)
         "esc": ("Esc", "\x1b", False)}
-# 팝업 /스킬 의 스킬 ("skill:" + 이름). "/이름 " 만 넣고 Enter 는 치지 않는다 (뒤에 할 일을 이어 적는다).
+# 팝업 스킬 버튼의 스킬 ("skill:" + 이름). "/이름 " 만 넣고 Enter 는 치지 않는다 (뒤에 할 일을 이어 적는다).
 # 여기 있는 것만 입력한다. 기기 orcapanel.cpp 의 SKILLS 와 같게
 SKILLS = ("proto-design", "minipc")
 # Claude Code 는 키를 한 번에 많이 받으면 일부만 처리한다 (10줄 치를 몰아 보내면 글자가 섞였다). 5줄씩 나눠 보낸다
@@ -506,6 +509,8 @@ class Orca:
         self.state: dict | None = None
         self.sent: dict | None = None
         self.pending_toast: str | None = None
+        self.buttons = popbuttons.PopButtons()
+        self.open_editor = lambda: None  # 수정 요청을 받으면 미러 창을 연다 (main.py 가 mirror 에 잇는다)
         try:
             self.hidden: set[str] = set(json.loads(HIDDEN_FILE.read_text(encoding="utf-8")))
         except (OSError, ValueError, TypeError):
@@ -640,13 +645,70 @@ class Orca:
     def resend(self) -> None:
         """기기가 새로 연결됐을 때: 다음 pending() 에 다시 보낸다."""
         self.sent = None
+        self.buttons.resend()
+
+    def pending_pop(self) -> list | None:
+        """기기로 보낼 팝업 버튼 목록 (연결 때와 바뀌었을 때만)."""
+        return self.buttons.pending()
+
+    # --- 팝업 버튼 수정·위치 조정 ---
+
+    def edit_button(self, key) -> None:
+        """기기에서 팝업 버튼의 수정을 골랐다. 입력은 미러 창에서 한다."""
+        if self.buttons.begin_edit(key) is None:
+            print(f"[orca] 수정 요청의 버튼을 모릅니다: {key}")
+            self.pending_toast = "PC 도우미가 모르는 버튼입니다"
+            self.buttons.resend()
+            return
+        self.pending_toast = "PC 미러 창에서 수정하세요"
+        self.open_editor()
+
+    def new_button(self, after) -> None:
+        """기기에서 팝업 버튼의 신규를 골랐다."""
+        if self.buttons.begin_new(after) is None:
+            self.pending_toast = f"버튼은 {popbuttons.MAX_BUTTONS}개까지입니다"
+            return
+        self.pending_toast = "PC 미러 창에서 입력하세요"
+        self.open_editor()
+
+    def pending_pop_commands(self) -> dict | None:
+        """보드에 물을 것, 저장할 것 ({"pop_sync"}, {"pop_set"})."""
+        return self.buttons.commands()
+
+    def current_edit(self) -> dict:
+        """미러 창이 띄울 수정 요청 (없으면 {})."""
+        return self.buttons.current_edit()
+
+    def answer_edit(self, body) -> tuple[int, dict]:
+        """미러 창의 저장·취소. (HTTP 코드, 답)."""
+        return self.buttons.answer(body)
 
     # --- 세션 고르기와 입력 ---
 
     def on_event(self, event: dict) -> None:
         """기기에서 세션 줄을 눌렀을 때: {"orca": "activate", "id": 짧은 id}. 받아쓰기({"ask": ...})는 assistant.py 가 맡는다.
-        세션 팝업을 눌렀을 때: {"orca": "send", "id": 짧은 id, "key": "tab" | "enter" | "tab_enter" | "skill:" 스킬 | 키워드 이름}."""
-        if "ask" in event or not isinstance(event.get("id"), str):
+        세션 팝업을 눌렀을 때: {"orca": "send", "id": 짧은 id, "key": "tab" | "enter" | "tab_enter" | "skill:" 스킬 | 키워드 이름}.
+        팝업 버튼 수정·위치 조정은 세션과 상관없어 id 가 없다."""
+        if "ask" in event:
+            return
+        if event.get("orca") == "edit":
+            self.edit_button(event.get("key"))
+            return
+        if event.get("orca") == "new":
+            self.new_button(event.get("after"))
+            return
+        if event.get("orca") == "saved_item":
+            if self.buttons.on_saved_item(event):
+                print(f"[orca] 팝업 버튼을 고쳤습니다: {event['id']}")
+                self.pending_toast = "저장했습니다"
+            return
+        if event.get("orca") == "saved_row":
+            self.buttons.on_saved_row(event)
+            return
+        if event.get("orca") == "saved_end":
+            self.buttons.on_saved_end()
+            return
+        if not isinstance(event.get("id"), str):
             return
         if event.get("orca") == "activate":
             threading.Thread(target=self.activate, args=(event["id"],), daemon=True).start()
@@ -701,8 +763,12 @@ class Orca:
         return " ".join("/" + c for c in self.commands()[:60])
 
     def send_key(self, short: str, name: str) -> None:
-        """세션 터미널에 키워드(글 + Enter)나 Tab / Enter 를 보낸다. 앞에 있는 창과 상관없이 그 세션에만 간다."""
-        if name in KEYS:
+        """세션 터미널에 키워드(글 + Enter)나 Tab / Enter 를 보낸다. 앞에 있는 창과 상관없이 그 세션에만 간다.
+        미러 창에서 고쳐 저장한 글이 있으면 그 글이 먼저다 (resume, proto 도)."""
+        saved = self.buttons.text(name)
+        if saved is not None:
+            shown, text, enter = saved.strip(), saved, typer.wants_enter(saved)
+        elif name in KEYS:
             shown, text, enter = KEYS[name]
         elif name.startswith("skill:") and name[6:] in SKILLS:
             shown, text, enter = "/" + name[6:], f"/{name[6:]} ", False

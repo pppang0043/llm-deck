@@ -52,6 +52,7 @@ class FakeOrca(Part):
         super().__init__()
         self.resends = 0
         self.state = None
+        self.pop = None
 
     def resend(self):
         self.resends += 1
@@ -59,6 +60,13 @@ class FakeOrca(Part):
     def pending(self):
         state, self.state = self.state, None
         return state
+
+    def pending_pop_commands(self):
+        return None
+
+    def pending_pop(self):
+        pop, self.pop = self.pop, None
+        return pop
 
 
 class FakePhotos(Part):
@@ -122,6 +130,9 @@ class FakeMirror:
         self.extra = None
 
     def on_frame(self, body):
+        pass
+
+    def open_editor(self):
         pass
 
     def link_lost(self):
@@ -604,6 +615,22 @@ def test_quiet_tick_sends_nothing_extra(rig):
     rig.transports = [usb]
     rig.run(ticks=4)
     assert _small_messages(usb) == []
+
+
+def test_pop_is_sent_with_keywords(rig):
+    # 팝업 버튼을 고치면 단축키 화면의 키워드 이름도 함께 바뀌어야 한다
+    usb = FakeTransport()
+    rig.transports = [usb]
+
+    def fill(count):
+        if count == 1:
+            rig.parts["Orca"].pop = [[{"id": "commit", "name": "올리기", "s": False}], [], []]
+
+    rig.on_sleep = fill
+    rig.run(ticks=3)
+    sent = _small_messages(usb)[0]
+    assert sent["pop"] == [[{"id": "commit", "name": "올리기", "s": False}], [], []]
+    assert sent["keywords"] == main.typer.ITEMS
 
 
 def test_small_updates_are_forwarded_with_host(rig):

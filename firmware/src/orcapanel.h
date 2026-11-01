@@ -13,6 +13,10 @@
 //              띄운 버튼을 또 누르면 {"ask": "start", "mode": "dictate", "orca": id} ... {"ask": "stop"} (askpanel.cpp)
 //              길게 누르면 빠른 답 창: 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속 -> {"orca": "reply", "id": id, "reply": "allow" | "deny" | "continue"}
 // 상태가 바뀌면 (새 권한 요청, 작업 중 -> 완료·입력 기다림) 어느 화면에서나 알림과 소리 (처음 받은 목록은 알리지 않는다).
+// 팝업 버튼을 꾹 누르면 수정 / 위치 조정 / 취소. 배치와 이름의 원본은 PC 이고, 기기는 받은 것을 NVS 에 둔다.
+//   PC -> 기기: {"pop": [[{"id", "name", "s": 입력 글이 / 로 시작}, ...], [...], [...]]}  항상 3줄. 없으면 기본 배치
+//   기기 -> PC: {"orca": "edit", "key": id}  수정은 PC 미러 창에서 한다
+//              {"orca": "layout", "rows": [[id, ...], [...], [...]]}  위치 조정 완료. 버튼 id 를 모두 한 번씩
 
 void orcapanel_build(lv_obj_t *parent);
 // 상태줄 아래 영역. 화면을 돌리면 다시 부른다.
@@ -27,3 +31,8 @@ bool orcapanel_running();
 void orcapanel_refresh();
 // 키워드 단축키 목록이 바뀌면 세션 팝업 버튼을 다시 만든다 (pcpanel.cpp 가 부른다)
 void orcapanel_keywords_changed();
+// PC 가 보낸 {"pop": [...]} (link.cpp 가 부른다)
+void orcapanel_set_pop(JsonArrayConst rows);
+// PC 가 고친 내용을 보드에 저장한다 {"pop_set"}, 저장된 것을 PC 로 보낸다 {"pop_sync"}
+void orcapanel_save_edits(JsonArrayConst list);
+void orcapanel_send_saved();

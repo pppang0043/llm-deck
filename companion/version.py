@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PROTO = 6
+PROTO = 7
 # git 이 없거나 저장소 밖에서 돌 때 보여줄 버전
 VERSION = "proto6"
 # 기기가 버전을 알려 주지 않은 채 사용량을 이만큼 보내면 오래된 펌웨어로 본다

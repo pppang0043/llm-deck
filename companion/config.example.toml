@@ -107,14 +107,15 @@ type = false
 # text 가 띄어쓰기로 끝나면 Enter 는 누르지 않는다 (뒤에 이어 적을 때).
 # 7개까지 (마지막 칸 Tab + Enter 는 늘 있다). name 은 버튼 이름 12자까지, text 는 200자까지 (줄바꿈·탭은 안 됩니다).
 # 이 부분을 지우거나 주석으로 두면 아래와 같은 기본 목록을 씁니다. 바꾼 뒤에는 PC 도우미를 다시 켜세요.
+# ORCA 세션 팝업에서 버튼을 꾹 눌러 고친 이름·글·위치는 보드에 저장되어 여기 적은 값보다 먼저 쓰입니다.
 # items = [
 #   { name = "커밋", text = "커밋해줘" },
 #   { name = "배포", text = "배포해줘" },
 #   { name = "푸쉬", text = "푸쉬해줘" },
 #   { name = "에러 확인", text = "에러 확인" },
-#   { name = "/orch", text = "/orchestration " },
-#   { name = "/clear", text = "/clear" },
-#   { name = "/compact", text = "/compact" },
+#   { name = "orch", text = "/orchestration " },
+#   { name = "clr", text = "/clear" },
+#   { name = "컴팩", text = "/compact" },
 # ]
 
 [orca]

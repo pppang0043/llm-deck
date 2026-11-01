@@ -7,6 +7,7 @@
 창이 열려 있는 동안(페이지가 화면을 받아 가는 동안)만 기기에 {"mirror": true} 를 2초마다 보낸다.
 기기는 화면이 바뀔 때만 한 장을 보낸다 (펌웨어 mirror.h). 같은 색이 이어지는 것만 줄인 RGB565 라서 브라우저가 풀어 그린다. 창에서 누르기·끌기·떼기는 {"touch": {...}} 로,
 휠·키보드로 밀기는 누르기부터 떼기까지의 점들을 {"touch": [...]} 한 번에 보낸다. Esc 는 {"view": "home"}.
+ORCA 팝업 버튼 수정: 창이 1초마다 GET /edit 로 요청을 읽어 입력 창을 띄우고 POST /edit 로 답한다 (popbuttons.py).
 """
 
 import json
@@ -46,12 +47,25 @@ PAGE = """<!doctype html>
   .on { background: #3a4654; }
   #state { min-height: 1.4em; }
   button { background: #1c232b; color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  dialog { background: #14191f; color: #c8d0d8; border: 1px solid #2a323b; border-radius: 10px; width: min(360px, 90vw); }
+  dialog label { display: block; margin-bottom: 10px; }
+  dialog label[hidden] { display: none; }
+  dialog input { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 6px; font: inherit;
+                 -webkit-user-select: text; user-select: text; }
+  #editError { color: #ff8a80; min-height: 1.4em; margin-bottom: 8px; }
+  #editForm menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; padding: 0; }
 </style></head>
 <body>
   <canvas id="screen" width="320" height="240"></canvas>
   <div id="state">기기 화면을 기다리는 중...</div>
   <div id="zooms"><button data-zoom="0">맞춤</button> <button data-zoom="1">1배</button> <button data-zoom="2">2배</button> <button data-zoom="3">3배</button></div>
   <div id="help">휠·↑↓ 위아래로 밀기 · ←→ 좌우로 밀기 · Esc 홈</div>
+  <dialog id="edit"><form id="editForm">
+    <label>표시명 <input id="editName" maxlength="40"></label>
+    <label id="editTextRow">입력 내용 (띄어쓰기로 끝나면 Enter 없이 넣습니다) <input id="editText"></label>
+    <div id="editError"></div>
+    <menu><button type="button" id="editCancel">취소</button> <button type="submit">저장</button></menu>
+  </form></dialog>
 <script>
 const img = document.getElementById("screen"), ctx = img.getContext("2d"), state = document.getElementById("state");
 // 0 = 맞춤: 화면 전체가 창 안에 들어오게 키우거나 줄인다 (창 크기를 바꾸면 따라간다). 1~3 = 배율
@@ -138,6 +152,7 @@ img.addEventListener("wheel", e => {
   wheel = 0; lastSwipe = e.timeStamp;
 }, {passive: false});
 document.addEventListener("keydown", e => {
+  if (edit.open) return;  // 입력 창이 떠 있으면 키는 입력 창의 것 (Esc 로 기기가 홈으로 가지 않게)
   const moves = {ArrowDown: [0, -1], ArrowUp: [0, 1], ArrowRight: [-1, 0], ArrowLeft: [1, 0]};
   if (moves[e.key]) { e.preventDefault(); if (!e.repeat) swipe(...moves[e.key]); }
   else if (e.key === "Escape") post("home", {});
@@ -156,6 +171,44 @@ img.addEventListener("pointermove", e => {
 });
 img.addEventListener("pointerup", e => { if (down) { down = false; send(e, false); } });
 img.addEventListener("pointercancel", e => { if (down) { down = false; send(e, false); } });
+// ORCA 팝업 버튼 수정: 기기에는 키보드가 없어 여기서 입력한다. 다른 창에서 먼저 답하면 요청이 사라져 이 창도 닫는다
+const edit = document.getElementById("edit"), editName = document.getElementById("editName"),
+      editText = document.getElementById("editText"), editError = document.getElementById("editError");
+let editSeq = 0, editId = "";
+function editShow(req) {
+  const seq = req.seq || 0;
+  if (seq === editSeq) return;
+  editSeq = seq;
+  if (!seq) { if (edit.open) edit.close(); return; }
+  editId = req.id; editName.value = req.name; editText.value = req.text; editError.textContent = "";
+  document.getElementById("editTextRow").hidden = !req.has_text;
+  if (!edit.open) edit.showModal();
+  editName.focus();
+}
+function editCancel() {
+  if (edit.open) edit.close();
+  post("edit", {seq: editSeq, cancel: true}).catch(() => {});
+}
+document.getElementById("editCancel").onclick = editCancel;
+edit.addEventListener("cancel", e => { e.preventDefault(); editCancel(); });  // Esc
+document.getElementById("editForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  try {
+    const r = await post("edit", {seq: editSeq, id: editId, name: editName.value, text: editText.value});
+    if (r.ok || r.status === 409) edit.close();  // 409: 새 요청이 왔다. 곧 다시 읽는다
+    else editError.textContent = (await r.json()).error;
+  } catch (err) { editError.textContent = "도우미와 연결이 끊겼습니다"; }
+});
+async function editPoll() {
+  for (;;) {
+    try {
+      const r = await fetch("edit", {cache: "no-store"});
+      if (r.ok) editShow(await r.json());
+    } catch (e) {}
+    await new Promise(ok => setTimeout(ok, 1000));
+  }
+}
+editPoll();
 poll();
 </script></body></html>
 """
@@ -180,6 +233,7 @@ class Mirror:
         self.link = ""  # 붙어 있는(또는 마지막으로 붙었던) 연결 이름. "" = 도우미를 켜고 아직 못 붙음
         self.lost_at = 0.0  # 연결이 끊긴 시각 (0 = 붙어 있음)
         self.auto_open = False
+        self.orca = None  # ORCA 팝업 버튼 수정 요청을 묻는 곳 (main.py 가 넣는다)
         if not cfg.get("enabled", True):
             return
         try:
@@ -220,6 +274,11 @@ class Mirror:
                 time.sleep(0.5)
                 if self.app_watching():
                     return
+
+    def open_editor(self) -> None:
+        """팝업 버튼 수정 요청: 앱 창이 안 떠 있으면 연다. 앱이 없고 페이지도 안 보고 있으면 브라우저로."""
+        if not self.app_watching():
+            threading.Thread(target=open_window, args=(not self.watching(),), daemon=True).start()
 
     def on_frame(self, body: bytes) -> None:
         """기기가 보낸 화면 조각을 모은다 (transports/frames.py 가 부른다)"""
@@ -315,8 +374,22 @@ class Mirror:
                     self._reply(200, PAGE.encode(), "text/html; charset=utf-8")
                 elif path.startswith("frame"):
                     self._frame(path)
+                elif path == "edit":
+                    self._json(200, mirror.orca.current_edit() if mirror.orca else {})
                 else:
                     self._reply(404, b"", "text/plain")
+
+            def _json(self, code: int, value: dict) -> None:
+                self._reply(code, json.dumps(value, ensure_ascii=False).encode(), "application/json; charset=utf-8")
+
+            def _edit(self) -> None:
+                """팝업 버튼 수정 답. 저장한 글은 터미널에 입력되므로 _allowed 를 지나온 요청만 여기 온다"""
+                try:
+                    body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 8000)))
+                except (ValueError, TypeError):
+                    self._json(400, {"error": "잘못된 요청입니다"})
+                    return
+                self._json(*(mirror.orca.answer_edit(body) if mirror.orca else (409, {"error": "수정 요청이 없습니다"})))
 
             def _frame(self, path: str) -> None:
                 try:
@@ -348,8 +421,11 @@ class Mirror:
             def do_POST(self) -> None:
                 path = self._allowed()
                 # JSON 으로만 받는다 (다른 사이트의 폼 전송은 이 형식을 쓸 수 없다)
-                if path not in ("touch", "home") or self.headers.get("Content-Type") != "application/json":
+                if path not in ("touch", "home", "edit") or self.headers.get("Content-Type") != "application/json":
                     self._reply(404, b"", "text/plain")
+                    return
+                if path == "edit":
+                    self._edit()
                     return
                 try:
                     body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 2000)))

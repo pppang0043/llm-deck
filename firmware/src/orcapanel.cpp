@@ -1,5 +1,8 @@
 #include "orcapanel.h"
 
+#include <Preferences.h>
+#include "psram_json.h"
+
 #include "askpanel.h"
 #include "camera_ui.h"
 #include "completion_inbox.h"
@@ -10,6 +13,7 @@
 #include "ui.h"
 #include "quickpanel.h"
 #include "mirror.h"
+#include "orca_pop.h"
 #include "usb_drive.h"
 
 LV_FONT_DECLARE(font_ko_14);
@@ -26,11 +30,13 @@ LV_FONT_DECLARE(font_ko_20);
 #define GAP 6
 // 세션을 띄우면 아래에서 세션 버튼 위에 겹쳐 뜨는 단축키 팝업 (버튼을 여러 칸으로)
 #define POP_BTN_H 32
-#define POP_MAX 14  // 키워드 7개 (pcpanel 의 KW_MAX) + /스킬 + 지우기 + 맨 아래 줄 5개
-#define POP_ROWS 3  // 키워드 두 줄 (둘째 줄 끝에 /스킬, 지우기), 맨 아래 줄: 녹음, Tab, Tab + Enter, Enter, Esc
 #define POP_BTN_MIN_W 52  // 버튼이 이보다 좁아지지 않는다. 줄에 다 안 들어가면 그 줄을 옆으로 밀어 본다
 #define POP_FIT_MAX 5     // 버튼이 이만큼 이하인 줄은 밀지 않고 한 화면에 다 넣는다 (넘치면 버튼을 줄인다)
-#define POP_DICTATE_COLOR 0x7A2E2A
+// 위치 조정: 줄이 넘치면 옆으로 밀지 않고 접어 모든 자리가 보인다. 버튼 16개가 어떻게 놓여도 화면 안에 든다
+// (가로 320x208: 5칸, 가장 높을 때 202px. 세로 240x288: 3칸, 262px)
+#define POP_MOVE_CELL_MIN 54
+#define POP_MOVE_BTN_H 26
+#define POP_MOVE_EMPTY_H 16  // 빈 줄. 놓을 줄은 가장 가까운 줄이라 낮아도 잘 들어간다
 #define POP_DRAG_START 10  // 이만큼 내려야 끌기 (그 전에는 버튼 누르기)
 #define POP_DRAG_CLOSE 40  // 놓을 때 이만큼 내렸으면 닫는다
 #define ACTIVE_HOLD_MS 3000  // 탭 저장 지연 동안 PC 의 예전 선택으로 되돌아가지 않는다
@@ -80,7 +86,26 @@ static int pop_count = 0;
 static bool pop_open = false;
 static int area_w, area_h;  // 마지막 배치 (팝업 자리를 정한다)
 static void set_pop(bool open);
-// /스킬 을 누르면 팝업 바로 위에 뜨는 스킬 고르기. 누르면 "/이름 " 만 넣고 (Enter 없이) 뒤에 할 일을 이어 적는다.
+// 팝업 버튼 표 (내부 RAM 을 아끼려고 PSRAM 에 둔다). 버튼의 user_data 가 pop_tab 안을 가리키므로 버튼을 먼저 지우고 바꾼다
+static PopTable *pop_tab, *pop_next;
+static bool pop_from_pc = false;     // pop_tab 이 PC 가 보낸 표다 (아니면 기본 배치)
+static bool pop_next_ready = false;  // pop_next 를 아직 적용하지 않았다 (꾹 누른 창, 위치 조정이 끝난 뒤에)
+static bool pop_kw_dirty = false;    // 위 동안 키워드가 바뀌었다
+static bool pop_moved = false;       // 위치 조정을 PC 로 보내 버튼이 pop_tab 과 다르다. 다음 pop 은 같아도 적용한다
+// 꾹 누른 창 (수정 / 위치 조정 / 취소)
+static lv_obj_t *pe, *pe_title;
+static char pe_id[sizeof(PopItem::id)] = "";  // 비어 있으면 닫혀 있다
+static bool pop_long = false;  // 꾹 누른 뒤 손을 떼면 오는 CLICKED 는 보내지 않는다
+// 위치 조정: 제목 자리의 안내와 완료 / 취소, 손가락을 따라오는 버튼 모양, 들어갈 자리 표시
+static lv_obj_t *pop_shield;  // 뒤의 세션 버튼과 화면을 막는다
+static lv_obj_t *move_bar, *move_ghost, *move_ghost_lbl, *move_mark;
+static lv_obj_t *move_btn;  // 끌고 있는 버튼
+static bool pop_mode = false;
+static void pop_mode_end(bool restore);
+static void close_pe();
+static void pop_edit_cancel();
+static void pop_apply_next();
+// 스킬 을 누르면 팝업 바로 위에 뜨는 스킬 고르기. 누르면 "/이름 " 만 넣고 (Enter 없이) 뒤에 할 일을 이어 적는다.
 // 이름은 companion/orca.py 의 SKILLS 에도 있어야 PC 가 입력한다
 static const char *const SKILLS[] = {"proto-design", "minipc"};
 static lv_obj_t *sk, *sk_row;
@@ -493,6 +518,8 @@ static void pop_drag(lv_event_t *e) {
   if (!indev) return;
   lv_point_t p;
   lv_indev_get_point(indev, &p);
+  if (code == LV_EVENT_PRESSED) pop_long = false;
+  if (pop_mode) return;  // 위치 조정 중에는 아래로 끌어 닫지 않는다
   if (code == LV_EVENT_PRESSED) {
     lv_anim_del(pop, pop_translate);
     drag_y0 = p.y, drag_dy = 0;
@@ -531,8 +558,10 @@ static void add_pop_drag(lv_obj_t *obj) {
 
 // 팝업 버튼: 띄운 세션에만 보낸다 (PC 의 앞 창이 아니라 ORCA 로, companion/orca.py)
 static void pop_event(lv_event_t *e) {
-  const char *key = (const char *)lv_event_get_user_data(e);
+  if (pop_mode || pop_long || pe_id[0]) return;  // 위치 조정 중이거나 꾹 누른 뒤 손을 뗀 것: 키를 보내지 않는다
   if (dragged) return;  // 끌어서 닫는 중이었다
+  const PopItem *item = (const PopItem *)lv_obj_get_user_data(lv_event_get_current_target(e));
+  const char *key = item->id;
   if (strcmp(key, "skills") == 0) {  // 스킬 고르기를 열고 닫는다 (PC 로는 보내지 않는다)
     sk_open = !sk_open;
     place_pop();
@@ -558,49 +587,184 @@ static void pop_event(lv_event_t *e) {
   snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"%s\"}", active_id, key);
   link_send_event(json);
   // Tab, 지우기, Esc 만 빼면 모두 끝에 Enter 를 친다 (companion/orca.py 의 KEYS, 키워드): 보냈으니 닫는다.
-  // / 명령 줄 (/orchestration, /clear 처럼 이름이 / 로 시작) 은 이어서 다른 걸 누르도록 그대로 둔다
-  const char *name = (const char *)lv_obj_get_user_data(lv_event_get_target(e));
-  if (strcmp(key, "tab") != 0 && strcmp(key, "esc") != 0 && name[0] != '/') close_pop();
+  // / 명령 줄 (청록 버튼: orch, clr, 리슘 처럼 이름에 / 가 없다) 은 이어서 다른 걸 누르도록 그대로 둔다
+  if (!pop_stays_open(key, item->slash)) close_pop();
 }
 
-static lv_obj_t *add_pop_btn(int row, const char *key, const char *name, uint32_t color) {
-  if (pop_count >= POP_MAX) return nullptr;
+// 꾹 누르면 수정 / 위치 조정 / 취소. 손을 떼기 전에 뜨므로 손을 뗄 때까지 아무것도 누르지 않게 한다
+static void pop_long_event(lv_event_t *e) {
+  if (pop_mode || dragged || pe_id[0]) return;
+  pop_long = true;
+  lv_indev_wait_release(lv_indev_get_act());
+  touched_at = lv_tick_get();
+  if (!link_pc_connected()) {
+    ui_toast("연결된 PC가 없습니다", 2000);
+    return;
+  }
+  const PopItem *item = (const PopItem *)lv_obj_get_user_data(lv_event_get_current_target(e));
+  sk_open = false;
+  place_pop();
+  snprintf(pe_id, sizeof(pe_id), "%s", item->id);
+  lv_label_set_text(pe_title, item->name);
+  lv_obj_clear_flag(pop_shield, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(pop_shield);
+  lv_obj_clear_flag(pe, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(pe);
+}
+
+static void pop_area(lv_obj_t *obj, PopRect *out) {
+  lv_area_t a;
+  lv_obj_get_coords(obj, &a);
+  *out = {a.x1, a.y1, a.x2, a.y2};
+}
+
+// 손가락 자리의 줄과 그 줄에서의 순서 (끄는 버튼은 빼고 센다). at 은 들어갈 자리 표시의 왼쪽 위 (화면 좌표)
+static void pop_find_slot(const lv_point_t &p, int *row, int *index, lv_point_t *at) {
+  PopRect areas[POP_ROWS], btns[POP_MAX];
+  for (int r = 0; r < POP_ROWS; r++) pop_area(pop_rows[r], &areas[r]);
+  *row = pop_drop_row(areas, POP_ROWS, p.y);
+  lv_obj_t *r = pop_rows[*row];
+  int n = 0, cnt = lv_obj_get_child_cnt(r);
+  for (int k = 0; k < cnt; k++) {
+    lv_obj_t *b = lv_obj_get_child(r, k);
+    if (b != move_btn) pop_area(b, &btns[n++]);
+  }
+  *index = pop_drop_index(btns, n, p.x, p.y);
+  if (*index < n) {
+    *at = {(lv_coord_t)(btns[*index].x1 - 4), (lv_coord_t)btns[*index].y1};
+  } else if (n) {
+    *at = {(lv_coord_t)(btns[n - 1].x2 + 1), (lv_coord_t)btns[n - 1].y1};
+  } else {
+    *at = {(lv_coord_t)areas[*row].x1, (lv_coord_t)areas[*row].y1};
+  }
+}
+
+// 팝업 안의 자리 (화면 좌표에서 빼고, 팝업 안으로 맞춘다)
+static void move_to(lv_obj_t *obj, int x, int y) {
+  lv_area_t a;
+  lv_obj_get_content_coords(pop, &a);
+  int w = lv_obj_get_width(obj), h = lv_obj_get_height(obj);
+  lv_obj_set_pos(obj, LV_CLAMP(0, x - a.x1, lv_area_get_width(&a) - w), LV_CLAMP(0, y - a.y1, lv_area_get_height(&a) - h));
+}
+
+static void move_show(const lv_point_t &p) {
+  move_to(move_ghost, p.x - lv_obj_get_width(move_ghost) / 2, p.y - lv_obj_get_height(move_ghost) / 2);
+  int row, index;
+  lv_point_t at;
+  pop_find_slot(p, &row, &index, &at);
+  move_to(move_mark, at.x, at.y);
+}
+
+static void move_stop() {
+  if (move_btn) lv_obj_set_style_opa(move_btn, LV_OPA_COVER, 0);
+  move_btn = nullptr;
+  lv_obj_add_flag(move_ghost, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(move_mark, LV_OBJ_FLAG_HIDDEN);
+}
+
+// 위치 조정: 버튼을 누른 채 끌면 그 모양이 따라오고, 놓으면 그 자리로 옮긴다 (보내는 것은 완료를 눌렀을 때)
+static void pop_move_event(lv_event_t *e) {
+  if (!pop_mode) return;
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_indev_t *indev = lv_indev_get_act();
+  if (!indev) return;
+  lv_obj_t *b = lv_event_get_current_target(e);
+  lv_point_t p;
+  lv_indev_get_point(indev, &p);
+  if (code == LV_EVENT_PRESSED) {
+    const PopItem *item = (const PopItem *)lv_obj_get_user_data(b);
+    move_btn = b;
+    lv_obj_set_style_opa(b, LV_OPA_40, 0);
+    lv_obj_set_size(move_ghost, lv_obj_get_width(b), lv_obj_get_height(b));
+    lv_obj_set_style_bg_color(move_ghost, lv_color_hex(pop_color(item->id, item->slash)), 0);
+    lv_label_set_text(move_ghost_lbl, item->name);
+    lv_obj_clear_flag(move_ghost, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(move_mark, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(move_mark);
+    lv_obj_move_foreground(move_ghost);
+    move_show(p);
+    return;
+  }
+  if (b != move_btn) return;
+  if (code == LV_EVENT_PRESSING) {
+    move_show(p);
+    return;
+  }
+  if (code == LV_EVENT_RELEASED) {
+    int row, index;
+    lv_point_t at;
+    pop_find_slot(p, &row, &index, &at);
+    if (lv_obj_get_parent(b) != pop_rows[row]) lv_obj_set_parent(b, pop_rows[row]);
+    lv_obj_move_to_index(b, index);
+  }
+  move_stop();
+  place_pop();
+}
+
+static void add_pop_btn(int row, const PopItem *item) {
+  if (pop_count >= POP_MAX) return;
   lv_obj_t *b = lv_btn_create(pop_rows[row]);
   pop_count++;
-  lv_obj_set_user_data(b, (void *)name);  // 원래 이름 (라벨 글자는 넘치면 LVGL 이 "..." 로 바꿔 둔다)
+  lv_obj_set_user_data(b, (void *)item);  // 원래 이름 (라벨 글자는 넘치면 LVGL 이 "..." 로 바꿔 둔다)
   lv_obj_set_style_radius(b, 8, 0);
   lv_obj_set_style_shadow_width(b, 0, 0);
   lv_obj_set_style_pad_all(b, 2, 0);
-  lv_obj_set_style_bg_color(b, lv_color_hex(color), 0);
-  lv_obj_add_event_cb(b, pop_event, LV_EVENT_CLICKED, (void *)key);
+  lv_obj_set_style_bg_color(b, lv_color_hex(pop_color(item->id, item->slash)), 0);
+  lv_obj_add_event_cb(b, pop_event, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(b, pop_long_event, LV_EVENT_LONG_PRESSED, NULL);
   add_pop_drag(b);
-  lv_obj_t *lbl = add_label(b, name, &font_ko_14, lv_color_white());
+  lv_obj_add_event_cb(b, pop_move_event, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(b, pop_move_event, LV_EVENT_PRESSING, NULL);
+  lv_obj_add_event_cb(b, pop_move_event, LV_EVENT_RELEASED, NULL);
+  lv_obj_add_event_cb(b, pop_move_event, LV_EVENT_PRESS_LOST, NULL);
+  lv_obj_t *lbl = add_label(b, item->name, &font_ko_14, lv_color_white());
   lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);  // 한 줄로, 넘치면 ...
   lv_obj_set_size(lbl, LV_PCT(100), lv_font_get_line_height(&font_ko_14));
   lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(lbl);
-  return b;
+  if (strcmp(item->id, "dictate") == 0) pop_dictate = b;
 }
 
-// 키워드 버튼 (PC 가 보낸 목록이면 그 이름) 두 줄 (윗줄이 하나 더 많게), 그 아래 키
-static void fill_pop() {
+// 기본 배치 (PC 가 표를 보낸 적이 없을 때): 키워드 (PC 가 보낸 목록이면 그 이름) 는 윗줄에 (orch 만 둘째 줄), 그 아래 키
+static void default_pop(PopTable *t) {
+  memset(t, 0, sizeof(*t));
+  t->version = POP_TABLE_VERSION;
+  int n = 0;
+  auto add = [&](int row, const char *id, const char *name, bool slash) {
+    if (n >= POP_MAX) return;
+    PopItem &item = t->item[n++];
+    snprintf(item.id, sizeof(item.id), "%s", id);
+    snprintf(item.name, sizeof(item.name), "%s", name);
+    item.slash = slash;
+    t->rows[row]++;
+  };
   const char *id, *name;
   uint32_t color;
-  int kw = 0;
-  for (int i = 0; pcpanel_keyword(i, &id, &name, &color); i++) kw += strcmp(id, "tab_enter") != 0;
-  int n = 0;
+  // 줄 순서대로 쌓는다
   for (int i = 0; pcpanel_keyword(i, &id, &name, &color); i++) {
-    if (strcmp(id, "tab_enter") == 0) continue;  // 아래 키 버튼과 겹친다
-    add_pop_btn(n++ < (kw + 1) / 2 ? 0 : 1, id, name, color);
+    if (strcmp(id, "tab_enter") != 0 && strcmp(id, "orchestration") != 0) add(0, id, name, color == POP_SLASH_COLOR);  // tab_enter 는 아래 키 버튼과 겹친다
   }
-  // 입력칸에 쓴 글을 지운다 (Ctrl+U). / 명령이 아니지만 옆의 /clear 들과 같은 모양으로 (pcpanel 의 KW_SLASH_COLOR)
-  add_pop_btn(1, "skills", "/스킬", 0x16808C);
-  add_pop_btn(1, "erase", "/지우기", 0x16808C);
-  pop_dictate = add_pop_btn(2, "dictate", "녹음", POP_DICTATE_COLOR);
-  add_pop_btn(2, "tab", "Tab", 0x3A4350);
-  add_pop_btn(2, "tab_enter", "Tab + Enter", 0x5B6573);
-  add_pop_btn(2, "enter", "Enter", 0x3A4350);
-  add_pop_btn(2, "esc", "Esc", 0x3A4350);
+  for (int i = 0; pcpanel_keyword(i, &id, &name, &color); i++) {
+    if (strcmp(id, "orchestration") == 0) add(1, id, name, color == POP_SLASH_COLOR);
+  }
+  add(1, "resume", "리슘", true);
+  add(1, "skill:proto-design", "proto", true);  // "/proto-design " 만 넣는다 (뒤에 할 일을 이어 적는다)
+  // 입력칸에 쓴 글을 지운다 (Ctrl+U)
+  add(1, "erase", "지우기", false);
+  add(1, "skills", "스킬", false);
+  add(2, "dictate", "녹음", false);
+  add(2, "tab", "Tab", false);
+  add(2, "tab_enter", "Tab+E", false);
+  add(2, "enter", "Enter", false);
+  add(2, "esc", "Esc", false);
+}
+
+static void fill_pop() {
+  if (!pop_from_pc) default_pop(pop_tab);
+  int at = 0;
+  for (int r = 0; r < POP_ROWS; r++) {
+    for (int k = 0; k < pop_tab->rows[r]; k++) add_pop_btn(r, &pop_tab->item[at++]);
+  }
 }
 
 // 스킬 버튼: "/이름 " 을 넣고 스킬 고르기만 닫는다 (팝업은 그대로, /orchestration 처럼)
@@ -664,7 +828,429 @@ static void build_sk() {
   }
 }
 
+static void pop_save() {
+  Preferences prefs;
+  if (prefs.begin("orca_pop")) {
+    prefs.putBytes("table", pop_tab, sizeof(PopTable));
+    prefs.end();
+  }
+}
+
+static void pop_load() {
+  pop_tab = (PopTable *)ps_calloc(1, sizeof(PopTable));
+  pop_next = (PopTable *)ps_calloc(1, sizeof(PopTable));
+  Preferences prefs;
+  if (prefs.begin("orca_pop", true)) {
+    pop_from_pc = prefs.getBytes("table", pop_tab, sizeof(PopTable)) == sizeof(PopTable) &&
+                  pop_tab->version == POP_TABLE_VERSION && pop_table_ok(*pop_tab);
+    prefs.end();
+  }
+}
+
+static void pop_clear() {
+  for (lv_obj_t *r : pop_rows) lv_obj_clean(r);
+  pop_count = 0;
+  pop_dictate = nullptr;
+}
+
+// 버튼을 표대로 다시 만든다. 누르던 버튼이 지워지면 LVGL 은 손가락 밑의 새 버튼을 누른 것으로 친다:
+// 다른 키가 가지 않게 손을 뗄 때까지 아무것도 누르지 않는다
+static void pop_rebuild() {
+  pop_clear();
+  pop_moved = false;
+  fill_pop();
+  if (area_w > 0) place_pop();
+  for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) lv_indev_wait_release(i);
+}
+
+static void pop_apply_next() {
+  if (pop_next_ready) {
+    pop_next_ready = pop_kw_dirty = false;
+    bool same = pop_from_pc && memcmp(pop_tab, pop_next, sizeof(PopTable)) == 0;
+    if (same && !pop_moved) return;  // 같은 표 (연결할 때마다 온다)
+    pop_clear();
+    memcpy(pop_tab, pop_next, sizeof(PopTable));
+    pop_from_pc = true;
+    if (!same) pop_save();
+    pop_rebuild();
+  } else if (pop_kw_dirty) {
+    pop_kw_dirty = false;
+    if (!pop_from_pc) pop_rebuild();
+  }
+}
+
+void orcapanel_set_pop(JsonArrayConst rows) {
+  if (!pop_tab) return;
+  PopTable next;
+  memset(&next, 0, sizeof(next));
+  next.version = POP_TABLE_VERSION;
+  bool ok = rows.size() == POP_ROWS;
+  int n = 0, r = 0;
+  for (JsonArrayConst row : rows) {
+    if (r >= POP_ROWS) break;
+    for (JsonObjectConst b : row) {
+      const char *id = b["id"] | "";
+      const char *name = b["name"] | "";
+      if (n >= POP_MAX || strlen(id) >= sizeof(PopItem::id) || strlen(name) >= sizeof(PopItem::name)) {
+        ok = false;
+        break;
+      }
+      PopItem &item = next.item[n++];
+      strlcpy(item.id, id, sizeof(item.id));
+      strlcpy(item.name, name, sizeof(item.name));
+      item.slash = b["s"] | false;
+      next.rows[r]++;
+    }
+    r++;
+  }
+  if (!ok || !pop_table_ok(next)) {
+    Serial.println("[orca] bad pop list from PC ignored");
+    return;
+  }
+  memcpy(pop_next, &next, sizeof(next));
+  pop_next_ready = true;
+  if (!pop_mode && !pe_id[0]) pop_apply_next();  // 고치는 중이면 끝난 뒤에
+}
+
+// 사용자가 고친 표시명, 입력 글, 위치의 원본은 보드다 (NVS "orca_pop"): 어느 PC 에 꽂아도 같다.
+// PC 는 연결할 때 {"pop_sync"} 로 읽어 가서 그 글을 입력하고, 합친 표를 {"pop"} 로 돌려준다 (companion/popbuttons.py)
+static void send_saved_item(const char *id, bool ack) {
+  String name, text;
+  char key[16];
+  Preferences prefs;
+  if (prefs.begin("orca_pop", true)) {
+    pop_nvs_key(key, sizeof(key), 'n', id);
+    if (prefs.isKey(key)) name = prefs.getString(key);
+    pop_nvs_key(key, sizeof(key), 't', id);
+    if (prefs.isKey(key)) text = prefs.getString(key);
+    prefs.end();
+  }
+  if (!ack && name.isEmpty() && text.isEmpty()) return;
+  JsonDocument doc(PSRAM_JSON);
+  doc["orca"] = "saved_item";
+  doc["id"] = id;
+  if (!name.isEmpty()) doc["name"] = name;
+  if (!text.isEmpty()) doc["text"] = text;
+  if (ack) doc["ack"] = true;
+  String json;
+  serializeJson(doc, json);
+  link_send_event(json.c_str());
+}
+
+static void send_saved_layout() {
+  char layout[POP_LAYOUT_MAX] = "";
+  Preferences prefs;
+  if (prefs.begin("orca_pop", true)) {
+    if (prefs.isKey("layout")) prefs.getString("layout", layout, sizeof(layout));
+    prefs.end();
+  }
+  char *rest = layout;
+  for (int r = 0; layout[0] && r < POP_ROWS; r++) {
+    char *end = strchr(rest, ';');
+    if (end) *end = 0;
+    char json[POP_LAYOUT_MAX + 48];
+    snprintf(json, sizeof(json), "{\"orca\":\"saved_row\",\"row\":%d,\"ids\":\"%s\"}", r, rest);
+    link_send_event(json);
+    if (!end) break;
+    rest = end + 1;
+  }
+  link_send_event("{\"orca\":\"saved_end\"}");
+}
+
+void orcapanel_send_saved() {
+  if (!pop_tab) return;
+  PopTable fallback;
+  const PopTable *t = pop_tab;
+  if (!pop_from_pc) {
+    default_pop(&fallback);
+    t = &fallback;
+  }
+  int n = 0;
+  for (uint8_t r : t->rows) n += r;
+  for (int i = 0; i < n; i++) send_saved_item(t->item[i].id, false);
+  // 새로 만든 버튼: 아직 표에 없을 수 있어 따로 적어 둔 것도 보낸다 (PC 는 이 글을 보고 버튼이 있는 줄 안다)
+  char custom[POP_LAYOUT_MAX] = "";
+  Preferences prefs;
+  if (prefs.begin("orca_pop", true)) {
+    if (prefs.isKey("custom")) prefs.getString("custom", custom, sizeof(custom));
+    prefs.end();
+  }
+  for (char *id = strtok(custom, ","); id; id = strtok(nullptr, ",")) send_saved_item(id, false);
+  send_saved_layout();
+}
+
+// PC 미러 창에서 고친 것 [{"id", "name", "text"}] (null 이면 기본값으로) 이나 {"rows": 위치 글} 을 저장하고 저장한 것을 돌려준다
+void orcapanel_save_edits(JsonArrayConst list) {
+  Preferences prefs;
+  if (!prefs.begin("orca_pop")) return;
+  char key[16];
+  bool layout = false;
+  auto put = [&](char kind, const char *id, const char *value, size_t limit) {
+    pop_nvs_key(key, sizeof(key), kind, id);
+    if (!value) {
+      if (prefs.isKey(key)) prefs.remove(key);
+    } else if (strlen(value) < limit) {
+      prefs.putString(key, value);
+    }
+  };
+  for (JsonObjectConst b : list) {
+    const char *rows = b["rows"];
+    if (rows && strlen(rows) < POP_LAYOUT_MAX) {
+      prefs.putString("layout", rows);
+      layout = true;
+    }
+    const char *id = b["id"] | "";
+    if (!pop_id_ok(id)) continue;
+    if (b["new"] | false) {  // 새로 만든 버튼
+      String custom = prefs.getString("custom", "");
+      if (custom.length() + strlen(id) + 2 < POP_LAYOUT_MAX) prefs.putString("custom", custom + id + ",");
+    }
+    put('n', id, b["name"], sizeof(PopItem::name));
+    put('t', id, b["text"], POP_TEXT_MAX);
+  }
+  prefs.end();
+  for (JsonObjectConst b : list) {
+    const char *id = b["id"] | "";
+    if (pop_id_ok(id)) send_saved_item(id, true);
+  }
+  if (layout) send_saved_layout();
+}
+
+// 끌어 정한 자리를 보드에 저장한다 (PC 없이도). 버튼 순서가 곧 결과다
+static bool save_layout() {
+  const char *ids[POP_MAX];
+  int counts[POP_ROWS], n = 0;
+  memset(pop_next, 0, sizeof(PopTable));
+  pop_next->version = POP_TABLE_VERSION;
+  for (int r = 0; r < POP_ROWS; r++) {
+    counts[r] = lv_obj_get_child_cnt(pop_rows[r]);
+    pop_next->rows[r] = counts[r];
+    for (int k = 0; k < counts[r]; k++) {
+      const PopItem *item = (const PopItem *)lv_obj_get_user_data(lv_obj_get_child(pop_rows[r], k));
+      pop_next->item[n] = *item;
+      ids[n++] = item->id;
+    }
+  }
+  char layout[POP_LAYOUT_MAX];
+  if (!pop_layout_text(layout, sizeof(layout), ids, counts)) return false;
+  Preferences prefs;
+  if (!prefs.begin("orca_pop")) return false;
+  bool saved = prefs.putString("layout", layout) > 0;
+  prefs.end();
+  if (saved) pop_next_ready = true;  // pop_mode_end 가 이 표를 적용한다
+  return saved;
+}
+
+static void pop_mode_begin() {
+  pop_mode = true;
+  dragged = false;
+  sk_open = false;
+  lv_anim_del(pop, pop_translate);
+  lv_obj_set_style_translate_y(pop, 0, 0);
+  lv_obj_add_flag(pop_title, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(move_bar, LV_OBJ_FLAG_HIDDEN);
+  for (lv_obj_t *r : pop_rows) {
+    lv_obj_scroll_to_x(r, 0, LV_ANIM_OFF);
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);  // 줄 옆 밀기를 끈다
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_bg_color(r, lv_color_hex(0x2A3038), 0);
+    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(r, 6, 0);
+    lv_obj_set_style_pad_all(r, 2, 0);
+    lv_obj_set_style_pad_row(r, 4, 0);
+  }
+  lv_obj_clear_flag(pop_shield, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(pop_shield);
+  lv_obj_move_foreground(pop);
+  place_pop();
+}
+
+// restore: 끝내면서 버튼을 표대로 되돌린다
+static void pop_mode_end(bool restore) {
+  pop_mode = false;
+  move_stop();
+  lv_obj_add_flag(pop_shield, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(move_bar, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(pop_title, LV_OBJ_FLAG_HIDDEN);
+  for (lv_obj_t *r : pop_rows) {
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(r, 0, 0);
+    lv_obj_add_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+  }
+  if (restore) {
+    pop_rebuild();
+  } else {
+    pop_moved = true;
+    place_pop();
+  }
+  pop_apply_next();
+}
+
+static void close_pe() {
+  if (!pe_id[0]) return;
+  pe_id[0] = 0;
+  lv_obj_add_flag(pe, LV_OBJ_FLAG_HIDDEN);
+  if (!pop_mode) lv_obj_add_flag(pop_shield, LV_OBJ_FLAG_HIDDEN);
+  pop_apply_next();
+}
+
+// 팝업이 닫히거나 화면을 벗어나면 고치던 것을 버린다
+static void pop_edit_cancel() {
+  close_pe();
+  if (pop_mode) pop_mode_end(true);
+}
+
+// 꾹 누른 창의 버튼: 0 수정, 1 신규 (이 버튼 뒤에 새 버튼), 2 위치 조정, 3 취소
+static void pe_event(lv_event_t *e) {
+  int k = (intptr_t)lv_event_get_user_data(e);
+  if (!pe_id[0]) return;
+  touched_at = lv_tick_get();
+  if (k <= 1) {
+    if (!link_pc_connected()) {
+      ui_toast("연결된 PC가 없습니다", 2000);
+    } else {
+      // "PC 미러 창에서 수정하세요" 는 받은 PC 가 보낸다
+      char json[96];
+      snprintf(json, sizeof(json), k ? "{\"orca\":\"new\",\"after\":\"%s\"}" : "{\"orca\":\"edit\",\"key\":\"%s\"}", pe_id);
+      if (!link_send_event(json)) ui_toast("PC로 보내지 못했습니다", 2000);
+    }
+  }
+  close_pe();
+  if (k == 2) pop_mode_begin();
+}
+
+static void build_pop_edit() {
+  // 창 밖이나 뒤의 버튼이 눌리지 않게 패널 전체를 막는다. 꾹 누른 창에서는 창 밖을 누르면 취소
+  pop_shield = lv_obj_create(panel);
+  lv_obj_remove_style_all(pop_shield);
+  lv_obj_set_style_bg_color(pop_shield, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(pop_shield, LV_OPA_40, 0);
+  lv_obj_clear_flag(pop_shield, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SCROLL_CHAIN | LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(pop_shield, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_event_cb(pop_shield, [](lv_event_t *e) { close_pe(); }, LV_EVENT_CLICKED, NULL);
+
+  pe = lv_obj_create(panel);
+  lv_obj_remove_style_all(pe);
+  lv_obj_set_style_bg_color(pe, lv_color_hex(0x1C232B), 0);
+  lv_obj_set_style_bg_opa(pe, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(pe, 12, 0);
+  lv_obj_set_style_pad_all(pe, 8, 0);
+  lv_obj_set_style_border_width(pe, 1, 0);
+  lv_obj_set_style_border_color(pe, lv_color_hex(0x3A4350), 0);
+  lv_obj_clear_flag(pe, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SCROLL_CHAIN | LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(pe, LV_OBJ_FLAG_HIDDEN);
+  pe_title = add_label(pe, "", &font_ko_14, COLOR_ACCENT);
+  lv_label_set_long_mode(pe_title, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(pe_title, 0, 2);
+  static const char *const PE_TEXT[4] = {"수정", "신규", "위치 조정", "취소"};
+  static const uint32_t PE_COLORS[4] = {0x2E8B5E, 0x3A6EA5, 0x16808C, 0x4A5563};
+  for (int k = 0; k < 4; k++) {
+    lv_obj_t *b = lv_btn_create(pe);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_pad_all(b, 2, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(PE_COLORS[k]), 0);
+    lv_obj_add_event_cb(b, pe_event, LV_EVENT_CLICKED, (void *)(intptr_t)k);
+    lv_obj_center(add_label(b, PE_TEXT[k], &font_ko_14, lv_color_white()));
+  }
+
+  move_bar = lv_obj_create(pop);
+  lv_obj_remove_style_all(move_bar);
+  lv_obj_clear_flag(move_bar, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(move_bar, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_align(add_label(move_bar, "끌어 옮기세요", &font_ko_14, COLOR_ACCENT), LV_ALIGN_LEFT_MID, 0, 0);
+  for (int k = 0; k < 2; k++) {
+    lv_obj_t *b = lv_btn_create(move_bar);
+    lv_obj_set_size(b, 52, 24);
+    lv_obj_set_style_radius(b, 6, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(k ? 0x4A5563 : 0x2E8B5E), 0);
+    lv_obj_align(b, LV_ALIGN_RIGHT_MID, k ? 0 : -56, 0);
+    lv_obj_center(add_label(b, k ? "취소" : "완료", &font_ko_14, lv_color_white()));
+    lv_obj_add_event_cb(b, [](lv_event_t *e) {
+      if (!pop_mode) return;
+      touched_at = lv_tick_get();
+      if (lv_event_get_user_data(e)) {
+        pop_mode_end(true);
+      } else if (save_layout()) {
+        pop_mode_end(false);
+        ui_toast("위치를 저장했습니다", 2000);
+        if (link_pc_connected()) send_saved_layout();
+      } else {
+        ui_toast("위치를 저장하지 못했습니다", 3000);  // 옮긴 자리를 버리지 않고 그대로 둔다
+      }
+    }, LV_EVENT_CLICKED, (void *)(intptr_t)k);
+  }
+
+  move_mark = lv_obj_create(pop);
+  lv_obj_remove_style_all(move_mark);
+  lv_obj_set_size(move_mark, 3, POP_MOVE_BTN_H);
+  lv_obj_set_style_bg_color(move_mark, COLOR_ACCENT, 0);
+  lv_obj_set_style_bg_opa(move_mark, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(move_mark, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(move_mark, LV_OBJ_FLAG_HIDDEN);
+
+  move_ghost = lv_obj_create(pop);
+  lv_obj_remove_style_all(move_ghost);
+  lv_obj_set_style_bg_opa(move_ghost, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(move_ghost, 8, 0);
+  lv_obj_set_style_border_width(move_ghost, 2, 0);
+  lv_obj_set_style_border_color(move_ghost, lv_color_white(), 0);
+  lv_obj_clear_flag(move_ghost, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(move_ghost, LV_OBJ_FLAG_HIDDEN);
+  move_ghost_lbl = add_label(move_ghost, "", &font_ko_14, lv_color_white());
+  lv_label_set_long_mode(move_ghost_lbl, LV_LABEL_LONG_DOT);
+  lv_obj_set_size(move_ghost_lbl, LV_PCT(100), lv_font_get_line_height(&font_ko_14));
+  lv_obj_set_style_text_align(move_ghost_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_center(move_ghost_lbl);
+}
+
+// 가운데에 뜬다
+static void place_pe() {
+  int w = LV_MIN(area_w - 24, 320), h = 96;
+  lv_obj_set_size(pe, w, h);
+  lv_obj_align(pe, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_width(pe_title, w - 18);
+  // 세로 화면은 좁아 "위치 조정" 에 폭을 더 준다
+  int room = w - 18 - 3 * 6, side = room * 22 / 100, x = 0;
+  for (int k = 0; k < 4; k++) {
+    lv_obj_t *b = lv_obj_get_child(pe, k + 1);  // 0 은 제목
+    int bw = k == 2 ? room - 3 * side : side;
+    lv_obj_set_size(b, bw, h - 18 - 28);
+    lv_obj_set_pos(b, x, 28);
+    x += bw + 6;
+  }
+}
+
+// 위치 조정: 3줄을 다 보이고, 넘치는 줄은 접어서 모든 자리에 놓을 수 있게 한다. 옮길 때마다 부른다
+static void place_pop_move() {
+  int pw = area_w - 8, list_w = pw - 12 - 2, inner = list_w - 4;
+  int cols = LV_MAX((inner + 4) / (POP_MOVE_CELL_MIN + 4), 1), cell = (inner - (cols - 1) * 4) / cols;
+  int list_h = 0;
+  for (lv_obj_t *r : pop_rows) {
+    int n = lv_obj_get_child_cnt(r), lines = (n + cols - 1) / cols;
+    int rh = n ? lines * POP_MOVE_BTN_H + (lines - 1) * 4 + 4 : POP_MOVE_EMPTY_H;
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(r, list_w, rh);
+    for (int k = 0; k < n; k++) lv_obj_set_size(lv_obj_get_child(r, k), cell, POP_MOVE_BTN_H);
+    list_h += rh;
+  }
+  list_h += (POP_ROWS - 1) * 4;
+  int ph = 12 + 28 + list_h + 2;
+  lv_obj_set_pos(pop, 4, area_h - ph - 4);
+  lv_obj_set_size(pop, pw, ph);
+  lv_obj_set_size(pop_list, list_w, list_h);
+  lv_obj_set_pos(pop_list, 0, 28);
+  lv_obj_set_size(move_bar, pw - 14, 26);
+  lv_obj_set_pos(move_bar, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(sk, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void build_pop() {
+  pop_load();
   pop = lv_obj_create(panel);
   lv_obj_remove_style_all(pop);
   lv_obj_set_style_bg_color(pop, lv_color_hex(0x1C232B), 0);
@@ -704,19 +1290,24 @@ static void build_pop() {
   }
   fill_pop();
   build_sk();
+  build_pop_edit();
 }
 
 void orcapanel_keywords_changed() {
   if (!pop_list) return;
-  for (lv_obj_t *r : pop_rows) lv_obj_clean(r);
-  pop_count = 0;
-  fill_pop();
-  if (area_w > 0) place_pop();
+  pop_kw_dirty = true;
+  if (!pop_mode && !pe_id[0]) pop_apply_next();
 }
 
 // 세션 버튼은 그대로 두고 그 위에 겹친다
 static void place_pop() {
-  // 3줄: 키워드 두 줄 (둘째 줄 끝에 /스킬, 지우기), 맨 아래는 녹음 / Tab / Tab + Enter / Enter / Esc (fill_pop)
+  lv_obj_set_size(pop_shield, area_w, area_h);
+  place_pe();
+  if (pop_mode) {
+    place_pop_move();
+    return;
+  }
+  // 기본 3줄: 키워드 두 줄 (둘째 줄: orch, 리슘, proto, 지우기, 스킬), 맨 아래는 녹음 / Tab / Tab+E / Enter / Esc (default_pop)
   int rows = 0;
   for (lv_obj_t *r : pop_rows) rows += lv_obj_get_child_cnt(r) > 0;
   int pw = area_w - 8;
@@ -742,7 +1333,7 @@ static void place_pop() {
     for (int k = 0; k < n; k++) {
       lv_obj_t *b = lv_obj_get_child(r, k);
       // 녹음 버튼은 녹음하는 동안 글자가 길어진다
-      const char *text = b == pop_dictate ? "넣는 중..." : (const char *)lv_obj_get_user_data(b);
+      const char *text = b == pop_dictate ? "넣는 중..." : ((const PopItem *)lv_obj_get_user_data(b))->name;
       want[k] = LV_MAX(lv_txt_get_width(text, strlen(text), &font_ko_14, 0, LV_TEXT_FLAG_NONE) + 16, POP_BTN_MIN_W);
       total += want[k];
     }
@@ -809,6 +1400,7 @@ static void reveal_session(const char *id) {
 }
 
 static void set_pop(bool open) {
+  if (!open) pop_edit_cancel();
   if (open != pop_open) {
     pop_open = open;
     sk_open = false;  // 다시 열면 스킬 고르기는 닫혀 있다
@@ -822,7 +1414,7 @@ static void set_pop(bool open) {
 
 // 화면이 숨겨졌을 때는 저장만 한다. 보호 시간 뒤에도 새 패킷 없이 저장한 선택을 적용한다.
 static void sync_pc_selection(bool reveal) {
-  if (!panel_visible) return;
+  if (!panel_visible || pop_mode || pe_id[0]) return;  // 고치는 동안에는 팝업을 바꾸지 않는다. 끝나면 다음 주기에 맞춘다
   if (selection_held) {
     if (lv_tick_elaps(selected_at) < ACTIVE_HOLD_MS) {
       if (reveal) reveal_session(shown_id);
@@ -1138,6 +1730,7 @@ void orcapanel_show(bool on) {
   } else {
     // 받아쓰기는 다른 화면으로 가도 이어진다 (사용량 화면 버튼과 같다)
     close_qr();
+    pop_edit_cancel();
     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
   }
 }

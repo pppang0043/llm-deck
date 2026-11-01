@@ -80,16 +80,24 @@ void usb_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
 }
 
 bool usb_send_event(const char *json) {
-  uint8_t frame[5 + 200];
+  // 거의 다 짧다. 여러 태스크가 부르므로 스택은 그대로 두고 긴 것 (위치 조정 결과) 만 PSRAM 에 잡는다
+  uint8_t small[5 + 200];
+  uint8_t *frame = small;
   size_t body = strlen(json);
-  if (5 + body > sizeof(frame)) return false;
+  if (body > 2048) return false;  // companion/transports/frames.py 의 MAX_FRAME
+  if (5 + body > sizeof(small)) {
+    frame = (uint8_t *)ps_malloc(5 + body);
+    if (!frame) return false;
+  }
   frame[0] = 0xA5;
   frame[1] = 0x5A;
   frame[2] = USB_FRAME_EVENT;
   frame[3] = body & 0xFF;
   frame[4] = body >> 8;
   memcpy(frame + 5, json, body);
-  return Serial.write(frame, 5 + body) == 5 + body;
+  bool sent = Serial.write(frame, 5 + body) == 5 + body;
+  if (frame != small) free(frame);
+  return sent;
 }
 
 void usb_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
