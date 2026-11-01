@@ -34,6 +34,38 @@ def _notice(text: str) -> None:
         print(text)
 
 
+# 기기가 서명을 거절(bad/unpaired)했을 때 다시 시도하기까지 기다리는 시간. 키가 그대로면 몇 번을 보내도 거절되고,
+# 며칠씩 되풀이하면 기기의 거절 처리만 계속 돌린다 (2026-11-01 크래시 루프의 재료였다). 그동안 Wi-Fi 는 열지 않아
+# 연결 순서의 다음(블루투스)으로 넘어간다
+REFUSED_FIRST = 60
+REFUSED_MAX = 1800
+_refused: dict[str, dict] = {}  # 기기 id -> 거절 상태 (연결마다 WifiTransport 를 새로 만들어서 모듈에 둔다)
+
+
+def _refuse(device_id: str, address: str, key: bytes, reason: str) -> None:
+    entry = _refused.get(device_id)
+    if not entry or entry["key"] != key:
+        entry = _refused[device_id] = {"key": key, "address": address, "streak": 0}
+        # 안내는 거절이 이어지는 동안 한 번만
+        print(f"[Wi-Fi] 기기({device_id}, {address})가 인증을 거절했습니다 ({reason}). "
+              f"이 PC 의 키가 기기와 다릅니다. {auth.NEED_USB}. "
+              f"그때까지 Wi-Fi 재시도 간격을 {REFUSED_FIRST // 60}분에서 {REFUSED_MAX // 60}분까지 늘립니다.")
+    entry["address"] = address
+    entry["until"] = time.monotonic() + min(REFUSED_FIRST * 2 ** entry["streak"], REFUSED_MAX)
+    entry["streak"] += 1
+
+
+def _waiting(address: str) -> bool:
+    """이 주소의 기기가 서명을 거절해 기다리는 중인지. USB 로 새 키를 받았으면 기다리지 않는다."""
+    for device_id, entry in list(_refused.items()):
+        if entry["address"] == address:
+            if auth.load_key(device_id) != entry["key"]:
+                del _refused[device_id]
+                return False
+            return time.monotonic() < entry["until"]
+    return False
+
+
 class WifiTransport:
     name = "Wi-Fi"
 
@@ -115,6 +147,8 @@ class WifiTransport:
     def open(self) -> bool:
         address = None
         for candidate in self._candidates():
+            if _waiting(candidate):
+                return False
             info = candidate and self._status(candidate)
             if info:
                 address = candidate
@@ -289,6 +323,7 @@ class WifiTransport:
                     if signed_reply and (len(payload) > 4096 or not auth.http_reply_ok(
                             key, nonce, ctr, payload, res.headers.get("X-Deck-Reply", ""))):
                         raise OSError("Wi-Fi 명령 응답 서명이 맞지 않습니다")
+                    _refused.pop(self.device_id, None)
                     return payload
             except urllib.error.HTTPError as e:
                 if e.code != 401:
@@ -302,7 +337,7 @@ class WifiTransport:
                     if info and str(info.get("id", "")) == self.device_id and self._use_status(info):
                         continue
                 if reason != "stale":
-                    _notice(f"[Wi-Fi] 기기가 인증을 거절했습니다 ({reason}). {auth.NEED_USB}")
+                    _refuse(self.device_id, self.address, key, reason)
                 raise OSError(f"Wi-Fi 인증 실패 ({reason})") from e
         raise OSError("Wi-Fi 인증 실패")
 
