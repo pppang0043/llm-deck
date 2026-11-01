@@ -107,8 +107,13 @@ static void send_wifi(const uint8_t *data, size_t len, Head head) {
     memcpy(buf + pos + 5 + sizeof(Head), data + off, n);
     pos += 5 + body;
   }
-  tcp.write(buf, pos);
+  // 약한 신호에서 10초 넘게 못 보내면 write 가 쓰다 말고 돌아온다. 그 연결은 재전송이 밀려 있을 수 있으니 버리고 다음 장에서 새로 잇는다
+  size_t sent = tcp.write(buf, pos);
   free(buf);
+  if (sent != pos) {
+    Serial.printf("[mirror] Wi-Fi write stopped at %u of %u bytes, reconnecting\n", (unsigned)sent, (unsigned)pos);
+    tcp.stop();
+  }
 }
 
 static void send_task(void *) {
