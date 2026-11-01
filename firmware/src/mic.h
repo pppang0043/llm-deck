@@ -18,6 +18,10 @@ void mic_set_ask(bool on);
 // 마이크가 달려 있는지. 켤 때 잠깐 들어 보고, 보내는 동안에도 고친다.
 // 마이크가 없으면 I2S 가 늘 같은 값(0 이나 -1)만 읽는다
 bool mic_present();
+// 마이크 선 진단 (설정 > 알림 및 사운드). 시작하면 마이크 작업이 약 2초 검사하고, 끝나면 mic_diag_result() 가 글을 준다.
+// 검사 중이면 nullptr. 값이 움직이는지 다시 보므로 마이크를 단 뒤 재부팅 없이 mic_present() 도 고쳐진다
+void mic_diag_start();
+const char *mic_diag_result();
 
 // 최근 입력 크기 0~100 (화면 레벨 미터용)
 uint8_t mic_level();

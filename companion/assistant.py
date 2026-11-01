@@ -935,6 +935,16 @@ class Assistant:
             status["limited"] = limited
             if self._phone_ok(self._picked):
                 status["left"] = max(1, round((self._phone_until - time.monotonic()) / 60))
+        # 마이크별 안 되는 이유 (고르기 창의 그 마이크 줄에 쓴다). 자주 불리므로 덮개는 _watch_mics 가 읽어 둔 값을 쓴다
+        now = time.monotonic()
+        notes = {}
+        for n in self._names[:8]:
+            if "macbook" in n.lower() and _lid_last:
+                notes[n[:40]] = "덮개가 닫혀 꺼져 있습니다"
+            elif self._quiet_until.get(n, 0.0) > now:
+                notes[n[:40]] = "소리가 오지 않습니다"
+        if notes:
+            status["notes"] = notes
         return status
 
     def _set_mic(self, state: str, name: str = "", why: str = "") -> None:
@@ -943,8 +953,7 @@ class Assistant:
         elif state == "ok" and (self.mic_state, self.mic_name) != ("ok", name):
             print(f"[assistant] PC 마이크: {name}")
         self.mic_state, self.mic_name = state, name
-        # PC 마이크가 안 되어도 아이폰 마이크가 붙어 있으면 말하기 버튼은 켜 둔다 (녹음할 때 마지막에 써 본다)
-        self.mic, self.mic_reason = state != "none" or any(self._phone(n) for n in self._names), why
+        self.mic, self.mic_reason = state != "none", why
 
     @staticmethod
     def _mic_privacy_blocked() -> bool:
@@ -980,8 +989,10 @@ class Assistant:
             self._set("error", a=reason, mode=take.mode)
 
     def _record(self, take: _Take) -> None:
-        # 기기 마이크가 있으면 먼저 쓴다 (PC 마이크를 열지 않는다)
-        if take.dev_mic and self._record_device(take):
+        # 기기 마이크가 있으면 먼저 쓴다 (PC 마이크를 열지 않는다).
+        # 단, 연결되어 소리가 오는 PC 마이크를 직접 골랐으면 그것을 쓴다 (기기의 pcmic.cpp using_device 와 같은 규칙)
+        picked_pc = self._picked in self._names and self.mic_state != "none"
+        if take.dev_mic and not picked_pc and self._record_device(take):
             return
         if not take.recording.is_set():
             return
@@ -997,7 +1008,7 @@ class Assistant:
 
     def _record_pc(self, take: _Take) -> None:
         """소리가 오는 첫 마이크로 녹음한다. 모두 안 되면 실패로 알린다."""
-        order = self._mic_order(with_phone=True)
+        order = self._mic_order()
         silent: list[str] = []  # 열렸지만 소리가 오지 않은 마이크
         error = None  # 열지 못한 마이크의 마지막 오류
         lid = False  # 덮개가 닫혀 내장 마이크가 0 만 보냈다
@@ -1010,7 +1021,7 @@ class Assistant:
                 # 녹음 프로세스를 새로 띄워 목록을 다시 읽는다
                 print(f"[assistant] 마이크를 열지 못했습니다: {str(error)[:80]}")
                 self.mics.restart()
-                order = self._mic_order(with_phone=True)
+                order = self._mic_order()
             for i, name in enumerate(order):
                 if not take.recording.is_set():
                     return
@@ -1076,17 +1087,11 @@ class Assistant:
             return "ok"
         finally:
             self.mics.halt()
-            if self._phone(name) and not self._phone_ok(name):
-                self.mics.restart()  # 고르지 않은 아이폰 마이크는 이번 녹음만 쓰고 닫는다
 
     def _mic_works(self, name: str, silent: list[str]) -> None:
         """그 마이크에서 소리가 왔다. 앞 마이크가 조용해서 대신 쓴 것이면 빠질 때까지 먼저 쓴다."""
         self._quiet_until.pop(name, None)
         self._tries = 0
-        if self._phone(name) and not self._phone_ok(name):
-            # 이번 녹음에만 마지막으로 쓴 아이폰이다. PC 마이크가 된다는 표시로 남기지 않고 녹음 뒤에 다시 들어 본다
-            self._check_due = time.monotonic()
-            return
         if silent and name != self._fallback:
             self._save_fallback(name)
         self._set_mic("ok", name)
@@ -1112,11 +1117,10 @@ class Assistant:
         """기기에서 골라 허락한 아이폰 마이크이고 마지막 녹음 뒤 아직 PHONE_MIC_SECONDS 가 지나지 않았는지."""
         return self._phone(name) and name == self._picked and time.monotonic() < self._phone_until
 
-    def _mic_order(self, with_phone: bool = False) -> list[str]:
+    def _mic_order(self) -> list[str]:
         """녹음할 마이크 순서: 기기에서 고른 마이크, 앞서 대신 쓴 마이크, config 의 input (없으면 시스템 기본 마이크),
         그다음 이 PC 의 다른 마이크 모두. Mac 은 블루투스 이어폰 마이크를 기본 마이크여도 빼고 (_bt),
-        아이폰 마이크는 기기에서 골라 허락했을 때 앞에 넣고 (_phone_ok), 아니면 녹음할 때만 (with_phone) 맨 뒤에 넣는다.
-        미리 들어 볼 때는 아이폰 마이크를 깨우지 않는다."""
+        아이폰 마이크는 기기에서 골라 허락했을 때만 앞에 넣고 (_phone_ok), 그 밖에는 자동으로 쓰지 않는다."""
         try:
             names, default = self.mics.devices()
         except OSError as e:
@@ -1154,7 +1158,6 @@ class Assistant:
             self._mac_kinds()  # 방금 붙은 마이크의 연결 방식을 다시 본다
         order = [n for n in order if not self._bt(n)]
         self._names = [n for n in order if not any(a in n.lower() for a in _ALIASES)] or order
-        phones = [n for n in order if self._phone(n) and not self._phone_ok(n)] if with_phone else []
         order = [n for n in order if not self._phone(n) or self._phone_ok(n)]
         if self._fallback and names and self._fallback not in order:
             print(f"[assistant] 대신 쓰던 '{self._fallback}' 마이크가 빠져 기본 마이크로 돌아갑니다")
@@ -1167,7 +1170,7 @@ class Assistant:
         # 얼마 전 소리가 오지 않은 마이크는 맨 뒤로 (다른 마이크도 모두 조용할 때만 써 본다)
         now = time.monotonic()
         quiet = [n for n in order if self._quiet_until.get(n, 0.0) > now]
-        return [n for n in order if n not in quiet] + quiet + phones
+        return [n for n in order if n not in quiet] + quiet
 
     def _save_fallback(self, name: str) -> None:
         """대신 쓸 마이크를 정한다 (빈 글이면 지운다). 도우미를 다시 켜도 이어 쓰게 파일에 적는다."""

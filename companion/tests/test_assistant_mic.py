@@ -453,24 +453,15 @@ def phone(monkeypatch):
     return sd, a
 
 
-def test_phone_mic_is_last_resort_when_recording(phone, fallback_file):
+def test_unpicked_phone_mic_is_never_used_automatically(phone, fallback_file):
     sd, a = phone
-    assert a._mic_order() == ["MacBook Pro 마이크"]  # 미리 들어 볼 때는 아이폰을 깨우지 않는다
-    assert a._mic_order(with_phone=True) == ["MacBook Pro 마이크", "‘내 폰’ 마이크"]
+    assert a._mic_order() == ["MacBook Pro 마이크"]
     take = record(a, 2.2)
-    assert not take.failed and take.mic == "‘내 폰’ 마이크"  # 조용한 MacBook 마이크 다음에 쓴다
-    assert not fallback_file.exists()  # 다음 녹음도 PC 마이크부터
+    assert take.failed and take.mic != "‘내 폰’ 마이크"  # 조용한 MacBook 마이크 뒤에도 아이폰으로 넘어가지 않는다
+    assert not fallback_file.exists()
     assert a._picked == ""
     status = a.mic_status()
-    assert "‘내 폰’ 마이크" in status["list"] and status["limited"] == ["‘내 폰’ 마이크"] and "left" not in status
-
-
-def test_last_resort_phone_mic_does_not_show_as_working_pc_mic(phone, fallback_file):
-    sd, a = phone
-    take = record(a, 2.2)
-    assert take.mic == "‘내 폰’ 마이크"
-    assert a.mic_state != "ok"
-    assert a._check_due is not None  # 녹음 뒤에 PC 마이크를 다시 들어 본다
+    assert "‘내 폰’ 마이크" in status["list"] and status["limited"] == ["‘내 폰’ 마이크"] and "left" not in status  # 고를 수는 있다
 
 
 def test_closing_the_lid_checks_mics_again(phone, monkeypatch):
@@ -492,14 +483,11 @@ def test_phone_mic_comes_after_a_working_pc_mic(monkeypatch, fallback_file):
     assert record(a, 0.5).mic == "MacBook Pro 마이크"
 
 
-def test_talk_button_stays_on_while_a_phone_mic_is_connected(phone):
+def test_connected_phone_mic_does_not_turn_on_the_talk_button(phone):
     sd, a = phone
     a._mic_order()
     a._set_mic("none", why="조용합니다")
-    assert a.mic is True and a.mic_status()["state"] == "none"
-    a._names = ["MacBook Pro 마이크"]
-    a._set_mic("none", why="조용합니다")
-    assert a.mic is False
+    assert a.mic is False and a.mic_status()["state"] == "none"
 
 
 def test_picked_phone_mic_dropped_after_2_idle_hours(phone, mic_files, monkeypatch):

@@ -23,6 +23,7 @@ static int state = MIC_UNKNOWN;
 static char name[128] = "", why[384] = "", pick[128] = "";
 static char list[MIC_MAX][128];
 static bool limited[MIC_MAX];  // 고른 뒤 2시간 안 쓰면 끊는 마이크 (Mac 의 아이폰 마이크)
+static char notes[MIC_MAX][96];  // 마이크별 안 되는 이유 (그 줄 아래에 빨갛게 쓴다)
 static int count = 0, left = 0;  // left: 고른 아이폰 마이크를 쓸 수 있는 남은 분
 
 struct MicIcon {
@@ -56,6 +57,17 @@ static void close_panel(lv_event_t *e = nullptr) {
 
 static void render_panel();
 
+// 녹음에 기기 마이크를 쓰는가. 연결되어 소리가 오는 PC 마이크를 직접 골랐으면 그것을 쓴다
+// (도우미의 assistant.py _record 와 같은 규칙)
+static bool using_device() {
+  if (!mic_present()) return false;
+  if (!pick[0] || state == MIC_NONE) return true;
+  for (int i = 0; i < count; i++) {
+    if (strcmp(pick, list[i]) == 0) return false;
+  }
+  return true;
+}
+
 static void row_clicked(lv_event_t *e) {
   char chosen[128];  // 행의 값은 pick 자체일 수 있다 (연결 안 된 고른 마이크)
   snprintf(chosen, sizeof(chosen), "%s", (const char *)lv_event_get_user_data(e));
@@ -72,12 +84,16 @@ static void row_clicked(lv_event_t *e) {
   bool timed = false;
   for (int i = 0; i < count; i++) timed = timed || (limited[i] && strcmp(list[i], chosen) == 0);
   char text[180];
-  snprintf(text, sizeof(text), timed ? "PC 마이크: %s\n2시간 안 쓰면 끊습니다" : "PC 마이크: %s\n들어 보는 중...",
-           chosen[0] ? chosen : "자동");
+  if (using_device()) {
+    snprintf(text, sizeof(text), "기기 마이크를 씁니다");
+  } else {
+    snprintf(text, sizeof(text), timed ? "PC 마이크: %s\n2시간 안 쓰면 끊습니다" : "PC 마이크: %s\n들어 보는 중...",
+             chosen[0] ? chosen : "자동");
+  }
   ui_toast(text, 2500);
 }
 
-static void add_row(const char *label, const char *value, bool selected) {
+static void add_row(const char *label, const char *value, bool selected, const char *note = "") {
   lv_obj_t *row = lv_btn_create(panel_list);
   lv_obj_set_width(row, LV_PCT(100));
   lv_obj_set_height(row, LV_SIZE_CONTENT);
@@ -93,29 +109,59 @@ static void add_row(const char *label, const char *value, bool selected) {
   lv_obj_t *lbl = add_label(row, label, &font_ko_14, lv_color_white());
   lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);  // 긴 이름은 한 줄로 줄인다
   lv_obj_set_size(lbl, LV_PCT(100), lv_font_get_line_height(&font_ko_14));
-  lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+  if (note[0]) {
+    lv_obj_t *why_lbl = add_label(row, note, &font_ko_14, COLOR_NONE);
+    lv_obj_set_y(why_lbl, lv_font_get_line_height(&font_ko_14) + 2);
+  } else {
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+  }
   if (selected) lv_obj_align(add_label(row, LV_SYMBOL_OK, &lv_font_montserrat_14, COLOR_ACCENT), LV_ALIGN_RIGHT_MID, 22, 0);
+}
+
+// 지금은 고를 수 없는 줄: 어둡게 보이고 눌리지 않는다
+static void add_disabled_row(const char *label) {
+  lv_obj_t *row = lv_obj_create(panel_list);
+  lv_obj_remove_style_all(row);
+  lv_obj_set_width(row, LV_PCT(100));
+  lv_obj_set_height(row, LV_SIZE_CONTENT);
+  lv_obj_set_style_radius(row, 8, 0);
+  lv_obj_set_style_pad_all(row, 10, 0);
+  lv_obj_set_style_border_color(row, COLOR_ROW, 0);
+  lv_obj_set_style_border_width(row, 1, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t *lbl = add_label(row, label, &font_ko_14, COLOR_DIM);
+  lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+  lv_obj_set_size(lbl, LV_PCT(100), lv_font_get_line_height(&font_ko_14));
 }
 
 static void render_panel() {
   if (!panel || lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) return;
   char text[460];
-  // 기기 마이크가 1순위다. PC 마이크는 그것이 안 될 때 쓴다
-  if (mic_present()) {
-    snprintf(text, sizeof(text), "쓰는 중: 기기 마이크\n안 되면 PC 마이크, 그다음 휴대폰을 씁니다");
+  // 기기 마이크가 1순위다. PC 마이크는 그것이 안 될 때나 직접 고를 때 쓴다
+  bool device = using_device();
+  if (device) {
+    snprintf(text, sizeof(text), "쓰는 중: 기기 마이크\n안 되면 PC 마이크를 씁니다");
   } else if (state == MIC_OK) {
     snprintf(text, sizeof(text), "쓰는 중: %s", name);
   } else if (state == MIC_NONE) {
-    snprintf(text, sizeof(text), "연결 불가\n%s", why[0] ? why : "소리가 오는 마이크가 없습니다");
+    // 마이크별 이유가 있으면 그 줄에 쓰고, 위에는 어느 마이크의 문제도 아닌 이유만 쓴다 (Windows 권한 등)
+    bool has_note = false;
+    for (int i = 0; i < count; i++) has_note = has_note || notes[i][0];
+    if (has_note) {
+      snprintf(text, sizeof(text), "연결 불가");
+    } else {
+      snprintf(text, sizeof(text), "연결 불가\n%s", why[0] ? why : "소리가 오는 마이크가 없습니다");
+    }
   } else {
     snprintf(text, sizeof(text), "마이크를 들어 보는 중...");
   }
   lv_label_set_text(panel_state, text);
-  lv_obj_set_style_text_color(panel_state, mic_present() || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING, 0);
+  lv_obj_set_style_text_color(panel_state, device || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING, 0);
 
   lv_obj_clean(panel_list);
   static const char AUTO[] = "";
-  add_row("자동 (추천)", AUTO, pick[0] == '\0');
+  add_row(mic_present() ? "기기 마이크 (자동)" : "자동 (추천)", AUTO, pick[0] == '\0');
+  if (!mic_present()) add_disabled_row("기기 마이크 (연결 안 됨)");
   bool found = false;
   for (int i = 0; i < count; i++) {
     bool selected = pick[0] && strcmp(pick, list[i]) == 0;
@@ -127,9 +173,9 @@ static void render_panel() {
       } else {
         snprintf(label, sizeof(label), "%s (안 쓰면 2시간)", list[i]);
       }
-      add_row(label, list[i], selected);
+      add_row(label, list[i], selected, notes[i]);
     } else {
-      add_row(list[i], list[i], selected);
+      add_row(list[i], list[i], selected, notes[i]);
     }
   }
   if (pick[0] && !found) {
@@ -156,7 +202,7 @@ static void open_panel(lv_event_t *e) {
     lv_obj_t *head = lv_obj_create(panel);
     lv_obj_remove_style_all(head);
     lv_obj_set_size(head, LV_PCT(100), 32);
-    lv_obj_align(add_label(head, "PC 마이크", &font_ko_20, COLOR_ACCENT), LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(add_label(head, "마이크", &font_ko_20, COLOR_ACCENT), LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_t *close = lv_btn_create(head);
     lv_obj_set_size(close, 40, 28);
     lv_obj_set_style_bg_color(close, COLOR_ROW, 0);
@@ -232,9 +278,9 @@ static void paint_icon(const MicIcon &m) {
     lv_obj_add_flag(m.icon, LV_OBJ_FLAG_HIDDEN);
     return;
   }
-  lv_color_t color = mic_present() || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING;
+  lv_color_t color = using_device() || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING;
   for (lv_obj_t *part : {m.capsule, m.stem, m.base}) lv_obj_set_style_bg_color(part, color, 0);
-  if (state == MIC_NONE && !mic_present()) {
+  if (state == MIC_NONE && !using_device()) {
     lv_obj_clear_flag(m.cross, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(m.cross, LV_OBJ_FLAG_HIDDEN);
@@ -266,6 +312,7 @@ void pcmic_set(JsonObjectConst mic) {
     if (count >= MIC_MAX) break;
     limited[count] = false;
     for (JsonVariantConst l : mic["limited"].as<JsonArrayConst>()) limited[count] = limited[count] || strcmp(l | "", item | "") == 0;
+    snprintf(notes[count], sizeof(notes[0]), "%s", mic["notes"][item | ""] | "");
     snprintf(list[count++], sizeof(list[0]), "%s", item | "");
   }
   left = mic["left"] | 0;

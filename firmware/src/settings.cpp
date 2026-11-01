@@ -802,12 +802,32 @@ static void build_speaker(lv_obj_t *parent) {
   add_note(p, "이 보드는 블루투스 스피커를 직접 연결하지 못해 작은 스피커 모듈(ATOM Lite)이 대신 연결합니다. 소리를 낼 때만 연결하고 30초 뒤 끊어 전기를 아낍니다. 처음 소리는 연결하느라 몇 초 늦게 납니다.");
 }
 
+static lv_obj_t *mic_diag_label;
+static lv_timer_t *mic_diag_timer;
+
+static void mic_diag_poll(lv_timer_t *) {
+  const char *result = mic_diag_result();
+  if (!result) return;
+  lv_label_set_text(mic_diag_label, result);
+  lv_timer_del(mic_diag_timer);
+  mic_diag_timer = nullptr;
+}
+
+static void mic_diag_clicked(lv_event_t *) {
+  if (mic_diag_timer) return;
+  mic_diag_start();
+  lv_label_set_text(mic_diag_label, "검사하는 중... (약 2초)");
+  mic_diag_timer = lv_timer_create(mic_diag_poll, 200, nullptr);
+}
+
 static void build_notify(lv_obj_t *parent) {
   lv_obj_t *p = add_sub_page(parent, PAGE_NOTIFY, "알림 및 사운드");
   mic_sw = add_switch(add_row(p, "마이크", "기기 마이크 소리를 PC로"), mic_is_on(), mic_changed);
   alert_sw = add_switch(add_row(p, "한도 알림", "80%, 90%, 곧 소진, 초기화 때"), limit_alerts, alert_changed);
   sound_sw = add_switch(add_row(p, "마이크 알림음", "켜고 끌 때 소리"), mic_sound, sound_changed);
   add_note(p, "알림음은 블루투스 스피커를 연결해 두었으면 그 스피커로, 아니면 사용 중인 PC의 스피커로 나옵니다.");
+  add_button(add_row(p, "마이크 선 진단", "SCK, WS, SD 핀 검사"), "검사", mic_diag_clicked, nullptr);
+  mic_diag_label = add_note_label(p, "보드 핀에서 보이는 만큼만 검사합니다. 선이 마이크까지 이어졌는지는 부저로 확인하세요.");
 }
 
 static void build_display(lv_obj_t *parent) {

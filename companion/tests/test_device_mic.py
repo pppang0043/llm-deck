@@ -64,3 +64,34 @@ def test_audio_ignored_when_not_recording_from_device(fake):
     sd, a = fake
     a.on_device_audio(0, noisy(0))
     assert a._dev_audio.empty()
+
+
+def test_picked_pc_mic_beats_device_mic(fake):
+    sd, a = fake
+    a._names = ["MacBook Pro 마이크"]
+    a._picked = "MacBook Pro 마이크"
+    a.mic_state = "ok"
+    take = record(a, noisy, 1.0)
+    assert take.mic == "MacBook Pro 마이크"
+
+
+def test_device_mic_used_when_picked_mic_is_gone_or_silent(fake):
+    sd, a = fake
+    a._names = ["MacBook Pro 마이크"]
+    a._picked = "없는 마이크"
+    a.mic_state = "ok"
+    assert record(a, noisy, 1.0).mic == assistant.DEVICE_MIC
+    a._picked = "MacBook Pro 마이크"
+    a.mic_state = "none"
+    assert record(a, noisy, 1.0).mic == assistant.DEVICE_MIC
+
+
+def test_mic_status_notes_each_mics_own_problem(fake, monkeypatch):
+    sd, a = fake
+    a._names = ["MacBook Pro 마이크", "USB 마이크", "다른 마이크"]
+    monkeypatch.setattr(assistant, "_lid_last", True)
+    a._quiet_until["USB 마이크"] = time.monotonic() + 60
+    assert a.mic_status()["notes"] == {"MacBook Pro 마이크": "덮개가 닫혀 꺼져 있습니다", "USB 마이크": "소리가 오지 않습니다"}
+    monkeypatch.setattr(assistant, "_lid_last", False)
+    a._quiet_until.clear()
+    assert "notes" not in a.mic_status()
