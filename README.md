@@ -287,6 +287,7 @@ Wi-Fi는 인증된 주소 하나를 선택해 유지하며 대기 PC의 데이�
 
 - `loop()` 밖의 태스크에서 만지지 않는다. 알림은 `ui_toast` 만 어디서나 부를 수 있다.
 - LVGL 8.4 는 같은 값을 넣어도 다시 그린다 (`lv_obj_set_style_*`, `lv_obj_align`, `lv_obj_set_pos`, `lv_obj_set_width` 가 모두 `lv_obj_invalidate` 를 부른다). `loop()` 나 짧은 타이머에서 도는 코드는 값이 바뀔 때만 넣는다. 그렇지 않으면 화면을 쉬지 않고 다시 그린다. `lv_label_set_text` 도 `strcmp` 로 먼저 비교한다.
+- 나눠 쓰는 동안 기기 LCD 에 그린 것은 미러링 영상에 잡히지 않는다. 눈 없이 확인하려면 LCD 패널 메모리를 읽는다. `LCD_MISO` 로는 `ff` 만 오고, 패널은 쓰기 선 `LCD_MOSI`(SDA)로 답한다. `display_spi()` 트랜잭션을 잡은 채 SCLK·SDA 를 GPIO 로 돌려 명령을 쓰고, SDA 를 입력으로 바꿔 1us 간격으로 클럭을 주며 읽는다. `0x04` 는 1비트 뒤에 ID `81 81 b3`, `0x2E` 는 8비트 뒤부터 점마다 3바이트다 (`0x101418` 은 `14 14 1c`, `0xE5533D` 는 `e0 50 38` 로 읽힌다). 창은 드라이버의 `writeAddrWindow` 로 정해야 드라이버가 기억하는 창과 어긋나지 않는다. 끝나면 `esp_rom_gpio_connect_out_signal` 로 `SPI3_D_OUT_IDX`, `SPI3_CLK_OUT_IDX` 에 돌려준다.
 
 **PC 도우미**
 
