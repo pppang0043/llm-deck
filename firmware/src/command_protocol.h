@@ -10,6 +10,11 @@ static const char *const COMMAND_FIELDS[] = {
   "health_clear", "hang_test", "crash_test", "sd_clear", "screenshot", "links", "camera_ctl"
 };
 
+// 케이블로 꽂은 PC 만 보낼 수 있는 명령 (Wi-Fi 비밀번호, 진단, 카드 지우기, 연결 방식)
+static const char *const USB_ONLY_FIELDS[] = {
+  "links", "sd_pull", "sd_clear", "health_clear", "hang_test", "crash_test", "wifi_add", "wifi_clear"
+};
+
 inline bool valid_command(JsonObjectConst body) {
   if (body.isNull() || body.size() == 0) return false;
   for (JsonPairConst field : body) {

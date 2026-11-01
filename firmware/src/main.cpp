@@ -5,6 +5,7 @@
 #include <esp_sleep.h>
 #include <time.h>
 
+#include "alerts.h"
 #include "battery.h"
 #include "ble_hid.h"
 #include "ble_link.h"
@@ -41,9 +42,7 @@ static void set_mic(bool on) {
   mic_set_on(on);
   ui_set_mic(on);
   // 켜고 끈 것을 귀로도 알 수 있게 짧은 소리를 낸다 (블루투스 스피커가 있으면 그쪽, 없으면 PC 스피커)
-  if (settings_mic_sound() && !speaker_play(on ? "mic_on" : "mic_off")) {
-    link_send_event(on ? "{\"sound\":\"mic_on\"}" : "{\"sound\":\"mic_off\"}");
-  }
+  if (settings_mic_sound()) alerts_sound(on ? "mic_on" : "mic_off");
 }
 
 static void toggle_mic() {

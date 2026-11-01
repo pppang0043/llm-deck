@@ -207,14 +207,20 @@ static void banner_clicked(lv_event_t *e) {
 
 static void status_clicked(lv_event_t *e) { open_panel(*(QuickPanel *)lv_event_get_user_data(e)); }
 
-lv_obj_t *quickpanel_status_before(lv_obj_t *right) {
-  lv_disp_t *display = lv_obj_get_disp(right);
-  QuickPanel *p = nullptr;
-  for (QuickPanel &candidate : panels) if (candidate.display == display) p = &candidate;
-  if (!p) for (QuickPanel &candidate : panels) if (!candidate.display) {
-    candidate.display = display; p = &candidate; break;
+// 그 화면의 판. ui_init 이 quickpanel_init 보다 먼저 상태줄을 그려 아직 정해지지 않았을 수 있다
+static QuickPanel *panel_of(lv_disp_t *display) {
+  for (QuickPanel &p : panels) if (p.display == display) return &p;
+  for (QuickPanel &p : panels) if (!p.display) {
+    p.display = display;
+    return &p;
   }
+  return nullptr;
+}
+
+lv_obj_t *quickpanel_status_before(lv_obj_t *right) {
+  QuickPanel *p = panel_of(lv_obj_get_disp(right));
   if (!p) return right;
+  lv_disp_t *display = p->display;
   p->status_anchor = right;
   if (!p->status) {
     p->status = lv_btn_create(lv_disp_get_layer_sys(display));
@@ -291,15 +297,7 @@ void quickpanel_layout() {
 
 bool quickpanel_touch(lv_disp_t *display, int x, int y, bool down) {
   if (!on_sleep || usb_drive_active()) return false;  // USB 드라이브 화면에서는 열지 않는다
-  QuickPanel *p = nullptr;
-  for (QuickPanel &candidate : panels) if (candidate.display == display) p = &candidate;
-  if (!p) {
-    for (QuickPanel &candidate : panels) if (!candidate.display) {
-      candidate.display = display;
-      p = &candidate;
-      break;
-    }
-  }
+  QuickPanel *p = panel_of(display);
   if (!p) return false;
   if (down && !p->tracking) {
     p->tracking = true;

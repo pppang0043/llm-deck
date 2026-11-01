@@ -45,6 +45,11 @@ void link_loop();
 // Wi-Fi 에서는 마이크 소리와 같은 UDP 포트로 간다 (길이가 달라서 구별된다).
 void link_send_event(const char *json);
 Link link_active();
+// PC 도우미와 이어져 있는지 (클라우드는 PC 가 아니다)
+inline bool link_pc_connected() {
+  Link link = link_active();
+  return link != LINK_NONE && link != LINK_CLOUD;
+}
 // {"rotate": true} 를 받으면 부를 함수 (화면 돌리기 버튼과 같다)
 void link_set_rotate(void (*rotate)());
 

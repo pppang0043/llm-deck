@@ -52,15 +52,15 @@ void ui_toast_loop();
 #define TOAST_HISTORY_SIZE 3200
 void ui_toast_history(char *out, size_t size);
 
-// 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "shortcuts"(= "programs") / "keywords" / "pc" / "ask" / "orca" (PC 에서 시험할 때)
+// 화면 바꾸기: "home" / "usage" / "info"(설정 > 정보) / "settings" / "shortcuts"(= "programs") / "keywords" / "pc" / "ask" / "orca"
 void ui_show(const char *name);
-// 지금 화면을 RGB565 로 찍는다 (진단용). *pixels 는 free 로 해제.
-bool ui_screenshot(uint16_t **pixels, int *w, int *h);
+// 지금 화면을 사진처럼 PC 로 보낸다 (진단용)
+void ui_send_screenshot();
 void ui_set_info(const char *text);
 // 화면 보호기에 띄울 짧은 사용률 요약 (서비스마다 한 줄). 받은 사용량이 없으면 빈 글자.
 void ui_usage_summary(char *out, size_t size);
 // 나눠 쓰는 동안 기기 화면의 사용량 페이지들 (tv 는 tileview). 위아래로 넘길 수 있고, 보던 페이지에 머문다.
-// 눌러도 그래프는 열지 않는다. 맨 끝은 원래 화면처럼 PC 상태 페이지다.
+// 눌러도 그래프는 열지 않는다. 맨 앞은 원래 화면처럼 PC 상태 페이지다.
 void ui_usage_pages(lv_obj_t *tv);
 // 그 기기 화면이 지금 PC 상태 페이지를 보이는지
 bool ui_usage_pages_on_pc(lv_obj_t *tv);

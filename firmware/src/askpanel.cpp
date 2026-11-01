@@ -43,13 +43,9 @@ static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *
   return lbl;
 }
 
-static bool pc_connected() {
-  return link_active() != LINK_NONE && link_active() != LINK_CLOUD;
-}
-
 int askpanel_talk_state() {
   if (talking) return ASK_TALKING;
-  if (!pc_connected()) return ASK_NO_PC;
+  if (!link_pc_connected()) return ASK_NO_PC;
   // 기기 마이크가 있으면 PC 마이크가 없어도 된다
   return mic_ok || mic_present() ? ASK_READY : ASK_NO_MIC;
 }
@@ -162,12 +158,12 @@ static void mute_event(lv_event_t *e) {
   voice = !voice;
   draw_mute();
   // 음소거로 바꾸면 PC 가 읽던 답도 바로 멈춘다
-  if (!voice && pc_connected()) link_send_event("{\"ask\":\"mute\"}");
+  if (!voice && link_pc_connected()) link_send_event("{\"ask\":\"mute\"}");
   ui_toast(voice ? "답을 PC 스피커로 읽어 줍니다" : "음소거: 답을 글로만 보여 줍니다", 1500);
 }
 
 static void new_event(lv_event_t *e) {
-  if (!pc_connected()) {
+  if (!link_pc_connected()) {
     ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
     return;
   }

@@ -1,4 +1,5 @@
 #include "net.h"
+#include "hex.h"
 
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
@@ -118,20 +119,6 @@ static void sign(std::initializer_list<Part> parts, uint8_t out[32]) {
   for (const Part &part : parts) mbedtls_md_hmac_update(&ctx, (const uint8_t *)part.p, part.n);
   mbedtls_md_hmac_finish(&ctx, out);
   mbedtls_md_free(&ctx);
-}
-
-static void to_hex(const uint8_t *data, size_t len, char *out) {
-  for (size_t i = 0; i < len; i++) sprintf(out + i * 2, "%02x", data[i]);
-}
-
-static bool from_hex(const char *text, size_t len, uint8_t *out) {
-  for (size_t i = 0; i < len; i++) {
-    unsigned v;
-    if (!isxdigit((unsigned char)text[i * 2]) || !isxdigit((unsigned char)text[i * 2 + 1])) return false;
-    sscanf(text + i * 2, "%2x", &v);
-    out[i] = v;
-  }
-  return true;
 }
 
 // 기기 이름표: Wi-Fi MAC 12자. PC 가 여러 기기의 키를 구별한다
@@ -334,20 +321,21 @@ static void handle_usage() {
   xSemaphoreTake(lock, portMAX_DELAY);
   bool selected = wifi_owner.owns(peer, millis());
   if (!read_only) selected = wifi_owner.claim(peer, millis(), request["heartbeat"] == true,
-      request["helper"]["proto"].is<int>() && request["helper"]["proto"].as<int>() < 4);
+      legacy_helper(request.as<JsonObjectConst>()));
   xSemaphoreGive(lock);
-  String reply;
-  if (!link_submit(LINK_WIFI, body.c_str(), body.length(), selected, &reply, peer)) {
-    server.send(503, "application/json", "{\"ok\":false,\"error\":\"not_queued\"}");
-    return;
-  }
   if (selected && !read_only) {
-    // 인증된 선택 PC 만 마이크 소리·알림 목적지를 갱신한다
+    // 인증된 선택 PC 만 마이크 소리·알림 목적지를 갱신한다. link_loop 는 다른 코어에서 돌므로 큐에 넣기 전에 정한다
+    // (뒤에 정하면 이 메시지에 대한 첫 알림이 목적지 없이 사라진다)
     mic_set_target(server.client().remoteIP());
     portENTER_CRITICAL(&tx_mux);
     memcpy(tx_nonce, sessions[slot].nonce, 16);
     tx_ready = true;
     portEXIT_CRITICAL(&tx_mux);
+  }
+  String reply;
+  if (!link_submit(LINK_WIFI, body.c_str(), body.length(), selected, &reply, peer)) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"not_queued\"}");
+    return;
   }
   if (reply.length()) {
     // ACK 는 요청 nonce/순번에 묶어 서명한다. 조회가 활성 PC 의 미디어 목적지를 바꾸지 않는다.

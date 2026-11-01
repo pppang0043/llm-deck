@@ -31,10 +31,6 @@ struct MicIcon {
 static MicIcon main_icon, device_icon;  // 상태줄, 미러링 중 기기 화면
 static lv_obj_t *panel, *panel_state, *panel_list;
 
-static bool pc_connected() {
-  return link_active() != LINK_NONE && link_active() != LINK_CLOUD;
-}
-
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
   lv_label_set_text(lbl, text);
@@ -248,7 +244,7 @@ static void paint_icon(const MicIcon &m) {
 
 void pcmic_refresh() {
   if (!main_icon.icon) return;
-  if (!pc_connected()) {
+  if (!link_pc_connected()) {
     state = MIC_UNKNOWN;  // 다른 PC 가 붙을 수 있다
     close_panel();
   }

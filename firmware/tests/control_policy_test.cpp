@@ -27,6 +27,38 @@ int main() {
   assert(!deserializeJson(doc, "{\"services\":[],\"host\":\"standby\"}"));
   assert(!has_control(doc.as<JsonObjectConst>()));
 
+  // 상태만 담긴 메시지: 사용 중인 PC 것만 실행한다
+  assert(message_allowed(LINK_WIFI, LINK_USB, true, doc.as<JsonObjectConst>()));
+  assert(!message_allowed(LINK_BLE, LINK_BLE, false, doc.as<JsonObjectConst>()));
+  // 제어 명령: 수신 뒤 제어권이 넘어갔으면 사용 중이라도 거절한다
+  assert(!deserializeJson(doc, "{\"camera\":\"shoot\"}"));
+  assert(message_allowed(LINK_WIFI, LINK_WIFI, true, doc.as<JsonObjectConst>()));
+  assert(!message_allowed(LINK_WIFI, LINK_USB, true, doc.as<JsonObjectConst>()));
+  assert(message_allowed(LINK_USB, LINK_WIFI, false, doc.as<JsonObjectConst>()));
+  // 대기 BLE PC 의 선택 명령은 사용 중이 아니어도 받는다
+  assert(!deserializeJson(doc, "{\"ble_use\":1}"));
+  assert(message_allowed(LINK_BLE, LINK_USB, false, doc.as<JsonObjectConst>()));
+
+  // USB 전용 명령
+  for (const char *text : {"{\"links\":{\"ble\":false}}", "{\"sd_pull\":true}", "{\"sd_clear\":true}",
+                           "{\"health_clear\":true}", "{\"hang_test\":true}", "{\"crash_test\":true}",
+                           "{\"wifi_add\":{\"ssid\":\"x\"}}", "{\"wifi_clear\":true}"}) {
+    assert(!deserializeJson(doc, text));
+    assert(usb_only_command(doc.as<JsonObjectConst>()));
+  }
+  for (const char *text : {"{\"camera\":\"shoot\"}", "{\"view\":\"home\"}", "{\"screenshot\":true}", "{\"mic\":true}"}) {
+    assert(!deserializeJson(doc, text));
+    assert(!usb_only_command(doc.as<JsonObjectConst>()));
+  }
+
+  // 옛 도우미 구별
+  assert(!deserializeJson(doc, "{\"helper\":{\"proto\":3}}"));
+  assert(legacy_helper(doc.as<JsonObjectConst>()));
+  assert(!deserializeJson(doc, "{\"helper\":{\"proto\":4}}"));
+  assert(!legacy_helper(doc.as<JsonObjectConst>()));
+  assert(!deserializeJson(doc, "{\"services\":[]}"));
+  assert(!legacy_helper(doc.as<JsonObjectConst>()));
+
   WifiPeerLease owner;
   assert(owner.claim(1, 0, true, false));
   assert(!owner.claim(2, 14999, true, false));

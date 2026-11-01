@@ -257,6 +257,17 @@ bool photo_send_sd_file(const char *path) {
   return true;
 }
 
+bool photo_send_last_video() {
+  String last;
+  File dir = storage_ready() ? SD.open("/videos") : File();
+  for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+    if (!f.isDirectory() && String(f.name()) > last) last = f.name();
+    f.close();
+  }
+  if (dir) dir.close();
+  return last.length() && photo_send_sd_file(("/videos/" + last).c_str());
+}
+
 bool photo_streaming(const char *path) {
   if (!stream_path[0]) return false;
   return !path || strcmp(path, stream_path) == 0;

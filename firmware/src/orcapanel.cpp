@@ -6,7 +6,7 @@
 #include "gallery.h"
 #include "link.h"
 #include "pcpanel.h"
-#include "speaker.h"
+#include "alerts.h"
 #include "ui.h"
 #include "quickpanel.h"
 #include "mirror.h"
@@ -123,10 +123,6 @@ static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *
   return lbl;
 }
 
-static bool pc_connected() {
-  return link_active() != LINK_NONE && link_active() != LINK_CLOUD;
-}
-
 // 이 세션에 받아쓰기하는 중인지 (듣는 중, 받아 적는 중)
 static bool dictating_to(const Session &s) {
   if (strcmp(askpanel_dictate_target(), s.id) != 0) return false;
@@ -203,7 +199,7 @@ static void btn_event(lv_event_t *e) {
   touched_at = lv_tick_get();
   const Session &s = sessions[i];
   if (!askpanel_dictating() && (is_permission(s.state) || strcmp(active_id, s.id) != 0)) {
-    if (!pc_connected()) {
+    if (!link_pc_connected()) {
       ui_toast("연결된 PC가 없습니다", 2000);
       return;
     }
@@ -225,7 +221,7 @@ static void btn_long_event(lv_event_t *e) {
   long_pressed = true;
   touched_at = lv_tick_get();
   const Session &s = sessions[i];
-  if (!pc_connected()) {
+  if (!link_pc_connected()) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
@@ -236,7 +232,7 @@ static void btn_long_event(lv_event_t *e) {
 static void qr_event(lv_event_t *e) {
   int k = (intptr_t)lv_event_get_user_data(e);
   if (!qr_id[0]) return;
-  if (!pc_connected()) {
+  if (!link_pc_connected()) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
@@ -381,7 +377,7 @@ static void lay_out_pages() {
 
 void orcapanel_refresh() {
   if (!panel) return;
-  const char *problem = !pc_connected() ? "PC 연결 없음"
+  const char *problem = !link_pc_connected() ? "PC 연결 없음"
                         : !received    ? "PC에서 읽는 중..."
                         : !orca_ok     ? "PC에서 ORCA를 찾지 못함"
                         : count == 0   ? "ORCA에 열린 세션이 없습니다"
@@ -542,7 +538,7 @@ static void pop_event(lv_event_t *e) {
     place_pop();
     return;
   }
-  if (!pc_connected()) {
+  if (!link_pc_connected()) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
@@ -610,7 +606,7 @@ static void fill_pop() {
 // 스킬 버튼: "/이름 " 을 넣고 스킬 고르기만 닫는다 (팝업은 그대로, /orchestration 처럼)
 static void sk_event(lv_event_t *e) {
   const char *skill = (const char *)lv_event_get_user_data(e);
-  if (!pc_connected()) {
+  if (!link_pc_connected()) {
     ui_toast("연결된 PC가 없습니다", 2000);
     return;
   }
@@ -911,17 +907,14 @@ static void check_alerts(const Session *next, int n) {
     snprintf(text, sizeof(text), "%s\n%.60s", asked_label, asked);
   }
   ui_toast(text, 6000);
-  if (speaker_play(sound)) return;
-  char event[48];
-  snprintf(event, sizeof(event), "{\"sound\":\"%s\"}", sound);
-  link_send_event(event);
+  alerts_sound(sound);
 }
 
 // 권한 요청 띠: 그 세션이 답을 받을 때까지 어느 화면에서나 남아 있다. 누르면 허용 / 거부 창.
 static int first_asking(int *total) {
   int first = -1;
   *total = 0;
-  if (!orca_ok || !pc_connected()) return first;
+  if (!orca_ok || !link_pc_connected()) return first;
   for (int i = 0; i < count; i++) {
     if (!is_permission(sessions[i].state)) continue;
     if (first < 0) first = i;

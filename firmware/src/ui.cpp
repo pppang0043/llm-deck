@@ -3,6 +3,8 @@
 #include <lvgl.h>
 #include <time.h>
 
+#include <img_converters.h>
+
 #include "psram_json.h"
 #include "askpanel.h"
 #include "display.h"
@@ -11,6 +13,7 @@
 #include "orcapanel.h"
 #include "pcmic.h"
 #include "pcpanel.h"
+#include "photo.h"
 #include "settings.h"
 #include "quickpanel.h"
 #include "toast_queue.h"
@@ -1585,7 +1588,7 @@ void ui_show(const char *name) {
   if (strncmp(name, "settings_", 9) == 0) settings_open(name + 9);
 }
 
-bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
+static bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
   UI_LOOP_ONLY(false);
   lv_img_dsc_t *snap = lv_snapshot_take(lv_scr_act(), LV_IMG_CF_TRUE_COLOR);
   if (!snap) return false;
@@ -1617,6 +1620,21 @@ bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
     }
   }
   return true;
+}
+
+// 지금 화면을 사진처럼 PC 로 보낸다
+void ui_send_screenshot() {
+  UI_LOOP_ONLY();
+  uint16_t *px;
+  int w, h;
+  if (ui_settings_visible()) settings_redraw();
+  lv_refr_now(NULL);
+  if (!ui_screenshot(&px, &w, &h)) return;
+  for (int i = 0; i < w * h; i++) px[i] = (px[i] << 8) | (px[i] >> 8);
+  uint8_t *jpg;
+  size_t len;
+  if (fmt2jpg((uint8_t *)px, w * h * 2, w, h, PIXFORMAT_RGB565, 90, &jpg, &len)) photo_save(jpg, len, false);
+  free(px);
 }
 
 static lv_obj_t *toast;

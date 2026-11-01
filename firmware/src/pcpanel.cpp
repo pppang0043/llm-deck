@@ -172,7 +172,7 @@ static void button_clicked(lv_event_t *e) {
     remote_send(s);
     return;
   }
-  if (link_active() == LINK_NONE || link_active() == LINK_CLOUD) {
+  if (!link_pc_connected()) {
     ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
     return;
   }
@@ -793,7 +793,7 @@ void pcpanel_loop() {
   if (drawn_ms && millis() - drawn_ms < 1000) return;
   drawn_ms = millis();
   // 받은 적이 없거나 오래되었으면 숫자 대신 이유를 알린다
-  bool have_pc = link_active() != LINK_NONE && link_active() != LINK_CLOUD;
+  bool have_pc = link_pc_connected();
   uint32_t age = stat_ms ? (millis() - stat_ms) / 1000 : 0;
   const char *why = nullptr;
   if (!have_pc) {

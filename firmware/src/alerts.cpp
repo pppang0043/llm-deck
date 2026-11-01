@@ -71,6 +71,10 @@ void alerts_check(JsonArrayConst services) {
   if (!sound) return;
   Serial.printf("[alert] %s\n", sound);
   ui_toast(text, 6000);
+  alerts_sound(sound);
+}
+
+void alerts_sound(const char *sound) {
   if (speaker_play(sound)) return;
   char event[48];
   snprintf(event, sizeof(event), "{\"sound\":\"%s\"}", sound);

@@ -35,5 +35,7 @@ bool photo_send_file(const char *name, uint8_t *data, size_t len);
 // 16KB 씩 읽어 보내므로 크기 제한이 없고 화면도 멈추지 않는다. 형식은 사진과 같다 (알림 + USB_FRAME_PHOTO 조각).
 // USB 가 아니거나 앞의 것을 보내는 중이라 줄에 못 넣으면 false.
 bool photo_send_sd_file(const char *path);
+// 카드의 마지막 동영상을 위와 같이 보낸다 (진단용)
+bool photo_send_last_video();
 // 카드 파일을 보내는 중인지 (path 를 주면 그 파일인지). 보내는 중인 파일은 지우거나 카드 연결을 끊지 않는다.
 bool photo_streaming(const char *path = nullptr);
