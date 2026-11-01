@@ -13,6 +13,8 @@
 받아 적기: CLI 는 소리를 받지 못하므로 음성은 먼저 글자로 바꾼다. 말소리가 없는 녹음은 어느 쪽으로도 넘기지 않는다 (VAD).
       기본은 이 PC 안의 Whisper (Apple Silicon Mac 은 GPU 의 mlx-whisper, 그 밖은 CPU 의 faster-whisper) 라서
       소리가 인터넷으로 나가지 않는다. stt = "chatgpt" 면 ChatGPT 로 보내고 (chatgpt_stt.py), 실패할 때만 Whisper 를 쓴다.
+      stt = "auto" 면 PC 에 여유가 있을 때 Whisper, 없으면 ChatGPT, 그것도 안 되면 OpenAI API (openai_stt.py) 를 쓴다 (stt_chain.py).
+      클라우드가 모두 실패하면 느려도 Whisper 로 받아 적는다.
       Whisper 에는 자주 쓰는 말(prompt)과 ORCA 세션의 / 명령 이름을 알려 준다. ChatGPT 로는 보낼 자리가 없다.
 녹음과 처리는 따로 돈다: 앞 녹음을 받아 적거나 답을 기다리는 동안에도 새로 녹음할 수 있고,
       다 녹음한 것은 줄을 서서 (_Take) 하나씩 차례대로 받아 적고 묻는다. 기기에는 녹음 중이면 녹음 상태를,
@@ -37,6 +39,7 @@ from pathlib import Path
 import chatgpt_stt
 import orca
 import speech
+import stt_chain
 import typer
 
 # 먼저 찾는 순서. config.toml 의 [assistant] command 로 정하면 그것만 쓴다.
@@ -1336,7 +1339,8 @@ class Assistant:
     def _warm(self, take: _Take) -> None:
         try:
             with self.lock:
-                if not self._chatgpt():  # ChatGPT 로 받아 적으면 Whisper 는 실패할 때만 불러온다
+                # ChatGPT 로 받아 적으면 Whisper 는 실패할 때만 불러온다
+                if not self._chatgpt() and not (self._auto() and stt_chain.pc_busy()):
                     self._load_model()
                 if not take.dictate:  # 받아쓰기는 Claude 를 쓰지 않는다
                     self._open_session()
@@ -1345,6 +1349,17 @@ class Assistant:
 
     def _chatgpt(self) -> bool:
         return self.cfg.get("stt", "local") == "chatgpt"
+
+    def _auto(self) -> bool:
+        return self.cfg.get("stt", "local") == "auto"
+
+    def _whisper_ready(self) -> bool:
+        try:
+            self._load_model()
+            return True
+        except Exception as e:
+            print(f"[assistant] Whisper 를 쓸 수 없어 클라우드로 받아 적습니다: {e}")
+            return False
 
     def _language(self) -> str | None:
         """Whisper 에 줄 언어. "auto" 면 None (Whisper 가 알아본다)."""
@@ -1428,6 +1443,8 @@ class Assistant:
                     question, engine = "", "말소리 없음"
                 elif self._chatgpt():
                     question = chatgpt_stt.text(pcm, SAMPLE_RATE, self.cfg.get("language", "ko"))
+                elif self._auto() and (stt_chain.pc_busy() or not self._whisper_ready()):
+                    question, engine = stt_chain.cloud_text(pcm, SAMPLE_RATE, self.cfg.get("language", "ko"))
                 if question is None:
                     engine = "Whisper"
                     self._load_model()

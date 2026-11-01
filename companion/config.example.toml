@@ -91,6 +91,8 @@ type = false
 #                           # Apple Silicon Mac 은 large-v3-turbo 를 권한다 (GPU 로 5초 말에 1초 안쪽, small 보다 오타가 적다)
 # stt = "local"             # 받아 적기. "chatgpt" 면 ChatGPT 구독 계정으로 (API 키 필요 없음, Codex 에 ChatGPT 계정으로 로그인해 두어야 함).
 #                           # 공개 API 가 아니라 막힐 수 있고, 실패하면 이 PC 의 Whisper 로 받아 적는다. 소리가 OpenAI 로 나가 30일 남는다
+#                           # "auto" 면 PC 에 여유가 있을 때 Whisper, 없으면 ChatGPT, 그것도 안 되면 OpenAI API (~/.secrets/stick_hub.env 의 OPENAI_API_KEY), 모두 실패하면 Whisper
+#                           # 여유 없음: 1분 부하가 코어 수 이상이거나 남은 메모리가 2GB 미만. 이때나 Whisper 를 못 불러올 때만 소리가 OpenAI 로 나간다
 # engine = "auto"           # auto: Apple Silicon Mac 은 GPU(mlx), 그 밖은 CPU. "cpu" 면 늘 CPU
 # beam_size = 1             # CPU 로 받아 적을 때. 5 면 30%쯤 느리고 조금 더 정확하다
 # language = "ko"           # 받아 적을 말 (en, ja ...). "auto" 면 저절로 알아본다 (짧은 말은 틀리기 쉽다)
