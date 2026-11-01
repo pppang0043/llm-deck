@@ -957,10 +957,15 @@ static void update_ask_strip() {
     lv_obj_center(ask_strip_lbl);
     lv_obj_add_flag(ask_strip, LV_OBJ_FLAG_HIDDEN);
   }
+  // 같은 값을 넣어도 LVGL 은 다시 그린다. 100ms 마다 도는 곳이라 화면 폭이 바뀔 때만 넣는다
+  static int placed_w = 0;
   int w = lv_disp_get_hor_res(NULL) - 8;
-  lv_obj_set_size(ask_strip, w, ASK_STRIP_H);
-  lv_obj_align(ask_strip, LV_ALIGN_BOTTOM_MID, 0, -4);
-  lv_obj_set_width(ask_strip_lbl, w - 16);
+  if (w != placed_w) {
+    placed_w = w;
+    lv_obj_set_size(ask_strip, w, ASK_STRIP_H);
+    lv_obj_align(ask_strip, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_set_width(ask_strip_lbl, w - 16);
+  }
   char text[120];
   if (total > 1) {
     snprintf(text, sizeof(text), "권한 요청 %d개: %s", total, sessions[i].title);

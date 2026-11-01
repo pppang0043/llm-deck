@@ -170,6 +170,8 @@ static void device_build() {
   lv_obj_set_style_text_font(dev_title, &font_ko_14, 0);
   lv_obj_set_style_text_color(dev_title, lv_color_hex(0x8A939E), 0);
   lv_obj_align(dev_title, LV_ALIGN_TOP_LEFT, 8, 8);
+  lv_obj_set_height(dev_title, 16);
+  lv_label_set_long_mode(dev_title, LV_LABEL_LONG_DOT);
   pcmic_build_device(scr);
   dev_clock = lv_label_create(scr);
   lv_label_set_text(dev_clock, "");
@@ -242,13 +244,23 @@ static void device_title() {
   } else if (st == ASK_NO_MIC) {
     text = "PC 마이크 없음";
   }
+  // 같은 값을 넣어도 LVGL 은 다시 그린다. loop 마다 도는 곳이라 바뀔 때만 넣는다 (아니면 기기 LCD 를 쉬지 않고 그린다)
   if (strcmp(lv_label_get_text(dev_title), text)) lv_label_set_text(dev_title, text);
-  lv_obj_set_style_text_color(dev_title, st == ASK_TALKING ? lv_color_white() : lv_color_hex(0x8A939E), 0);
+  static bool was_talking = false;
+  bool talking = st == ASK_TALKING;
+  if (talking != was_talking) {
+    was_talking = talking;
+    lv_obj_set_style_text_color(dev_title, talking ? lv_color_white() : lv_color_hex(0x8A939E), 0);
+  }
   // 글자 너비만큼만 차지하고 바로 오른쪽에 마이크 표시. 시계까지 자리가 모자라면 글자를 줄인다
   int room = LV_MAX(1, lv_obj_get_x(dev_clock) - 16 - pcmic_device_width());
   int width = LV_MIN(room, lv_txt_get_width(text, strlen(text), &font_ko_14, 0, LV_TEXT_FLAG_NONE) + 1);
-  lv_obj_set_width(dev_title, width);
-  pcmic_device_place(8 + width, 6);
+  static int placed_width = -1;
+  if (width != placed_width) {
+    placed_width = width;
+    lv_obj_set_width(dev_title, width);
+    pcmic_device_place(8 + width, 6);
+  }
 }
 
 // 1초마다: 시각, 그리고 사용량이나 화면 방향이 바뀌었으면 페이지를 새로 만든다
@@ -268,8 +280,6 @@ static void device_refresh() {
   lv_obj_t *status = quickpanel_status_before(dev_btn);
   lv_obj_align_to(dev_clock, status, LV_ALIGN_OUT_LEFT_MID, -8, 0);
   lv_obj_update_layout(dev_clock);
-  lv_obj_set_height(dev_title, 16);
-  lv_label_set_long_mode(dev_title, LV_LABEL_LONG_DOT);
   if (dev_version == ui_usage_version() && dev_w == w && dev_h == h && lv_obj_get_child_cnt(dev_body)) return;
   // 넘기는 중에 다시 만들면 손 밑의 페이지가 사라지므로 다음 번으로 미룬다
   if (display_device_pressed() || lv_anim_get(dev_body, NULL)) return;
@@ -277,9 +287,6 @@ static void device_refresh() {
   dev_w = w;
   dev_h = h;
   lv_obj_set_size(dev_body, w, h - DEVICE_STATUS_H);
-  // 화면 방향이 바뀌면 버튼 자리도 바뀌므로 시계를 다시 버튼 왼쪽에 둔다
-  lv_obj_update_layout(dev_btn);
-  lv_obj_align_to(dev_clock, status, LV_ALIGN_OUT_LEFT_MID, -8, 0);
   ui_usage_pages(dev_body);
 }
 
