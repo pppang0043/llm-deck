@@ -1,4 +1,5 @@
 #include "ble_link.h"
+#include "hex.h"
 
 #include <NimBLEDevice.h>
 #include <esp_bt.h>
@@ -221,30 +222,17 @@ static void remember_host(Peer &p) {
   portEXIT_CRITICAL(&peers_mux);
 }
 
-static void to_hex(const uint8_t *data, size_t len, char *out) {
-  for (size_t i = 0; i < len; i++) sprintf(out + i * 2, "%02x", data[i]);
-}
-
-static bool from_hex(const char *text, size_t len, uint8_t *out) {
-  for (size_t i = 0; i < len; i++) {
-    unsigned v;
-    if (!isxdigit((unsigned char)text[i * 2]) || !isxdigit((unsigned char)text[i * 2 + 1])) return false;
-    sscanf(text + i * 2, "%2x", &v);
-    out[i] = v;
-  }
-  return true;
-}
-
 // {"ble_hello":"<도전값>"} 에 답한다 (ble_link.h 의 2)
 static void answer_hello(int slot) {
   Peer &p = peers[slot];
   const char *m = p.message.c_str();
   size_t pre = strlen(HELLO);
-  if (p.message.size() < pre + 32 || !from_hex(m + pre, 16, p.pc_nonce)) return;
+  uint8_t pc_nonce[16];
+  if (p.message.size() < pre + 32 || !from_hex(m + pre, 16, pc_nonce)) return;
   esp_fill_random(p.dev_nonce, sizeof(p.dev_nonce));
   uint8_t tag[32];
   char reply[128];
-  if (!net_ble_mac("ble-dev", p.pc_nonce, 16, p.dev_nonce, 16, "", 0, tag)) {
+  if (!net_ble_mac("ble-dev", pc_nonce, 16, p.dev_nonce, 16, "", 0, tag)) {
     snprintf(reply, sizeof(reply), "{\"ble_auth\":{\"err\":\"unpaired\"}}");
     refused = true;
   } else {
@@ -255,10 +243,12 @@ static void answer_hello(int slot) {
              net_device_id().c_str(), n, t);
   }
   portENTER_CRITICAL(&peers_mux);
+  memcpy(p.pc_nonce, pc_nonce, sizeof(pc_nonce));
+  // 첫 hello 와 인증된 연결의 다시 인증만 시간을 새로 센다. 인증 없이 되풀이해 20초 끊기를 피하지 못하게 한다
+  if (!p.hello || p.authed) p.since_ms = millis();
   p.hello = true;
   p.authed = false;
   p.rx_last = p.tx_ctr = 0;
-  p.since_ms = millis();
   uint16_t peer_mtu = p.mtu;
   portEXIT_CRITICAL(&peers_mux);
   tx->notify((const uint8_t *)reply, strlen(reply), p.handle);
@@ -413,6 +403,8 @@ void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
   size_t size = AUDIO_HEADER + samples / 2;
   // 한 번에 보낼 수 있는 크기(MTU)가 작게 잡힌 연결에서는 보낼 수 없다
   if (!connected || size > sizeof(packet) || size > (size_t)mtu - 3) return;
+  uint16_t handle = primary_handle;  // 한 번만 읽는다. NONE 을 넘기면 인증 안 된 연결까지 모두에게 간다
+  if (handle == BLE_HS_CONN_HANDLE_NONE) return;
   // 보내기 칸이 모자라면 이번 20ms 는 버린다 (늦게 보내 봐야 소용없고, 실패 기록만 쌓인다)
   if (os_msys_num_free() < 3) return;
 
@@ -427,10 +419,10 @@ void ble_send_audio(uint32_t seq, const int16_t *pcm, size_t samples) {
     uint8_t high = adpcm_encode(pcm[i + 1]);
     packet[AUDIO_HEADER + i / 2] = low | (high << 4);
   }
-  tx->notify(packet, size, primary_handle);
+  tx->notify(packet, size, handle);
 }
 
-void ble_send_event(const char *json, int slot) {
+bool ble_send_event(const char *json, int slot) {
   // 서명을 붙인다 (ble_link.h 의 4)
   uint8_t nonce[16];
   uint32_t ctr = 0;
@@ -445,24 +437,24 @@ void ble_send_event(const char *json, int slot) {
     peer_mtu = peers[slot].mtu;
   }
   portEXIT_CRITICAL(&peers_mux);
-  if (!connected || handle == BLE_HS_CONN_HANDLE_NONE) return;
+  if (!connected || handle == BLE_HS_CONN_HANDLE_NONE) return false;
   char packet[256];
   size_t len = strlen(json);
-  if (len + 46 > sizeof(packet)) return;
+  if (len + 46 > sizeof(packet)) return false;
   memcpy(packet, json, len);
   // 소리 묶음과 길이가 같으면 PC 가 소리로 착각하므로 JSON 끝에 빈칸을 하나 더한다 (서명은 빈칸까지 포함)
   char trailer[48];
   snprintf(trailer, sizeof(trailer), "|%u.", (unsigned)ctr);
   if (len + strlen(trailer) + TAG_LEN * 2 == AUDIO_HEADER + 160) packet[len++] = ' ';
   uint8_t tag[32];
-  if (!net_ble_mac("ble-evt", nonce, 16, &ctr, 4, packet, len, tag)) return;
+  if (!net_ble_mac("ble-evt", nonce, 16, &ctr, 4, packet, len, tag)) return false;
   size_t size = len + snprintf(packet + len, sizeof(packet) - len, "%s", trailer);
   to_hex(tag, TAG_LEN, packet + size);
   size += TAG_LEN * 2;
-  if (size > (size_t)peer_mtu - 3) return;
+  if (size > (size_t)peer_mtu - 3) return false;
   // 알림은 짧고 드물지만 꼭 가야 하므로 칸이 빌 때까지 잠깐 기다린다
   for (int i = 0; i < 50 && os_msys_num_free() < 2; i++) vTaskDelay(pdMS_TO_TICKS(4));
-  tx->notify((const uint8_t *)packet, size, handle);
+  return tx->notify((const uint8_t *)packet, size, handle);
 }
 
 size_t ble_photo_chunk_max() {
@@ -487,8 +479,9 @@ bool ble_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len) {
   // (다 쓰면 PC 의 쓰기가 "Insufficient Resource" 로 거절되어 PC 쪽 연결이 끊긴다)
   uint32_t start = millis();
   while (millis() - start < 10000) {
-    if (!connected) return false;
-    if (os_msys_num_free() >= 10 && tx->notify(packet, len + 4, primary_handle)) return true;
+    uint16_t handle = primary_handle;  // 한 번만 읽는다. NONE 을 넘기면 인증 안 된 연결까지 모두에게 간다
+    if (!connected || handle == BLE_HS_CONN_HANDLE_NONE) return false;
+    if (os_msys_num_free() >= 10 && tx->notify(packet, len + 4, handle)) return true;
     vTaskDelay(pdMS_TO_TICKS(4));
   }
   Serial.println("[ble] photo chunk timed out (PC not reading)");

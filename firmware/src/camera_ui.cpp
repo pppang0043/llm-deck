@@ -156,8 +156,11 @@ static void stop_recording() {
   if (result) show_message(result, 2500);
 }
 
+static void scan_stop(const char *msg, uint32_t ms = 3000);
+
 static void start_recording() {
   if (!camera_running() || video_recording() || job != JOB_NONE) return;  // 찍는 중이면 다음에
+  if (scanning) scan_stop(nullptr);
   const char *error = video_start(camera_turns(display_rotation()));
   if (error) {
     show_message(error, 3000);
@@ -183,7 +186,7 @@ static void show_guide(bool on) {
   }
 }
 
-static void scan_stop(const char *msg, uint32_t ms = 3000) {
+static void scan_stop(const char *msg, uint32_t ms) {
   if (scanning) {
     job_wait_drop();
     camera_scan_end();
@@ -225,6 +228,7 @@ static void open_camera() {
   }
   is_open = true;
   scan_done_at = 0;
+  ui_history_close();  // 그래프는 나중에 만들어져 카메라 화면보다 위에 뜬다
   display_poke();  // PC 에서 열었을 때도 2분 세기를 지금부터
   camera_ui_layout();
   lv_obj_add_flag(preview, LV_OBJ_FLAG_HIDDEN);
@@ -481,6 +485,7 @@ static void adjust_toggle(lv_event_t *e) {
 }
 
 static void adjust_reset(lv_event_t *e) {
+  if (job != JOB_NONE) return;  // 작업 태스크가 센서를 쓰는 중
   show_message("기본값으로 되돌리는 중...", 0);
   lv_refr_now(NULL);
   camera_ctl_reset();
@@ -695,6 +700,10 @@ void camera_ui_layout() {
   lv_obj_set_size(guide, w > h ? w * 45 / 100 : w * 70 / 100, w > h ? h * 35 / 100 : h * 22 / 100);
   lv_obj_center(guide);
   lv_obj_align_to(guide_lbl, guide, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+}
+
+bool camera_ui_busy() {
+  return job != JOB_NONE;
 }
 
 bool camera_ui_open() {

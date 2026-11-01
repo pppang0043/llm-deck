@@ -22,7 +22,7 @@ uint32_t usb_last_rx_ms();
 // usb_link_loop 가 PC 에서 2분 넘게 아무것도 오지 않으면 스스로 부른다
 void usb_reconnect(const char *why);
 void usb_send_audio(uint32_t seq, const int16_t *pcm, size_t samples);
-void usb_send_event(const char *json);
+bool usb_send_event(const char *json);
 void usb_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len);
 // 묶음 하나를 보낸다: 내용 = head + data (합쳐서 2KB 이하)
 void usb_send_frame(uint8_t kind, const uint8_t *head, size_t head_len, const uint8_t *data, size_t len);

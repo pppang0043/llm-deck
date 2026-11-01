@@ -210,6 +210,7 @@ static void btn_event(lv_event_t *e) {
     if (is_permission(s.state)) {
       open_qr(s, true);
     } else {
+      close_qr();
       activate_session(s.id);
     }
     return;

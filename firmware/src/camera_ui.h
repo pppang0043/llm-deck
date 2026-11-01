@@ -8,6 +8,8 @@ void camera_ui_loop();
 // 화면 방향이 바뀌었을 때
 void camera_ui_layout();
 bool camera_ui_open();
+// 작업 태스크가 센서를 쓰는 중인지 (이때는 카메라 설정을 바꾸지 않는다)
+bool camera_ui_busy();
 // PC 에서 카메라 화면을 다룬다: "open" / "shoot" / "close" / "record" / "gallery"
 // 처리 실패(카메라 없음, 녹화 중 촬영 등)는 false. 파일 전송 완료는 별도 알림이다.
 bool camera_ui_command(const char *cmd);

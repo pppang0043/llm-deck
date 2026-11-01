@@ -37,6 +37,8 @@ static bool open_i2s() {
 }
 
 // 한 묶음(20ms) 안에서 값이 움직였는지. 진짜 마이크는 조용해도 잡음으로 몇 칸씩 움직인다
+// INMP441 은 32비트 칸에 24비트 값을 담아 보낸다. 16비트로 줄이면서 소리를 키운다.
+#define MIC_RAW_SHIFT 15
 #define MIC_FLAT_SPAN 4
 // 이만큼 이어서 값이 그대로면 마이크가 빠졌다고 본다 (1초)
 #define MIC_FLAT_FRAMES 50
@@ -59,7 +61,7 @@ static void probe(int32_t *raw) {
     if (i2s.readBytes((char *)raw, MIC_FRAME_SAMPLES * 4) != MIC_FRAME_SAMPLES * 4) continue;
     int32_t lo = INT32_MAX, hi = INT32_MIN;
     for (int j = 0; j < MIC_FRAME_SAMPLES; j++) {
-      int32_t s = raw[j] >> 14;
+      int32_t s = raw[j] >> MIC_RAW_SHIFT;
       lo = min(lo, s);
       hi = max(hi, s);
     }
@@ -106,10 +108,9 @@ static void mic_task(void *) {
       continue;
     }
 
-    // INMP441 은 32비트 칸에 24비트 값을 담아 보낸다. 16비트로 줄이면서 소리를 키운다.
     int32_t peak = 0, lo = INT32_MAX, hi = INT32_MIN;
     for (int i = 0; i < MIC_FRAME_SAMPLES; i++) {
-      int32_t s = constrain(raw[i] >> 15, -32768, 32767);
+      int32_t s = constrain(raw[i] >> MIC_RAW_SHIFT, -32768, 32767);
       packet.pcm[i] = s;
       if (abs(s) > peak) peak = abs(s);
       lo = min(lo, s);
