@@ -2,6 +2,7 @@
 
 #include "askpanel.h"
 #include "camera_ui.h"
+#include "completion_inbox.h"
 #include "gallery.h"
 #include "link.h"
 #include "pcpanel.h"
@@ -45,6 +46,7 @@ struct Session {
   char project[64];
   char state[16];
   char summary[128];  // 끝난 세션의 마지막 답변 요약 (companion/orca.py 의 _summary)
+  bool question;  // 사용자에게 질문하는 중 (state 는 waiting 그대로. companion/orca.py 의 "q")
 };
 static Session *sessions;  // 내부 RAM 을 아끼려고 PSRAM 에 둔다 (orcapanel_build)
 static int count = 0;
@@ -847,11 +849,13 @@ static void sync_pc_selection(bool reveal) {
   if (changed || reveal) reveal_session(shown_id);
 }
 
-// 상태 알림: 지난번 목록과 비교해 새 권한 요청, 작업 중 -> 완료·입력 기다림이면 알림과 소리.
+// 상태 알림: 지난번 목록과 비교해 새 권한 요청이나 질문이면 알림과 소리, 작업 중 -> 완료·입력 기다림이면 알림함에만 남긴다
+// (세션이 끝날 때는 ORCA 앱이 알림음을 낸다).
 // 처음 받은 목록(켠 직후, ORCA 를 다시 읽기 시작)은 비교할 것이 없어 알리지 않는다. 같은 목록을 다시 받아도(다시 연결) 바뀐 것이 없다.
 struct Seen {
   char id[12];
   char state[16];
+  bool question;
   uint32_t asked_at, done_at;  // 그 알림을 마지막으로 낸 시각 (0 이면 아직)
 };
 static Seen seen[MAX_ROWS];
@@ -864,47 +868,49 @@ static bool quiet(uint32_t at) {
 
 static void check_alerts(const Session *next, int n) {
   static Seen now[MAX_ROWS];
-  const char *asked = nullptr, *done = nullptr;  // 알릴 세션 이름 (처음 것)
-  int asked_n = 0, done_n = 0;
+  const char *asked = nullptr;  // 알릴 세션 이름 (처음 것)
+  const char *asked_label = "";
+  int asked_n = 0;
   for (int i = 0; i < n; i++) {
     const Session &s = next[i];
     Seen &m = now[i];
     snprintf(m.id, sizeof(m.id), "%s", s.id);
     snprintf(m.state, sizeof(m.state), "%s", s.state);
+    m.question = s.question;
     m.asked_at = m.done_at = 0;
     int j = 0;
     while (j < seen_count && strcmp(seen[j].id, s.id) != 0) j++;
     const char *before = j < seen_count ? seen[j].state : "";
     if (j < seen_count) m.asked_at = seen[j].asked_at, m.done_at = seen[j].done_at;
     if (!seen_ok) continue;
-    if (is_permission(s.state) && !is_permission(before) &&
-        !(m.asked_at && lv_tick_elaps(m.asked_at) < ASK_QUIET_MS)) {
+    bool new_ask = (is_permission(s.state) && !is_permission(before)) || (s.question && !(j < seen_count && seen[j].question));
+    if (new_ask && !(m.asked_at && lv_tick_elaps(m.asked_at) < ASK_QUIET_MS)) {
       m.asked_at = lv_tick_get() | 1;
-      if (!asked_n++) asked = s.title;
-    } else if (strcmp(before, "working") == 0 && is_waiting(s.state) && !quiet(m.done_at)) {
+      if (!asked_n++) {
+        asked = s.title;
+        asked_label = s.question ? "ORCA 질문" : "ORCA 권한 요청";
+      }
+    }
+    if (strcmp(before, "working") == 0 && is_waiting(s.state) && !quiet(m.done_at)) {
       m.done_at = lv_tick_get() | 1;
-      if (!done_n++) done = s.title;
-      char completed[240];  // 알림함이 글자 경계에서 자른다 (CompletionInbox::TEXT_SIZE)
-      snprintf(completed, sizeof(completed), "ORCA - %s%s%s", s.title, s.summary[0] ? "\n" : "", s.summary);
+      char completed[CompletionInbox::TEXT_SIZE];
+      snprintf(completed, sizeof(completed), "ORCA-%s%s%s%s%s", s.project, s.project[0] ? "-" : "", s.title, s.summary[0] ? "\n" : "", s.summary);
       quickpanel_notify(completed);
     }
   }
   memcpy(seen, now, sizeof(Seen) * n);
   seen_count = n;
   seen_ok = true;
-  if (!asked && !done) return;
-  // 권한 요청이 먼저 (기다리게 하면 작업이 멈춘다)
-  char text[160];
-  const char *name = asked ? asked : done;
-  int more = (asked ? asked_n : done_n) - 1;
-  if (more > 0) {
-    snprintf(text, sizeof(text), "%s\n%.60s 외 %d개", asked ? "ORCA 권한 요청" : "ORCA 작업 끝", name, more);
-  } else {
-    snprintf(text, sizeof(text), "%s\n%.60s", asked ? "ORCA 권한 요청" : "ORCA 작업 끝", name);
-  }
-  const char *sound = asked ? "limit_warn" : "limit_reset";  // alerts.cpp 의 소리를 같이 쓴다
+  if (!asked) return;
+  const char *sound = "limit_reset";  // alerts.cpp 의 소리를 같이 쓴다
   Serial.printf("[orca] alert %s\n", sound);
-  if (asked) ui_toast(text, 6000);
+  char text[160];
+  if (asked_n > 1) {
+    snprintf(text, sizeof(text), "%s\n%.60s 외 %d개", asked_label, asked, asked_n - 1);
+  } else {
+    snprintf(text, sizeof(text), "%s\n%.60s", asked_label, asked);
+  }
+  ui_toast(text, 6000);
   if (speaker_play(sound)) return;
   char event[48];
   snprintf(event, sizeof(event), "{\"sound\":\"%s\"}", sound);
@@ -998,6 +1004,7 @@ void orcapanel_set(JsonObjectConst orca) {
     snprintf(s.project, sizeof(s.project), "%s", item["p"] | "");
     snprintf(s.state, sizeof(s.state), "%s", item["s"] | "idle");
     snprintf(s.summary, sizeof(s.summary), "%s", item["m"] | "");
+    s.question = item["q"] | false;
   }
   // ORCA 를 못 읽은 목록(꺼짐)은 비교하지 않는다. 다시 읽기 시작하면 첫 목록은 알리지 않는다.
   if (orca_ok) {

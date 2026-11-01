@@ -6,7 +6,7 @@
 class CompletionInbox {
  public:
   static constexpr unsigned CAPACITY = 8;
-  static constexpr unsigned TEXT_SIZE = 160;
+  static constexpr unsigned TEXT_SIZE = 280;  // "ORCA-프로젝트(20자)-세션(30자)\n요약(40자)" 전부 한글이어도 들어간다
   static constexpr unsigned SNAPSHOT_SIZE = CAPACITY * (TEXT_SIZE + 2) + 1;
   void push(const char *text) {
     if (!text || !*text) return;

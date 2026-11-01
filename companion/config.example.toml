@@ -58,7 +58,7 @@ gist_id = ""
 output = ""
 
 # 기기가 보내는 알림에 맞춰 PC 스피커로 소리를 낸다.
-#   mic_on "띠링", mic_off "띠롱", limit_warn 한도 80%/90% 넘음 "삐삐삐", limit_reset 한도 초기화 "도미솔도"
+#   mic_on "띠링", mic_off "띠롱", limit_warn 한도 80%/90% 넘음 "삐삐삐", limit_reset 한도 초기화·ORCA 권한 요청·질문 "도미솔도"
 [sounds]
 enabled = true
 # 효과음 크기는 PC 를 따른다: Mac 은 시스템 설정 > 사운드의 "경고음 음량", Windows 는 PC 음량

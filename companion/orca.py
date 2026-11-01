@@ -2,7 +2,7 @@
 
   - 2초마다 orca CLI 로 세션 목록과 상태를 읽는다 (orca worktree ps, orca terminal list). 바뀌었을 때만 기기로 보낸다.
     Windows 는 CLI 의 named pipe 로 직접 묻고, 안 되면 orca 명령으로 보낸다.
-      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태, "m": 끝난 세션의 마지막 답변 요약 (없으면 뺀다)}], "a": ORCA 에 지금 보이는 세션 id 또는 ""}}
+      PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태, "m": 끝난 세션의 마지막 답변 요약 (없으면 뺀다), "q": 사용자에게 질문하는 중이면 true (아니면 뺀다)}], "a": ORCA 에 지금 보이는 세션 id 또는 ""}}
       s: working(작업 중) / waiting(입력 기다림) / permission(권한 요청) / blocked / done / idle / shell(AI 없는 터미널)
   - 기기에서 세션을 누르면 {"ask": "start", "mode": "dictate", "orca": id}: 그 세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다.
     받아 적은 글은 커서 자리가 아니라 그 세션 터미널에 직접 넣는다 (orca terminal send). Enter 는 누르지 않는다.
@@ -588,6 +588,10 @@ class Orca:
             title = custom.get(term.get("tabId")) or _short_title(term.get("title"))
             rows.append({"id": short, "t": title[:30], "p": Path(path).name[:20],
                          "s": state})
+            # 질문도 state 는 waiting 으로 오고, 입력 기다림과 같이 다루되 기기가 소리를 낼 수 있게 따로 알린다
+            program = (agent or {}).get("programStatus") or {}
+            if state in DONE_STATES and program.get("state") == "blocked" and program.get("kind") == "question":
+                rows[-1]["q"] = True  # 기기의 item["q"] | false 는 bool 만 받는다
             # 작업 중에는 답변이 계속 바뀌어 목록을 자꾸 다시 보내게 되므로 끝난 뒤에만 넣는다
             summary = _summary(agent.get("lastAssistantMessage")) if agent and state in DONE_STATES else ""
             if summary:
