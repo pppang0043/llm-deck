@@ -4,10 +4,10 @@ PortAudio 는 처음 켤 때 본 장치만 기억하고, 마이크를 연 뒤에
 어느 마이크에서도 소리가 오지 않는다 (Mac 에서 확인). 그래서 마이크는 이 프로세스에서만 열고,
 장치 목록을 새로 읽어야 하면 이 프로세스만 다시 띄운다 (도우미 전체를 다시 띄우면 기기 연결·미러링이 끊긴다).
 
-    도우미 -> 이 프로세스: {"op": "devices"} / {"op": "listen", "name": 마이크} / {"op": "halt"} / {"op": "close"}
+    도우미 -> 이 프로세스: {"op": "devices"} / {"op": "listen", "name": 마이크} / {"op": "halt"}
     이 프로세스 -> 도우미: {"devices": [이름...], "default": 기본 마이크 이름}
                           {"opened": 이름, "secs": 여는 데 걸린 초} 또는 {"error": 까닭}, 그 뒤 {"pcm": base64 int16}
-                          {"halted": true}, {"closed": true}
+                          {"halted": true}
 """
 
 import base64
@@ -46,10 +46,6 @@ class MicServer:
         elif op == "halt":
             self._halt()
             self.emit({"halted": True})
-        elif op == "close":
-            self._halt()
-            self._close()
-            self.emit({"closed": True})
 
     def _usable(self, d: dict) -> bool:
         # PortAudio WDM-KS 는 blocking 읽기를 지원하지 않는다.

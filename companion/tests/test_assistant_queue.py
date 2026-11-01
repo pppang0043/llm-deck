@@ -150,3 +150,46 @@ def test_successful_dictation_leaves_clipboard_alone(a, monkeypatch):
     a.orca = None
     a._finish_dictation(assistant._Take(True, False, False), "말한 글")
     assert clipboard == [] and a.pending_toast == "입력했습니다: 말한 글"
+
+
+def test_dictation_waits_for_the_session_lookup(a, monkeypatch):
+    """ORCA CLI 가 느려 세션 찾기가 아직 끝나지 않았어도 고른 세션에 넣는다 (예전: 찾지 못했다며 클립보드로)."""
+    sent = []
+    a.orca = type("Fake", (), {"commands": lambda self: [], "aliases": {},
+                               "send_text": lambda self, target, text: sent.append((target, text))})()
+    take = assistant._Take(True, False, True)
+
+    def activate():
+        time.sleep(0.2)
+        take.orca_target = "term_x"
+
+    take.activating = threading.Thread(target=activate, daemon=True)
+    take.activating.start()
+    a._finish_dictation(take, "말한 글")
+    assert sent == [("term_x", "말한 글")]
+
+
+def test_pending_survives_receiver_clearing_sent(monkeypatch):
+    """받는 스레드가 sent 를 None 으로 지워도 메인 바퀴가 오류로 10초 멈추지 않는다."""
+
+    class Racing(assistant.Assistant):
+        reads = 0
+        stored = None
+
+        @property
+        def sent(self):
+            Racing.reads += 1
+            return self.stored if Racing.reads <= 2 else None
+
+        @sent.setter
+        def sent(self, value):
+            self.stored = value
+
+    a = Racing({})
+    monkeypatch.setattr(a, "_watch_mics", lambda: None)
+    monkeypatch.setattr(a, "_watch_audio", lambda: None)
+    a._set("thinking", q="질문", a="답 일부")
+    a.stored = {"state": "thinking", "q": "질문", "a": "", "done": False, "mode": "ask"}
+    Racing.reads = 0
+    a.sent_at = time.monotonic()
+    a.pending()

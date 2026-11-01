@@ -238,13 +238,24 @@ def _mac_name(ca, cf, Address, device: int) -> str | None:
     return buf.value.decode() if ok else None
 
 
+_mac_failed: set[str] = set()
+
+
+def _mac_failure(where: str, e: Exception) -> None:
+    """CoreAudio 를 못 읽으면 블루투스·아이폰 마이크를 가려내지 못한다. 처음 한 번은 기록에 남긴다."""
+    if where not in _mac_failed:
+        _mac_failed.add(where)
+        print(f"[assistant] CoreAudio 를 읽지 못했습니다 ({where}): {e}")
+
+
 def _mac_default_input() -> str | None:
     """Mac: 시스템 설정 > 사운드 > 입력 에서 고른 장치 (CoreAudio)."""
     try:
         ca, cf, Address = _coreaudio()
         device = _mac_uint(ca, Address, 1, "dIn ")  # 시스템(1)의 기본 입력 장치
         return _mac_name(ca, cf, Address, device) if device else None
-    except Exception:
+    except Exception as e:
+        _mac_failure("기본 입력", e)
         return None
 
 
@@ -273,7 +284,8 @@ def _mac_inputs() -> dict[str, tuple[int, str]]:
             if name:
                 found[name] = (int(device), kind.to_bytes(4, "big").decode("latin-1"))
         return found
-    except Exception:
+    except Exception as e:
+        _mac_failure("마이크 목록", e)
         return {}
 
 
@@ -306,7 +318,8 @@ def _mac_use_builtin_input(allowed: str = "") -> str | None:
         if ca.AudioObjectSetPropertyData(1, byref(Address(_fourcc("dIn "), _fourcc("glob"), 0)), 0, None,
                                          sizeof(c_uint32), byref(c_uint32(builtin))):
             return None
-    except Exception:
+    except Exception as e:
+        _mac_failure("기본 입력 바꾸기", e)
         return None
     return name
 
@@ -412,6 +425,8 @@ def _lid_closed() -> bool:
         return _lid_last
     _lid_last = '"AppleClamshellState" = Yes' in out
     return _lid_last
+
+ACTIVATE_WAIT_SECONDS = 15  # 받아 적은 글을 넣기 전에 ORCA 세션 찾기를 기다리는 시간
 
 # 끝난 프로세스의 오디오 세션이 coreaudiod 에 이만큼 남으면 알린다 (평소 0~3개). 2026-11-01 에 142개 쌓여 CPU 를 200% 넘게 썼고
 # 대부분 알림음 afplay 의 것이었다. 왜 남는지는 모른다 (같은 afplay 가 안 남을 때도 있다). 재시작에는 관리자 권한이 필요해서 알리기만 한다
@@ -704,6 +719,7 @@ class _Take:
         self.voice = voice  # 답을 소리로 읽어 줄지 (끝낼 때 다시 받는다)
         self.orca_pick = orca_pick  # ORCA 세션으로 가는 받아쓰기인지
         self.orca_target: str | None = None  # 그 세션의 터미널 handle (말하는 동안 따로 찾는다)
+        self.activating: threading.Thread | None = None  # 그 세션을 찾는 스레드
         self.chunks: list = []
         self.recording = threading.Event()  # 녹음마다 따로 둔다 (앞 녹음 스레드가 다음 녹음까지 이어 받지 않게)
         self.recording.set()
@@ -782,7 +798,6 @@ class Assistant:
         if action in ("start", "cancel", "new", "mute"):
             # 새로 말하기 시작하면 읽던 답은 끊는다 (마이크에 PC 소리가 들어가지 않게)
             self.speaker.stop()
-        if action in ("start", "cancel", "new", "mute"):
             self.spoken_later = None
         if action == "start":
             if self.recording:
@@ -804,7 +819,8 @@ class Assistant:
                 # 말하는 동안 그 세션 탭으로 바꿔 둔다 (끝나면 그 세션에 넣는다)
                 def activate() -> None:
                     take.orca_target = self.orca.activate(target)
-                threading.Thread(target=activate, daemon=True).start()
+                take.activating = threading.Thread(target=activate, daemon=True)
+                take.activating.start()
             self._start(take)
         elif action == "stop":
             if self.take:
@@ -949,23 +965,21 @@ class Assistant:
                 continue
         return False
 
+    def _record_failed(self, take: _Take, reason: str, no_mic: bool) -> None:
+        print(f"[assistant] 녹음 실패: {reason}".replace("\n", " "))
+        take.failed = True
+        take.chunks = []
+        self._end_take(take)
+        if no_mic:
+            self._set_mic("none", why=reason)
+            self._check_due = time.monotonic() + RECHECK_SECONDS if reason == _PRIVACY_REASON else None
+        if self.busy or not self.takes.empty():
+            # 앞 녹음의 답을 받는 중이면 그 화면을 덮지 않고 알림으로
+            self.pending_toast = reason
+        else:
+            self._set("error", a=reason, mode=take.mode)
+
     def _record(self, take: _Take) -> None:
-        import numpy as np
-
-        def fail(reason: str, no_mic: bool) -> None:
-            print(f"[assistant] 녹음 실패: {reason}".replace("\n", " "))
-            take.failed = True
-            take.chunks = []
-            self._end_take(take)
-            if no_mic:
-                self._set_mic("none", why=reason)
-                self._check_due = time.monotonic() + RECHECK_SECONDS if reason == _PRIVACY_REASON else None
-            if self.busy or not self.takes.empty():
-                # 앞 녹음의 답을 받는 중이면 그 화면을 덮지 않고 알림으로
-                self.pending_toast = reason
-            else:
-                self._set("error", a=reason, mode=take.mode)
-
         # 기기 마이크가 있으면 먼저 쓴다 (PC 마이크를 열지 않는다)
         if take.dev_mic and self._record_device(take):
             return
@@ -973,89 +987,97 @@ class Assistant:
             return
         # 미리 들어 보는 중이면 끝날 때까지 기다린다 (마이크마다 2초 안쪽, 처음 열 때는 더)
         if not self._audio_lock.acquire(timeout=10):
-            fail("마이크가 아직 닫히는 중입니다\n잠시 뒤 다시 눌러 주세요", False)
+            self._record_failed(take, "마이크가 아직 닫히는 중입니다\n잠시 뒤 다시 눌러 주세요", False)
             return
         with _Held(self._audio_lock):
             if self._mic_privacy_blocked():
-                fail(_PRIVACY_REASON, True)
+                self._record_failed(take, _PRIVACY_REASON, True)
                 return
-            order = self._mic_order(with_phone=True)
-            silent: list[str] = []  # 열렸지만 소리가 오지 않은 마이크
-            error = None  # 열지 못한 마이크의 마지막 오류
-            lid = False  # 덮개가 닫혀 내장 마이크가 0 만 보냈다
-            for retry in (False, True):
-                if retry:
-                    if silent or not take.recording.is_set():
-                        break
-                    # 하나도 열지 못했다. PortAudio 는 처음 켤 때 본 장치만 기억해서, 그 뒤 덮개를 여닫거나
-                    # 에어팟·아이폰 마이크가 붙고 빠지면 열리지 않는다 (Mac: Invalid Property Value).
-                    # 녹음 프로세스를 새로 띄워 목록을 다시 읽는다
-                    print(f"[assistant] 마이크를 열지 못했습니다: {str(error)[:80]}")
-                    self.mics.restart()
-                    order = self._mic_order(with_phone=True)
-                for i, name in enumerate(order):
-                    if not take.recording.is_set():
-                        return
-                    if i and order[i - 1] in silent:
-                        # 앞 마이크가 조용했다: 다음 마이크로 처음부터 다시 녹음한다
-                        self.pending_toast = f"'{order[i - 1][:16]}' 마이크가 조용해서\n'{name[:16]}' 로 바꿉니다"
-                        self._set_rec(take, "preparing")
-                        take.chunks = []
-                    try:
-                        secs = self.mics.listen(name)
-                        if secs >= 1:
-                            print(f"[assistant] 마이크를 열었습니다 ({name}, {secs:.1f}초)")
-                    except OSError as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
-                        print(f"[assistant] '{name}' 마이크를 열지 못했습니다: {str(e)[:80]}")
-                        error = e
-                        if name == self._fallback:
-                            self._save_fallback("")
-                        continue
-                    quiet = False
-                    try:
-                        if take.recording.is_set():
-                            self._set_rec(take, "listening")
-                        start = time.monotonic()
-                        heard = False
-                        while take.recording.is_set() and time.monotonic() - start < MAX_RECORD_SECONDS:
-                            data = self.mics.read(0.05)
-                            if data is None:
-                                # 마이크 권한을 묻는 중이거나 막혀 있으면 소리가 아예 오지 않는다
-                                if not take.chunks and time.monotonic() - start > 2.0:
-                                    quiet = True
-                                    break
-                                continue
-                            take.chunks.append(data)
-                            heard = heard or bool(np.any(data))
-                            # 진짜 마이크는 조용해도 잡음이 있다. 1.5초 동안 완전히 0 이면 음소거됐거나 막힌 것이다
-                            if not heard and time.monotonic() - start > 1.5:
-                                # 외장 마이크라면 덮개와 상관없다
-                                lid = lid or ("macbook" in name.lower() and _lid_closed())
-                                quiet = True
-                                break
-                        if not quiet and take.recording.is_set():
-                            # 끝 버튼을 잊었다: 60초에서 스스로 끝내고 받아 적는다
-                            print(f"[assistant] {MAX_RECORD_SECONDS}초가 지나 녹음을 끝냅니다")
-                            threading.Thread(target=self._stop, daemon=True).start()
-                    finally:
-                        self.mics.halt()
-                        if self._phone(name) and not self._phone_ok(name):
-                            self.mics.restart()  # 고르지 않은 아이폰 마이크는 이번 녹음만 쓰고 닫는다
-                    if not quiet:
-                        take.mic = name
-                        if self._phone(name):  # 쓰는 동안은 끊지 않고, 마지막 녹음부터 다시 센다
-                            self._phone_until = time.monotonic() + PHONE_MIC_SECONDS
-                        self._mic_works(name, silent)
-                        return
-                    print(f"[assistant] '{name}' 에서 소리가 오지 않습니다")
-                    self._mic_silent(name, silent)
-            if silent:
-                reason = _LID_CLOSED_REASON if lid and len(silent) == 1 else _NO_AUDIO_REASON
-                if len(silent) > 1:
-                    reason = f"마이크 {len(silent)}개를 모두 써 봤지만\n" + reason
-                fail(reason, True)
-            elif take.recording.is_set():
-                fail(f"PC 마이크를 열지 못했습니다\n{str(error or '마이크가 없습니다')[:60]}", True)
+            self._record_pc(take)
+
+    def _record_pc(self, take: _Take) -> None:
+        """소리가 오는 첫 마이크로 녹음한다. 모두 안 되면 실패로 알린다."""
+        order = self._mic_order(with_phone=True)
+        silent: list[str] = []  # 열렸지만 소리가 오지 않은 마이크
+        error = None  # 열지 못한 마이크의 마지막 오류
+        lid = False  # 덮개가 닫혀 내장 마이크가 0 만 보냈다
+        for retry in (False, True):
+            if retry:
+                if silent or not take.recording.is_set():
+                    break
+                # 하나도 열지 못했다. PortAudio 는 처음 켤 때 본 장치만 기억해서, 그 뒤 덮개를 여닫거나
+                # 에어팟·아이폰 마이크가 붙고 빠지면 열리지 않는다 (Mac: Invalid Property Value).
+                # 녹음 프로세스를 새로 띄워 목록을 다시 읽는다
+                print(f"[assistant] 마이크를 열지 못했습니다: {str(error)[:80]}")
+                self.mics.restart()
+                order = self._mic_order(with_phone=True)
+            for i, name in enumerate(order):
+                if not take.recording.is_set():
+                    return
+                if i and order[i - 1] in silent:
+                    # 앞 마이크가 조용했다: 다음 마이크로 처음부터 다시 녹음한다
+                    self.pending_toast = f"'{order[i - 1][:16]}' 마이크가 조용해서\n'{name[:16]}' 로 바꿉니다"
+                    self._set_rec(take, "preparing")
+                    take.chunks = []
+                try:
+                    secs = self.mics.listen(name)
+                    if secs >= 1:
+                        print(f"[assistant] 마이크를 열었습니다 ({name}, {secs:.1f}초)")
+                except OSError as e:  # 장치는 보이는데 열리지 않을 때 (다른 프로그램이 독점, 드라이버 문제 등)
+                    print(f"[assistant] '{name}' 마이크를 열지 못했습니다: {str(e)[:80]}")
+                    error = e
+                    if name == self._fallback:
+                        self._save_fallback("")
+                    continue
+                result = self._capture(take, name)
+                if result == "ok":
+                    take.mic = name
+                    if self._phone(name):  # 쓰는 동안은 끊지 않고, 마지막 녹음부터 다시 센다
+                        self._phone_until = time.monotonic() + PHONE_MIC_SECONDS
+                    self._mic_works(name, silent)
+                    return
+                if result == "zero":
+                    lid = lid or ("macbook" in name.lower() and _lid_closed())  # 외장 마이크라면 덮개와 상관없다
+                print(f"[assistant] '{name}' 에서 소리가 오지 않습니다")
+                self._mic_silent(name, silent)
+        if silent:
+            reason = _LID_CLOSED_REASON if lid and len(silent) == 1 else _NO_AUDIO_REASON
+            if len(silent) > 1:
+                reason = f"마이크 {len(silent)}개를 모두 써 봤지만\n" + reason
+            self._record_failed(take, reason, True)
+        elif take.recording.is_set():
+            self._record_failed(take, f"PC 마이크를 열지 못했습니다\n{str(error or '마이크가 없습니다')[:60]}", True)
+
+    def _capture(self, take: _Take, name: str) -> str:
+        """열어 둔 마이크로 녹음이 끝날 때까지 받는다. "ok" 받았다, "none" 소리가 아예 오지 않는다, "zero" 0 만 온다."""
+        import numpy as np
+
+        try:
+            if take.recording.is_set():
+                self._set_rec(take, "listening")
+            start = time.monotonic()
+            heard = False
+            while take.recording.is_set() and time.monotonic() - start < MAX_RECORD_SECONDS:
+                data = self.mics.read(0.05)
+                if data is None:
+                    # 마이크 권한을 묻는 중이거나 막혀 있으면 소리가 아예 오지 않는다
+                    if not take.chunks and time.monotonic() - start > 2.0:
+                        return "none"
+                    continue
+                take.chunks.append(data)
+                heard = heard or bool(np.any(data))
+                # 진짜 마이크는 조용해도 잡음이 있다. 1.5초 동안 완전히 0 이면 음소거됐거나 막힌 것이다
+                if not heard and time.monotonic() - start > 1.5:
+                    return "zero"
+            if take.recording.is_set():
+                # 끝 버튼을 잊었다: 60초에서 스스로 끝내고 받아 적는다
+                print(f"[assistant] {MAX_RECORD_SECONDS}초가 지나 녹음을 끝냅니다")
+                threading.Thread(target=self._stop, daemon=True).start()
+            return "ok"
+        finally:
+            self.mics.halt()
+            if self._phone(name) and not self._phone_ok(name):
+                self.mics.restart()  # 고르지 않은 아이폰 마이크는 이번 녹음만 쓰고 닫는다
 
     def _mic_works(self, name: str, silent: list[str]) -> None:
         """그 마이크에서 소리가 왔다. 앞 마이크가 조용해서 대신 쓴 것이면 빠질 때까지 먼저 쓴다."""
@@ -1134,7 +1156,7 @@ class Assistant:
         self._names = [n for n in order if not any(a in n.lower() for a in _ALIASES)] or order
         phones = [n for n in order if self._phone(n) and not self._phone_ok(n)] if with_phone else []
         order = [n for n in order if not self._phone(n) or self._phone_ok(n)]
-        if self._fallback and self._fallback not in order:
+        if self._fallback and names and self._fallback not in order:
             print(f"[assistant] 대신 쓰던 '{self._fallback}' 마이크가 빠져 기본 마이크로 돌아갑니다")
             self._save_fallback("")
         # 고른 마이크, 앞서 기본 마이크가 조용해서 대신 쓴 마이크 순서로 앞에 둔다 (녹음마다 바꾼다는 알림이 뜨지 않게)
@@ -1233,6 +1255,7 @@ class Assistant:
     def _probe_round(self) -> None:
         """마이크를 순서대로 잠깐 들어 보고 소리가 오는 첫 마이크를 쓸 마이크로 정한다.
         모두 조용하면 PROBE_GAP 초 뒤 다시, PROBE_TRIES 번이면 연결 불가로 알리고 장치가 바뀌거나 다시 고를 때까지 멈춘다."""
+        picked = self._picked
         try:
             if not self._audio_lock.acquire(blocking=False):  # 녹음 중
                 self._check_due = time.monotonic() + PROBE_GAP
@@ -1275,6 +1298,8 @@ class Assistant:
                 self._check_due = None
         finally:
             self._probing = False
+            if self._picked != picked:  # 들어 보는 동안 기기에서 골랐다. 이번 결과는 그 마이크의 것이 아니다
+                self._check_due = time.monotonic()
 
     def _probe(self, name: str) -> bool | None:
         """잠깐 들어 본다: 소리가 오면 True, 조용하면 False, 열지 못하면 None. 소리가 오면 바로 멈춘다."""
@@ -1518,6 +1543,8 @@ class Assistant:
             if fixed != text:
                 print(f"[assistant] / 명령으로 바꿈: {fixed}")
             text = fixed
+        if take.activating:
+            take.activating.join(ACTIVATE_WAIT_SECONDS)  # ORCA CLI 가 느리면 받아 적기가 먼저 끝날 수 있다
         target = take.orca_target
         try:
             if target:
@@ -1556,10 +1583,11 @@ class Assistant:
         self._watch_audio()
         self._unload_if_idle()
         state = self._outgoing()
-        if state is None or state == self.sent:
+        sent = self.sent  # 받는 스레드가 None 으로 지울 수 있어 한 번만 읽는다
+        if state is None or state == sent:
             return None
         # 답이 나오는 중에는 너무 자주 보내지 않는다 (끝·상태 바뀜은 바로)
-        partial = self.sent and state["state"] == self.sent["state"] == "thinking" and state["q"] == self.sent["q"]
+        partial = sent and state["state"] == sent["state"] == "thinking" and state["q"] == sent["q"]
         if partial and time.monotonic() - self.sent_at < PARTIAL_SECONDS:
             return None
         self.sent, self.sent_at = state, time.monotonic()
@@ -1594,15 +1622,3 @@ class Assistant:
             print(f"[assistant] {self.idle_seconds // 60}분 동안 질문이 없어 CLI 를 내렸습니다")
         finally:
             self.lock.release()
-
-    def close(self) -> None:
-        # 녹음 중인 쪽이 마이크를 멈추는 동안 닫으면 macOS 오디오가 서로 기다리며 멈춘다 (PortAudio). 끝날 때까지 기다린다.
-        self._end_take()
-        self.spoken_later = None
-        self.speaker.stop()
-        with self._audio_lock:
-            self.mics.stop()
-        with self.lock:
-            if self.session:
-                self.session.close()
-                self.session = None

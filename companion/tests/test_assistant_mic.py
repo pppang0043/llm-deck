@@ -622,3 +622,29 @@ def test_stale_audio_is_checked_only_every_few_minutes(fake, monkeypatch):
     a._watch_audio()
     a._watch_audio()
     assert len(calls) == 1
+
+
+def test_fallback_mic_survives_a_failed_device_list(fake, monkeypatch):
+    """녹음 프로세스가 잠깐 답하지 않아 목록이 비었다고 대신 쓰던 마이크를 잊지 않는다."""
+    _, a = fake
+    a._save_fallback("MacBook Pro 마이크")
+
+    def broken():
+        raise OSError("마이크가 응답하지 않습니다")
+
+    monkeypatch.setattr(a.mics, "devices", broken)
+    a._mic_order()
+    assert a._fallback == "MacBook Pro 마이크"
+
+
+def test_mic_picked_during_probe_is_probed_again(fake, monkeypatch):
+    """들어 보는 동안 기기에서 고른 마이크의 재확인 요청이 들어 보기 끝에 지워지면 상태줄이 옛 마이크를 보여 준다."""
+    _, a = fake
+
+    def picked_while_listening(name):
+        a._pick("MacBook Pro 마이크")
+        return True
+
+    monkeypatch.setattr(a, "_probe", picked_while_listening)
+    probe(a)
+    assert a._check_due is not None
