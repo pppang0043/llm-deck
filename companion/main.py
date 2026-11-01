@@ -358,6 +358,18 @@ def wifi_setup(cfg: dict, add: bool) -> None:
 
 
 def main() -> None:
+def _private_files() -> None:
+    """도우미 폴더의 기록에는 받아쓴 글이, 설정에는 키가 있다. 이 사용자만 읽게 둔다."""
+    if sys.platform == "win32":
+        return
+    state = Path.home() / ".llm-deck"
+    for path, mode in ((state, 0o700), (state / "companion.log", 0o600), (Path(__file__).parent / "config.toml", 0o600)):
+        try:
+            path.chmod(mode)
+        except OSError:
+            pass
+
+
     parser = argparse.ArgumentParser(description="LLM Deck PC companion")
     parser.add_argument("--link", choices=["auto", *TRANSPORTS], help="연결 방식 (기본: 설정 파일 값 또는 auto)")
     parser.add_argument("--dry-run", action="store_true", help="기기로 보내지 않고 보낼 내용만 출력")
@@ -397,6 +409,7 @@ def main() -> None:
     parser.add_argument("--log", metavar="FILE", help="출력을 파일에 덧붙여 쓴다 (창 없이 자동 실행할 때)")
     args = parser.parse_args()
     if hasattr(faulthandler, "register"):
+    _private_files()
         import signal
         # 멈춘 것 같을 때 kill -USR1 <pid> 로 어디서 기다리는지 기록에 남긴다 (Mac, Linux)
         faulthandler.register(signal.SIGUSR1, all_threads=True)

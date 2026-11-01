@@ -13,6 +13,22 @@
 #include "pcpanel.h"
 #include "settings.h"
 #include "quickpanel.h"
+#include "toast_queue.h"
+
+// LVGL 은 잠금이 없어 화면을 그리는 태스크(loop)에서만 써야 한다. 다른 태스크에서 건드리면 메모리가 망가져 한참 뒤
+// 엉뚱한 곳에서 죽는다. 그런 호출은 화면을 건드리지 않고 돌아가며, 이름마다 한 번만 로그에 남긴다.
+static TaskHandle_t ui_task = nullptr;  // ui_init 을 부른 태스크 (setup 과 loop 는 같은 태스크다)
+#define UI_LOOP_ONLY(...)                                                              \
+  do {                                                                                 \
+    if (xTaskGetCurrentTaskHandle() != ui_task) {                                      \
+      static bool told = false;                                                        \
+      if (!told) {                                                                     \
+        told = true;                                                                   \
+        Serial.printf("[ui] off-loop call %s from %s\n", __func__, pcTaskGetName(NULL)); \
+      }                                                                                \
+      return __VA_ARGS__;                                                              \
+    }                                                                                  \
+  } while (0)
 
 // 한글이 들어 있는 글꼴 (src/fonts, 나눔고딕). 큰 숫자(48)는 기본 글꼴을 쓴다.
 LV_FONT_DECLARE(font_ko_14);
@@ -136,6 +152,7 @@ static void update_split_btn(lv_obj_t *btn) {
 }
 
 lv_obj_t *ui_split_button(lv_obj_t *parent) {
+  UI_LOOP_ONLY(nullptr);
   lv_obj_t *btn = lv_btn_create(parent);
   lv_obj_set_size(btn, LV_SIZE_CONTENT, 24);
   lv_obj_set_style_pad_hor(btn, 8, 0);
@@ -157,6 +174,7 @@ lv_obj_t *ui_split_button(lv_obj_t *parent) {
 }
 
 void ui_mirror_changed() {
+  UI_LOOP_ONLY();
   for (lv_obj_t *b : split_btns) {
     if (b) update_split_btn(b);
   }
@@ -398,10 +416,12 @@ static void gauge_clicked(lv_event_t *e) {
 }
 
 bool ui_history_visible() {
+  UI_LOOP_ONLY(false);
   return hist_panel && !lv_obj_has_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_history_close() {
+  UI_LOOP_ONLY();
   if (hist_panel) lv_obj_add_flag(hist_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -769,6 +789,7 @@ static void mic_btn_event(lv_event_t *e) {
 }
 
 void ui_refresh_talk() {
+  UI_LOOP_ONLY();
   orcapanel_refresh();
   if (!mic_btn) return;
   int st = askpanel_talk_state();
@@ -862,6 +883,7 @@ static void layout_status_left() {
 }
 
 void ui_layout_status() {
+  UI_LOOP_ONLY();
   layout_status_left();
 }
 
@@ -1002,6 +1024,7 @@ static void apply_view() {
 }
 
 void ui_show_home() {
+  UI_LOOP_ONLY();
   view = VIEW_HOME;
   apply_view();
 }
@@ -1011,10 +1034,12 @@ bool ui_settings_visible() {
 }
 
 bool ui_info_visible() {
+  UI_LOOP_ONLY(false);
   return settings_info_visible();
 }
 
 void ui_set_info(const char *text) {
+  UI_LOOP_ONLY();
   settings_set_info(text);
 }
 
@@ -1023,6 +1048,7 @@ void ui_set_home_actions(void (*open_camera)()) {
 }
 
 void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
+  ui_task = xTaskGetCurrentTaskHandle();
   mic_toggle_cb = on_mic_toggle;
   rotate_cb = on_rotate;
 
@@ -1173,6 +1199,7 @@ static void layout_status_right() {
 }
 
 void ui_layout() {
+  UI_LOOP_ONLY();
   int w = display_width(), h = display_height();
   lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 2);
   layout_status_right();
@@ -1206,10 +1233,12 @@ void ui_layout() {
 }
 
 const char *ui_status_text() {
+  UI_LOOP_ONLY("");
   return lv_label_get_text(status_lbl);
 }
 
 void ui_set_status(const char *text) {
+  UI_LOOP_ONLY();
   if (strcmp(lv_label_get_text(status_lbl), text) == 0) return;
   lv_label_set_text(status_lbl, text);
   pcmic_refresh();
@@ -1219,6 +1248,7 @@ void ui_set_status(const char *text) {
 }
 
 void ui_set_clock(const char *date, const char *time) {
+  UI_LOOP_ONLY();
   if (strcmp(clock_date, date) == 0 && strcmp(clock_time, time) == 0) return;
   strlcpy(clock_date, date, sizeof(clock_date));
   strlcpy(clock_time, time, sizeof(clock_time));
@@ -1226,6 +1256,7 @@ void ui_set_clock(const char *date, const char *time) {
 }
 
 void ui_set_battery(int pct, bool charging) {
+  UI_LOOP_ONLY();
   static int shown = -2;
   static bool shown_charging = false;
   if (pct == shown && charging == shown_charging) return;
@@ -1253,6 +1284,7 @@ void ui_set_battery(int pct, bool charging) {
 }
 
 void ui_set_wifi(int bars) {
+  UI_LOOP_ONLY();
   static int shown = -2;
   if (bars == shown) return;
   shown = bars;
@@ -1268,6 +1300,7 @@ void ui_set_wifi(int bars) {
 }
 
 void ui_set_wifi_info(const char *text) {
+  UI_LOOP_ONLY();
   strlcpy(wifi_info, text, sizeof(wifi_info));
   if (waiting) show_waiting();
 }
@@ -1288,12 +1321,14 @@ static void usage_retry(lv_timer_t *t) {
 }
 
 void ui_usage_received() {
+  UI_LOOP_ONLY();
   bool was_stale = !usage_received_ms || millis() - usage_received_ms > USAGE_STALE_MS;
   usage_received_ms = millis() | 1;
   if (was_stale) remain_tick(nullptr);
 }
 
 void ui_set_usage(JsonArrayConst services) {
+  UI_LOOP_ONLY();
   history_record(services);
   // PC 도우미는 30초마다 같은 내용을 다시 보낸다. 바뀐 것이 없으면 그대로 둔다 (새로 만드는 데 0.1초쯤 멈춘다).
   // 다만 "16:40 소진 예상" 과 오늘/날짜 표시는 시간이 지나면 바뀌므로 기록 한 칸(10분)마다 다시 그린다.
@@ -1419,6 +1454,7 @@ uint32_t ui_usage_version() {
 }
 
 void ui_usage_pages(lv_obj_t *tv) {
+  UI_LOOP_ONLY();
   JsonArrayConst services = last_usage.as<JsonArrayConst>();
   uint8_t keep, keep_col;
   tile_pos(tv, &keep, &keep_col);
@@ -1444,6 +1480,7 @@ void ui_usage_pages(lv_obj_t *tv) {
 }
 
 bool ui_usage_pages_on_pc(lv_obj_t *tv) {
+  UI_LOOP_ONLY(false);
   lv_obj_t *active = lv_tileview_get_tile_act(tv);
   return active && lv_obj_get_child_cnt(tv) && active == lv_obj_get_child(tv, 0);
 }
@@ -1469,6 +1506,7 @@ void ui_usage_summary(char *out, size_t size) {
 }
 
 void ui_set_mic(bool on) {
+  UI_LOOP_ONLY();
   // 기기 마이크(INMP441): 설정 > 알림 및 사운드, BOOT 버튼, PC(--mic) 로 켜고 끈다.
   // 사용량 화면 아래 버튼은 받아쓰기 버튼이다 (PC 마이크).
   mic_on = on;
@@ -1476,10 +1514,12 @@ void ui_set_mic(bool on) {
 }
 
 void ui_set_level(uint8_t pct) {
+  UI_LOOP_ONLY();
   lv_bar_set_value(level_bar, pct, LV_ANIM_OFF);
 }
 
 void ui_show(const char *name) {
+  UI_LOOP_ONLY();
   // 설정 안의 어느 화면이든 그 화면 그대로 맨 아래로만 내린다
   if (strcmp(name, "settings_end") == 0 && view == VIEW_SETTINGS) {
     settings_open("end");
@@ -1553,6 +1593,7 @@ void ui_show(const char *name) {
 }
 
 bool ui_screenshot(uint16_t **pixels, int *w, int *h) {
+  UI_LOOP_ONLY(false);
   lv_img_dsc_t *snap = lv_snapshot_take(lv_scr_act(), LV_IMG_CF_TRUE_COLOR);
   if (!snap) return false;
   *w = snap->header.w;
@@ -1654,7 +1695,18 @@ static void toast_hide(lv_timer_t *t) {
   lv_timer_pause(t);
 }
 
+// 다른 태스크에서 부른 알림을 loop 가 띄울 때까지 맡아 둔다
+static ToastQueue off_loop_toasts;
+static portMUX_TYPE off_loop_mux = portMUX_INITIALIZER_UNLOCKED;
+
 void ui_toast(const char *text, uint32_t ms) {
+  if (xTaskGetCurrentTaskHandle() != ui_task) {
+    portENTER_CRITICAL(&off_loop_mux);
+    bool queued = off_loop_toasts.push(text, ms);
+    portEXIT_CRITICAL(&off_loop_mux);
+    if (!queued) Serial.printf("[ui] toast dropped from %s: queue full\n", pcTaskGetName(NULL));
+    return;
+  }
   log_toast(text);
   if (!toast) {
     // 모든 화면(카메라 포함) 위에 뜨는 알림
@@ -1689,4 +1741,16 @@ void ui_toast(const char *text, uint32_t ms) {
   lv_timer_resume(toast_timer);
   // 화면이 꺼져 있었으면 켜서 보이게 한다
   display_poke();
+}
+
+void ui_toast_loop() {
+  char text[ToastQueue::TEXT];
+  uint32_t ms;
+  for (;;) {
+    portENTER_CRITICAL(&off_loop_mux);
+    bool got = off_loop_toasts.pop(text, &ms);
+    portEXIT_CRITICAL(&off_loop_mux);
+    if (!got) return;
+    ui_toast(text, ms);
+  }
 }

@@ -19,7 +19,7 @@ const char *photo_save(uint8_t *jpg, size_t len, bool to_sd = true);
 const char *photo_resend(const char *name, uint8_t *jpg, size_t len);
 
 // Wi-Fi 로 받아 갈 수 있게 마지막 사진을 가지고 있는다
-bool photo_last(const uint8_t **data, size_t *len, const char **name);
+uint8_t *photo_last_copy(size_t *len, char *name, size_t name_size);
 
 // PC 로 보내는 중인지 (블루투스는 수 초 걸린다)
 bool photo_sending();

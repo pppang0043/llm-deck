@@ -453,6 +453,7 @@ void loop() {
   }
   static uint32_t level_ms = 0;
 
+  ui_toast_loop();
   display_loop();
   usb_link_loop();
   net_loop();

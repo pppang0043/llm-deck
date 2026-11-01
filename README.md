@@ -166,6 +166,8 @@ LLMDECK_OTA_PASSWORD=$(cat ~/.llm-deck/ota_password) ~/.local/bin/pio run -e ota
 
 인터넷 회사 DNS 가 `llm-deck.local` 에 바깥 주소를 대답하기도 해서, 업로드 전에 집 안 주소만 골라 쓴다 (`firmware/scripts/ota_port.py`).
 
+도우미는 `~/.llm-deck/usb_serial` 에 적힌 보드의 USB 포트만 연다. 기기를 다른 보드로 바꿨다면 이 파일을 지우면 다음에 잡히는 보드를 다시 확인한다.
+
 Mac 에서 위 명령이 `Sending invitation ... failed` / `Host ... Not Found` 로 끝나면, PlatformIO 의 Python 에 macOS "로컬 네트워크" 권한이 없어 집 안 주소로 보내지 못하는 것이다 (`No route to host`). 빌드는 위 명령으로 끝났으니 시스템 Python 으로 같은 업로드 도구를 돌린다:
 
 ```sh

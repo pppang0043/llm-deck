@@ -203,7 +203,10 @@ void cloud_init() {
   lock = xSemaphoreCreateMutex();
   prefs.begin("llm-deck");
   prefs.getString("sync_url", url, sizeof(url));
-  configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
+  // 시간 서버는 이름이 아니라 주소로 적는다 (time.google.com, time.cloudflare.com). 이름이면 SNTP 가 DNS 를 기다리는 동안
+  // 첫 HTTPS 요청의 NetworkManager::hostByName 이 잠금 없이 dns_clear_cache 를 불러, SNTP 콜백이 cloud 태스크에서 돌다가
+  // udp_new 의 "Required to lock TCPIP core" 로 멈춘다. 소프트웨어 재시작은 시계를 유지해 clock_ready() 로는 막지 못한다.
+  configTzTime(TIMEZONE, "216.239.35.0", "162.159.200.1");
   mbedtls_platform_set_calloc_free(tls_calloc, heap_caps_free);
   // 암호화 통신(TLS)이 스택을 많이 써서 넉넉히 주되, 큰 메모리(PSRAM)에 둔다 (이 작업은 플래시에 쓰지 않는다)
   xTaskCreatePinnedToCoreWithCaps(cloud_task, "cloud", 12288, NULL, 1, NULL, 1, MALLOC_CAP_SPIRAM);

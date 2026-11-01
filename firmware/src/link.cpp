@@ -466,8 +466,8 @@ void link_loop() {
         if (camera_test_pattern(&jpg, &len)) photo_save(jpg, len);
       }
       if (from == active && usage && doc["sync_url"].is<const char *>()) cloud_set_url(doc["sync_url"]);
-      if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
-      if (doc["wifi_clear"] | false) net_clear_wifi();
+      if (from == LINK_USB && doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
+      if (from == LINK_USB && (doc["wifi_clear"] | false)) net_clear_wifi();
       if (doc["services"].is<JsonArrayConst>() && !usage) {
         static uint32_t told_ms = 0;
         if (!told_ms || millis() - told_ms > 60000) {

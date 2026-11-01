@@ -103,7 +103,14 @@ static bool job_start(CamJob j) {
 // 하던 작업이 끝날 때까지 기다리고 결과는 버린다 (카메라 크기를 바꾸거나 끄기 전에)
 static void job_wait_drop() {
   uint32_t t0 = millis();
-  while (job != JOB_NONE && !job_done && millis() - t0 < 8000) delay(10);
+  while (job != JOB_NONE && !job_done) {
+    // 작업이 도는 채로 카메라를 끄면 메모리가 망가진다. 멈춘 것이면 감시 장치(20초)보다 먼저 다시 켠다
+    if (millis() - t0 > 15000) {
+      Serial.println("[camera] job stuck, restarting");
+      ESP.restart();
+    }
+    delay(10);
+  }
   if (job_done && job_ok && job_jpg) free(job_jpg);
   if (job_done) free(job_qr);
   job_jpg = nullptr;

@@ -262,12 +262,17 @@ bool photo_streaming(const char *path) {
   return !path || strcmp(path, stream_path) == 0;
 }
 
-bool photo_last(const uint8_t **data, size_t *len, const char **name) {
-  if (!last_data) return false;
-  *data = last_data;
-  *len = last_len;
-  *name = last_name;
-  return true;
+uint8_t *photo_last_copy(size_t *len, char *name, size_t name_size) {
+  if (!last_lock) return nullptr;
+  xSemaphoreTake(last_lock, portMAX_DELAY);
+  uint8_t *copy = last_data ? (uint8_t *)ps_malloc(last_len) : nullptr;
+  if (copy) {
+    memcpy(copy, last_data, last_len);
+    *len = last_len;
+    strlcpy(name, last_name, name_size);
+  }
+  xSemaphoreGive(last_lock);
+  return copy;
 }
 
 bool photo_sending() {

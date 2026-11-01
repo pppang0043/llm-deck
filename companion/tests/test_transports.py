@@ -1,6 +1,7 @@
 """자동 선택(auto) 순서. 기기의 우선순위(firmware/src/link.cpp)와 같아야 한다."""
 
 import re
+import types
 from pathlib import Path
 
 import pytest
@@ -166,3 +167,28 @@ def test_wifi_tcp_keeps_reading_when_signature_comes_alone():
     device.close()
     reader.join(2)
     assert events == [{"hi": 1}]
+
+
+def _board(serial_number):
+    from transports import usb
+    return types.SimpleNamespace(vid=usb.ESPRESSIF_VID, pid=usb.USB_JTAG_PID, serial_number=serial_number, device=f"/dev/{serial_number}")
+
+
+def test_usb_opens_only_the_registered_board(tmp_path, monkeypatch):
+    from transports import usb
+
+    known = tmp_path / "usb_serial"
+    known.write_text("DECK")
+    monkeypatch.setattr(usb, "KNOWN_FILE", known)
+    monkeypatch.setattr(usb.list_ports, "comports", lambda: [_board("STICK"), _board("DECK")])
+    assert usb.find_port() == ("/dev/DECK", "DECK")
+    monkeypatch.setattr(usb.list_ports, "comports", lambda: [_board("STICK")])
+    assert usb.find_port() is None
+
+
+def test_usb_tries_any_board_before_one_is_registered(tmp_path, monkeypatch):
+    from transports import usb
+
+    monkeypatch.setattr(usb, "KNOWN_FILE", tmp_path / "usb_serial")
+    monkeypatch.setattr(usb.list_ports, "comports", lambda: [_board("NEW")])
+    assert usb.find_port() == ("/dev/NEW", "NEW")

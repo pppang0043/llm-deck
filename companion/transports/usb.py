@@ -20,6 +20,8 @@ CONFIRM_SECONDS = 10
 KNOWN_FILE = Path.home() / ".llm-deck" / "usb_serial"
 # 이번 실행에서 LLM Deck 이 아니라고 확인된 기기 (시리얼 번호)
 _rejected: set[str] = set()
+# 이미 알린 다른 보드 (알림을 한 번만 낸다)
+_ignored: set[str] = set()
 # 펌웨어는 돌고 있는 동안 1분마다 배터리 기록을 보낸다 (battery.cpp). 이만큼 한 바이트도 오지 않으면
 # 펌웨어가 돌지 않는 것이다 (도우미를 다시 켜거나 펌웨어를 올린 뒤 다운로드 모드 등에 멈춘 적이 있다). 기기를 다시 켠다
 SILENT_SECONDS = 150
@@ -55,7 +57,13 @@ def find_port(fixed: str = "") -> tuple[str, str] | None:
         p for p in list_ports.comports()
         if p.vid == ESPRESSIF_VID and p.pid == USB_JTAG_PID and (p.serial_number or "") not in _rejected
     ]
-    candidates.sort(key=lambda p: (p.serial_number or "") != known)
+    if known:
+        # 등록된 기기가 있으면 그 보드만 연다 (다른 ESP32 보드의 포트를 잠깐이라도 건드리지 않게)
+        others = {p.serial_number or "" for p in candidates} - {known}
+        for serial_number in others - _ignored:
+            _ignored.add(serial_number)
+            print(f"[USB] 등록된 기기가 아닌 보드({serial_number})는 열지 않습니다. 새 기기로 바꿨다면 {KNOWN_FILE} 를 지우세요.")
+        candidates = [p for p in candidates if (p.serial_number or "") == known]
     return (candidates[0].device, candidates[0].serial_number or "") if candidates else None
 
 

@@ -29,12 +29,25 @@ static WebServer server(80);
 static volatile bool radio_on = true;
 static WiFiMulti multi;
 static Preferences prefs;
-static SemaphoreHandle_t lock;
 static bool station = false;
 static bool was_connected = false;
 static WifiPeerLease wifi_owner;
 
-bool net_peer_is_owner(uint32_t peer) { return wifi_owner.owns(peer, millis()); }
+static SemaphoreHandle_t lock;
+
+// 요청 태스크와 메인 루프가 함께 쓴다
+bool net_peer_is_owner(uint32_t peer) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool owner = wifi_owner.owns(peer, millis());
+  xSemaphoreGive(lock);
+  return owner;
+}
+
+static void owner_reset() {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  wifi_owner.reset();
+  xSemaphoreGive(lock);
+}
 
 // 기기에 저장된 Wi-Fi 목록: [{"s": 이름, "p": 비밀번호}, ...]
 static JsonDocument saved(PSRAM_JSON);
@@ -226,7 +239,8 @@ static Auth check_auth(const char *path, const String &body, int *slot) {
   return AUTH_OK;
 }
 
-// 인증이 안 되면 401 로 답한다. 키가 없거나 틀린 PC 면 기기 화면에도 알린다 (가끔만)
+// 인증이 안 되면 401 로 답한다. 조치는 거절당한 PC 쪽에서 하므로 알림은 그 PC 의 도우미가 띄운다.
+// 웹 서버 태스크에서 도는 곳이라 여기서 화면(LVGL)을 건드리면 안 된다.
 static bool authorized(const char *path, const String &body, int *slot) {
   Auth a = check_auth(path, body, slot);
   if (a == AUTH_OK) return true;
@@ -237,7 +251,6 @@ static bool authorized(const char *path, const String &body, int *slot) {
     warned_ms = millis();
     Serial.printf("[net] refused %s from %s (%s): connect the PC by USB once to use Wi-Fi\n", path,
                   server.client().remoteIP().toString().c_str(), auth_name(a));
-    ui_toast("Wi-Fi 연결을 거절했습니다\nUSB로 한 번 연결하면\nWi-Fi를 쓸 수 있습니다", 6000);
   }
   return false;
 }
@@ -318,9 +331,11 @@ static void handle_usage() {
   }
   uint32_t peer = (uint32_t)server.client().remoteIP();
   bool read_only = !request["command_protocol"].isNull() || !request["command_status"].isNull() || !request["firmware_info"].isNull();
+  xSemaphoreTake(lock, portMAX_DELAY);
   bool selected = wifi_owner.owns(peer, millis());
   if (!read_only) selected = wifi_owner.claim(peer, millis(), request["heartbeat"] == true,
       request["helper"]["proto"].is<int>() && request["helper"]["proto"].as<int>() < 4);
+  xSemaphoreGive(lock);
   String reply;
   if (!link_submit(LINK_WIFI, body.c_str(), body.length(), selected, &reply, peer)) {
     server.send(503, "application/json", "{\"ok\":false,\"error\":\"not_queued\"}");
@@ -397,8 +412,25 @@ static void start_services() {
   MDNS.addService(HOSTNAME, "tcp", 80);
   // espota 가 찾을 수 있게 알린다
   if (strlen(OTA_PASSWORD) > 0) MDNS.enableArduino(3232, true);
-  server.begin();
   start_ota();
+}
+
+// 요청은 따로 돌린다. 사진을 보내거나 느린 요청을 받는 동안 화면이 멈추거나 감시 장치가 기기를 다시 켜지 않게
+static void server_task(void *) {
+  bool listening = false;
+  for (;;) {
+    if (WiFi.status() != WL_CONNECTED) {
+      listening = false;
+      delay(200);
+      continue;
+    }
+    if (!listening) {
+      server.begin();
+      listening = true;
+    }
+    server.handleClient();
+    delay(2);
+  }
 }
 
 void net_init() {
@@ -410,15 +442,16 @@ void net_init() {
   server.on("/photo", HTTP_GET, [] {
     int slot;
     if (!authorized("/photo", String(), &slot)) return;
-    const uint8_t *data;
     size_t len;
-    const char *name;
-    if (!photo_last(&data, &len, &name)) {
+    char name[40];
+    uint8_t *data = photo_last_copy(&len, name, sizeof(name));  // 보내는 동안 새 사진이 찍혀도 그대로
+    if (!data) {
       server.send(404, "text/plain", "no photo");
       return;
     }
     server.sendHeader("Content-Disposition", String("inline; filename=") + name);
     server.send_P(200, "image/jpeg", (const char *)data, len);
+    free(data);
   });
   WiFi.setHostname(HOSTNAME);
 
@@ -443,6 +476,7 @@ void net_init() {
   if (!radio_on) Serial.println("[net] wifi off in settings");
   ui_set_wifi_info(station ? "연결 중..." : "설정 안 됨");
   xTaskCreatePinnedToCore(wifi_task, "wifi", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(server_task, "web", 8192, NULL, 1, NULL, 0);
 }
 
 void net_add_wifi(const char *ssid, const char *password) {
@@ -494,7 +528,7 @@ void net_loop() {
     start_services();
     ui_set_wifi_info(WiFi.localIP().toString().c_str());
   } else if (!connected && was_connected) {
-    wifi_owner.reset();
+    owner_reset();
     Serial.println("[net] wifi lost");
     ui_set_wifi_info("다시 연결 중...");
   }
@@ -506,17 +540,14 @@ void net_loop() {
     link_ms = millis();
     log_link();
   }
-  if (connected) {
-    server.handleClient();
-    if (ota_ready) ArduinoOTA.handle();
-  }
+  if (connected && ota_ready) ArduinoOTA.handle();
 }
 
 void net_set_enabled(bool on) {
   if (on == radio_on) return;
   radio_on = on;
   if (!on) {
-    wifi_owner.reset();
+    owner_reset();
     WiFi.disconnect(true);
     Serial.println("[net] wifi off in settings");
     ui_set_wifi_info("꺼짐 (설정)");
