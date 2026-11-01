@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from build_manifest import companion_protocol, validate_artifact, validate_plan, validate_running, write_json, staged_artifact, upload_spec
+import soak_check
 
 FIRMWARE = Path(__file__).resolve().parents[1]
 
@@ -197,8 +198,10 @@ def main():
     parser.add_argument("port", nargs="?")
     parser.add_argument("--allow-worktree-switch", action="store_true", help="다른 worktree 의 변경을 확인한 뒤 업로드 허용")
     parser.add_argument("--initial-flash", action="store_true", help="배포 이력이 없고 펌웨어 응답이 없는 새 기기의 최초 USB 설치")
+    parser.add_argument("--no-soak", action="store_true", help="업로드 뒤 도우미 기록으로 안정성을 확인하지 않는다")
     args = parser.parse_args()
     state = Path.home() / ".llm-deck"
+    log = state / "companion.log"
     pio = os.environ.get("PIO", str(Path.home() / ".local/bin/pio"))
     with flash_lock(state):
         if not run_pio(pio):
@@ -262,9 +265,25 @@ def main():
                 records[identity] = {"proto": manifest["proto"], "build": manifest["build"],
                                      "root": str(FIRMWARE.parent.resolve()), "source_digest": manifest["source_digest"]}
                 write_json(record_path, records)
-                print(f"[flash] 완료: proto {running['fw_proto']}, build {running['build']} (실제 기기 일치)", flush=True)
+                verified = f"proto {running['fw_proto']}, build {running['build']} (실제 기기 일치)"
+                # 도우미가 꺼져 있는 지금의 끝부터 본다 (다시 켜진 뒤의 줄을 빠뜨리지 않게)
+                log_offset = soak_check.log_size(log)
             finally:
                 helper.restore()
+    # 다른 업로더를 기다리게 하지 않도록 잠금을 놓은 뒤에 지켜본다
+    if args.no_soak:
+        print(f"[flash] 완료: {verified}. 안정성 확인은 건너뜀 (--no-soak)", flush=True)
+        return
+    if not (helper.was_loaded or helper.was_app):
+        print(f"[flash] 완료: {verified}. 도우미가 꺼져 있어 안정성은 확인하지 못함", flush=True)
+        return
+    print(f"[flash] 업로드 확인: {verified}. {soak_check.DEFAULT_SECONDS}초 동안 안정성을 확인합니다", flush=True)
+    problems = soak_check.soak(log, log_offset, build=running["build"], probe=True)
+    if problems:
+        for problem in problems:
+            print(f"[soak] 실패: {problem}", flush=True)
+        raise RuntimeError(f"소크 실패: build {running['build']} 는 기기에 올라갔지만 안정하지 않습니다. 성공으로 보지 마세요 ({log})")
+    print(f"[flash] 완료: {verified}, {soak_check.DEFAULT_SECONDS}초 안정성 확인 통과", flush=True)
 
 
 if __name__ == "__main__":

@@ -234,4 +234,5 @@ class UsbTransport:
             # 연결 직후에는 잘린 소리 데이터가 섞여 올 수 있으므로 글자로 읽히는 줄만 보여준다
             if text and line.isascii() and text.isprintable():
                 print(f"  기기> {text}")
+                frames.log_line(text)
         return rest

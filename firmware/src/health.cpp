@@ -7,11 +7,16 @@
 #include <esp_task_wdt.h>
 #include <time.h>
 
+#include "crash_log.h"
+
 // 재시작(패닉, 감시 장치, 소프트웨어 재시작)해도 지워지지 않는 곳. 전원을 새로 넣으면 지워진다.
 #define RTC_MAGIC 0x4845414C
 RTC_NOINIT_ATTR static uint32_t rtc_magic;
 RTC_NOINIT_ATTR static uint32_t rtc_uptime_s;
 RTC_NOINIT_ATTR static uint32_t rtc_min_internal;
+RTC_NOINIT_ATTR static CrashLog rtc_crash;
+// 이만큼 살아남으면 연달아 죽는 중이 아니다
+#define CRASH_SURVIVED_MS (5 * 60 * 1000UL)
 
 // loop() 한 바퀴의 한계시간. 평소에는 10ms, 화면을 새로 그릴 때도 0.2초 안쪽이다.
 #define LOOP_LIMIT_MS 20000
@@ -115,6 +120,8 @@ void health_init() {
   const esp_partition_t *invalid = esp_ota_get_last_invalid_partition();
   if (invalid) Serial.printf("[ota] %s failed and was rolled back, running %s\n", invalid->label, running->label);
 
+  rtc_crash.boot(reason == ESP_RST_POWERON, error_reset, reason, prev_uptime);
+
   rtc_magic = RTC_MAGIC;
   rtc_uptime_s = 0;
   rtc_min_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -126,6 +133,11 @@ void health_loop() {
   checked_ms = millis();
   rtc_uptime_s = millis() / 1000;
   rtc_min_internal = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+  static bool survived = false;
+  if (!survived && millis() > CRASH_SURVIVED_MS) {
+    survived = true;
+    rtc_crash.survived();
+  }
   static bool ota_checked = false;
   if (!ota_checked && millis() > OTA_CONFIRM_MS) {
     ota_checked = true;
@@ -165,6 +177,22 @@ bool health_last_error(char *out, size_t size) {
 
 uint32_t health_error_count() {
   return err_count;
+}
+
+// 도우미와 맞춘 이름 (companion 의 crash 알림)
+static const char *crash_name(uint32_t r) {
+  switch (r) {
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_BROWNOUT: return "brownout";
+    default: return "unknown";
+  }
+}
+
+bool health_crash_event(char *out, size_t size, const char *build) {
+  return rtc_crash.take(out, size, crash_name(rtc_crash.reason), build);
 }
 
 void health_clear() {

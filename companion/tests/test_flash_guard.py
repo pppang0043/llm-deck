@@ -212,7 +212,7 @@ def test_post_upload_requires_exact_device_protocol_and_binary(artifact):
             manifest.validate_running(data, {**current, **changed}, current["id"])
 
 
-def fake_upload(monkeypatch, artifact, *, current_proto=5, running_build=None):
+def fake_upload(monkeypatch, artifact, *, current_proto=5, running_build=None, helper_running=False):
     firmware, _, data = artifact
     calls = []
     monkeypatch.setattr(guard, "FIRMWARE", firmware)
@@ -222,6 +222,8 @@ def fake_upload(monkeypatch, artifact, *, current_proto=5, running_build=None):
     monkeypatch.setattr(guard.subprocess, "run", lambda *a, **kw: type("Result", (), {"stdout": b""})())
 
     class Helper:
+        was_loaded = helper_running
+        was_app = False
         def __init__(self, state): pass
         def stop(self): calls.append("stopped")
         def restore(self): calls.append("restored")
@@ -251,6 +253,53 @@ def test_only_verified_running_build_is_committed(monkeypatch, artifact):
     assert calls[-1] == "restored"
     saved = json.loads((Path.home() / ".llm-deck/firmware-deployments.json").read_text())
     assert saved["aabbccddeeff"]["build"] == artifact[2]["build"]
+
+
+def test_soak_runs_after_lock_release_from_the_pre_restart_offset(monkeypatch, artifact, capsys):
+    calls = fake_upload(monkeypatch, artifact, helper_running=True)
+    log = Path.home() / ".llm-deck/companion.log"
+    log.parent.mkdir(mode=0o700, exist_ok=True)
+    log.write_text("옛 기록\n")
+    seen = {}
+
+    def soak(path, offset, build=None, probe=False):
+        seen.update(path=path, offset=offset, build=build, probe=probe,
+                    locked=(path.parent / "flash.lock").exists(), restored=calls[-1] == "restored")
+        return []
+
+    monkeypatch.setattr(guard.soak_check, "soak", soak)
+    guard.main()
+    assert seen == {"path": log, "offset": log.stat().st_size, "build": artifact[2]["build"], "probe": True,
+                    "locked": False, "restored": True}
+    assert "통과" in capsys.readouterr().out
+
+
+def test_soak_failure_is_not_reported_as_success(monkeypatch, artifact, capsys):
+    fake_upload(monkeypatch, artifact, helper_running=True)
+    monkeypatch.setattr(guard.soak_check, "soak", lambda *a, **kw: ["크래시 줄: 기기> Guru Meditation Error"])
+    with pytest.raises(RuntimeError, match="소크 실패"):
+        guard.main()
+    out = capsys.readouterr().out
+    assert "Guru Meditation" in out
+    assert "[flash] 완료" not in out
+    # 빌드는 실제로 올라갔으므로 하향 방지 기록은 남는다
+    saved = json.loads((Path.home() / ".llm-deck/firmware-deployments.json").read_text())
+    assert saved["aabbccddeeff"]["build"] == artifact[2]["build"]
+
+
+def test_no_soak_flag_skips_the_soak(monkeypatch, artifact, capsys):
+    fake_upload(monkeypatch, artifact, helper_running=True)
+    monkeypatch.setattr(sys, "argv", ["flash_guard.py", "--no-soak"])
+    monkeypatch.setattr(guard.soak_check, "soak", lambda *a, **kw: pytest.fail("소크 실행"))
+    guard.main()
+    assert "--no-soak" in capsys.readouterr().out
+
+
+def test_soak_is_not_attempted_without_a_helper_to_log(monkeypatch, artifact, capsys):
+    fake_upload(monkeypatch, artifact, helper_running=False)
+    monkeypatch.setattr(guard.soak_check, "soak", lambda *a, **kw: pytest.fail("소크 실행"))
+    guard.main()
+    assert "확인하지 못함" in capsys.readouterr().out
 
 
 def test_wrong_post_upload_image_fails_and_restores_helper(monkeypatch, artifact):

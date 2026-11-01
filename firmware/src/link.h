@@ -40,6 +40,8 @@ void link_loop();
 
 // 현재 연결된 PC 로 알림을 보낸다 (JSON 글자, 짧게). PC 가 없으면 버린다.
 //   {"sound": "mic_on"}   PC 스피커로 소리를 내 달라는 요청 (mic_on / mic_off). 소리는 PC 도우미가 고른다
+//   {"crash": {"reason": "panic", "count": 2, "uptime_s": 57, "build": "4cf9c244"}}  이상 재시작 기록 (사용량을 받은 뒤 한 번)
+//     reason: panic / task_wdt / int_wdt / wdt / brownout, count: 연달아 일어난 횟수, uptime_s: 죽기 전 켜져 있던 시간
 // Wi-Fi 에서는 마이크 소리와 같은 UDP 포트로 간다 (길이가 달라서 구별된다).
 void link_send_event(const char *json);
 Link link_active();

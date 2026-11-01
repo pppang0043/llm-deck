@@ -17,6 +17,8 @@ FRAME_VIDEO = 4
 FRAME_MIRROR = 5  # 미러링 화면 조각 (mirror.py)
 # 미러링 화면 조각을 받을 곳 (main.py 가 mirror.Mirror.on_frame 을 넣는다)
 mirror_sink = None
+# 기기 로그 한 줄을 받을 곳 (main.py 가 crash_watch.CrashWatch.on_log_line 을 넣는다)
+log_sink = None
 MAX_FRAME = 2048
 VIDEO_HEAD = struct.Struct("<IIII")  # 장 번호, 위치, 장 크기, 시각(ms)
 # 오류 종류 -> [마지막으로 적은 시각, 그 뒤로 적지 않은 횟수]
@@ -43,6 +45,15 @@ def report(where: str) -> None:
         _reported[key] = [now, 0]
     else:
         seen[1] += 1
+
+
+def log_line(text: str) -> None:
+    """기기 로그 한 줄을 log_sink 로 넘긴다. 오류는 기록만 한다 (받는 스레드가 끝나면 안 된다)."""
+    try:
+        if log_sink:
+            log_sink(text)
+    except Exception:
+        report("log_sink")
 
 
 def dispatch(transport, kind: int, body: bytes) -> None:

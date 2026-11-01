@@ -78,6 +78,10 @@ static HelperInfo helper = {};
 // 이번 연결에서 펌웨어 버전을 알렸는지, 버전이 달라 알림을 띄웠는지
 static bool told_proto = false;
 static bool warned_proto = false;
+// 버전을 알린 시각. 이상 재시작 기록은 이만큼 뒤에 알린다 (Wi-Fi 는 사용량을 처리한 뒤에야 UDP 서명과 목적지가 정해진다)
+static uint32_t told_ms = 0;
+#define CRASH_TELL_DELAY_MS 3000
+#define CRASH_RESEND_MS 5000
 static void (*set_mic_cb)(bool);
 static void (*rotate_cb)() = nullptr;
 
@@ -188,6 +192,7 @@ static void note_helper(JsonDocument &doc) {
   if (doc["ask_fw"] == true) told_proto = false;
   if (!told_proto) {
     told_proto = true;
+    told_ms = millis();
     char json[128];
     snprintf(json, sizeof(json), "{\"fw_proto\":%d,\"fw\":\"%s\",\"build\":\"%s\"}", FW_PROTO, __DATE__ " " __TIME__, firmware_build_id());
     link_send_event(json);
@@ -569,6 +574,22 @@ void link_loop() {
     xSemaphoreGive(command_lock);
   }
   save_if_due();
+  // 이상 재시작 기록을 도우미에게 알린다 (health.h). 도우미가 사용량을 보내온 뒤라야 받을 수 있다.
+  // Wi-Fi 는 UDP 라 잃을 수 있어 세 번 보낸다 (같은 내용은 도우미가 한 번으로 친다)
+  if (told_proto && active != LINK_NONE && active != LINK_CLOUD && millis() - told_ms > CRASH_TELL_DELAY_MS) {
+    static char crash[128];
+    static uint8_t crash_left = 0;
+    static uint32_t crash_sent_ms = 0;
+    if (!crash_left && health_crash_event(crash, sizeof(crash), firmware_build_id())) {
+      crash_left = active == LINK_WIFI ? 3 : 1;
+      crash_sent_ms = millis() - CRASH_RESEND_MS;
+    }
+    if (crash_left && millis() - crash_sent_ms >= CRASH_RESEND_MS) {
+      crash_sent_ms = millis();
+      crash_left--;
+      link_send_event(crash);
+    }
+  }
   if (active != LINK_NONE && !alive(active)) {
     // 지금 연결이 끊겼거나 설정에서 껐으면 살아 있는 다음 연결로 넘어간다 (없으면 "PC 없음")
     set_active(best_link());

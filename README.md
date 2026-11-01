@@ -151,6 +151,10 @@ cd firmware
 
 업로더는 공유 OS/디렉터리 잠금으로 직렬화하고, 기기에서 직접 받은 현재 프로토콜보다 낮은 버전을 차단한다. 도우미와 대상 펌웨어의 프로토콜도 같아야 한다. 빌드 이후 소스나 이미지가 바뀌면 중단하고, 업로드 후에는 무작위 도전값을 보낸 새 응답에서 기기 고유 번호·프로토콜·실행 파일 SHA 식별자가 모두 일치해야 성공 처리한다. 업로드 대상 앱·부트로더·파티션·초기 OTA 데이터의 해시와 기록 주소를 함께 확인하고, 검증한 바이트를 전용 임시 폴더에 복사해 그 경로로만 기록한다. 공유 빌드 폴더의 파일이 교체돼도 실제 기록할 파일은 바뀌지 않는다. 결과는 `~/.llm-deck/firmware-deployments.json`에 기록한다.
 
+업로드 검증 뒤에는 잠금을 놓고 도우미 기록을 120초 지켜본다 (`firmware/scripts/soak_check.py`). 크래시 줄이 나오거나 새 build 가 기록에 나오지 않으면, 또는 잘못된 인증 요청(`X-Deck-Auth: x`)에 401 `{"auth":"bad"}` 로 답하지 않으면 실패로 끝난다 (종료 코드 1, `[flash] 완료` 가 나오지 않는다). 건너뛰려면 `--no-soak`. 무선 업로드 뒤에는 `python3 firmware/scripts/soak_check.py --build <build> --probe --offset 0` 처럼 직접 돌릴 수 있다 (`--offset` 을 올리기 전 기록 크기로 준다).
+
+도우미는 기기 크래시를 USB 로그와 기기 알림(`{"crash":{...}}`)으로 알아채 기록에 `[crash]` 를 남기고 바탕화면 알림을 띄운다 (10분에 한 번). 10분에 3번 이상이면 `~/.secrets/telegram.env` 가 있을 때 텔레그램을 한 시간에 한 번 보낸다 (`companion/crash_watch.py`). 서명을 거절당한 도우미는 Wi-Fi 재시도 간격을 1분에서 30분까지 늘리고 그동안 블루투스로 넘어간다. USB 로 새 키를 받거나 인증에 성공하면 바로 풀린다.
+
 다른 worktree에서 다른 빌드로 전환할 때는 변경 내용을 확인한 뒤 `./flash.sh --allow-worktree-switch`를 명시한다. 배포 이력이 없고 실행 펌웨어가 응답하지 않는 새 보드의 최초 설치에는 `--initial-flash`를 사용한다. 이미 배포한 기기가 응답하지 않으면 먼저 부팅/연결을 복구해야 한다.
 
 모든 세션/worktree에서 갱신된 `flash.sh`를 사용한다. 갱신된 worktree에서는 직접 실행한 `pio -t upload`도 검증된 이미지 정보가 없으면 중단하며, 일반 업로드 경로의 실제 쓰기 직전에 소스·이미지·대상 식별자를 다시 대조한다. 이전 worktree의 옛 업로더, esptool 직접 실행, 아래 OTA 명령은 이 검증을 우회하므로 같은 보호를 제공하지 않는다.
@@ -175,6 +179,7 @@ Mac 에서 위 명령이 `Sending invitation ... failed` / `Host ... Not Found` 
   -i <기기 IP> -p 3232 -a "$(cat ~/.llm-deck/ota_password)" -f firmware/.pio/build/ota/firmware.bin
 ```
 올린 뒤 기기가 다시 켜져 Wi-Fi 에 붙기까지 몇 분 걸릴 수 있다. 도우미 로그(`~/.llm-deck/companion.log`)의 `[version] 기기 펌웨어 ... build` 가 `firmware/.pio/build/ota/build-manifest.json` 의 `build` 와 같은지 본다.
+무선 업로드에는 플래시 뒤 안정성 확인이 자동으로 붙지 않으므로, 올리기 직전에 `wc -c < ~/.llm-deck/companion.log` 로 기록 크기를 재 두고 올린 뒤 직접 돌린다: `/usr/bin/python3 firmware/scripts/soak_check.py --offset <재 둔 크기> --seconds 420 --build <build> --probe` (기기가 다시 붙는 데 걸리는 몇 분을 포함한 시간이다). `--offset` 을 빼면 지금 끝부터 봐서 이미 지나간 재시작을 놓친다.
 `firmware/include/secrets.h` 에 기본 Wi-Fi 이름·비밀번호를 적는다 (git 에 올라가지 않는다).
 
 ## 블루투스 스피커 (ATOM Lite 모듈)

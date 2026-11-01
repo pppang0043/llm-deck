@@ -18,6 +18,9 @@ bool health_last_error(char *out, size_t size);
 uint32_t health_error_count();
 // 오류 기록을 지운다 (시험 뒤)
 void health_clear();
+// 연달아 일어난 이상 재시작을 PC 에 알릴 JSON (link.h 의 "crash"). 아직 알리지 않은 것이 있을 때만 true, 한 번만 준다.
+// 재시작해도 남는 곳에 두어 알리기 전에 또 죽어도 잃지 않는다. 5분 살아남으면 연속 횟수는 처음부터 다시 센다.
+bool health_crash_event(char *out, size_t size, const char *build);
 
 // 감시 장치: loop() 가 한계시간(20초) 넘게 돌아오지 않으면(어딘가에서 멈춤) 기기를 다시 켠다.
 // 다시 켜진 이유는 "응답 없음 (감시 장치)" 로 남고, 사용량·연결은 저장해 둔 값으로 곧 돌아온다.

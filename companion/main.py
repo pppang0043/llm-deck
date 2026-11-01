@@ -57,6 +57,7 @@ import statusline
 import typer
 import sync
 import version
+import crash_watch
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
 from collectors import orca_usage
@@ -357,7 +358,6 @@ def wifi_setup(cfg: dict, add: bool) -> None:
     print("[device] 등록했습니다. 최대 5개까지 기억합니다." if add else "[device] 지웠습니다. 기기를 다시 켜면 적용됩니다.")
 
 
-def main() -> None:
 def _private_files() -> None:
     """도우미 폴더의 기록에는 받아쓴 글이, 설정에는 키가 있다. 이 사용자만 읽게 둔다."""
     if sys.platform == "win32":
@@ -370,6 +370,7 @@ def _private_files() -> None:
             pass
 
 
+def main() -> None:
     parser = argparse.ArgumentParser(description="LLM Deck PC companion")
     parser.add_argument("--link", choices=["auto", *TRANSPORTS], help="연결 방식 (기본: 설정 파일 값 또는 auto)")
     parser.add_argument("--dry-run", action="store_true", help="기기로 보내지 않고 보낼 내용만 출력")
@@ -408,8 +409,8 @@ def _private_files() -> None:
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     parser.add_argument("--log", metavar="FILE", help="출력을 파일에 덧붙여 쓴다 (창 없이 자동 실행할 때)")
     args = parser.parse_args()
-    if hasattr(faulthandler, "register"):
     _private_files()
+    if hasattr(faulthandler, "register"):
         import signal
         # 멈춘 것 같을 때 kill -USR1 <pid> 로 어디서 기다리는지 기록에 남긴다 (Mac, Linux)
         faulthandler.register(signal.SIGUSR1, all_threads=True)
@@ -499,6 +500,8 @@ def _private_files() -> None:
     # 기기 펌웨어와 버전이 맞는지 (기기가 {"fw_proto"} 로 알려 준다)
     peer = version.Peer()
     print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
+    crash = crash_watch.CrashWatch()
+    frames.log_sink = crash.on_log_line
 
     def on_event(event: dict) -> None:
         if isinstance(event, dict) and event.get("link_error") == "not_queued":
@@ -506,7 +509,7 @@ def _private_files() -> None:
         if isinstance(event, dict) and event.get("link_error") == "not_owner":
             print("[device] 다른 PC 가 기기를 사용 중이라 제어 명령을 거절했습니다.")
         # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
-        for handler in (speaker, receiver, movies, apps, keys, pc, ask, sessions, peer):
+        for handler in (speaker, receiver, movies, apps, keys, pc, ask, sessions, peer, crash):
             try:
                 handler.on_event(event)
             except Exception:

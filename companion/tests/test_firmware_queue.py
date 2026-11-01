@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("source", ["message_queue_test", "command_journal_test", "control_policy_test"])
+@pytest.mark.parametrize("source", ["message_queue_test", "command_journal_test", "control_policy_test", "toast_queue_test", "crash_log_test"])
 def test_native_queue_and_response_limits(tmp_path, source):
     firmware = Path(__file__).resolve().parents[2] / "firmware"
     compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
