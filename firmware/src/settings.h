@@ -8,8 +8,6 @@ void settings_init();
 
 uint8_t settings_brightness();
 void settings_set_brightness(uint8_t pct);
-// 홈의 밝기 아이콘: 100 -> 60 -> 30 -> 100%
-void settings_cycle_brightness();
 
 // 기울이면 화면이 따라 도는지
 bool settings_auto_rotate();

@@ -194,10 +194,6 @@ void settings_set_brightness(uint8_t pct) {
   prefs.putUChar("bright", brightness);
 }
 
-void settings_cycle_brightness() {
-  settings_set_brightness(brightness > 60 ? 60 : brightness > 30 ? 30 : 100);
-}
-
 bool settings_auto_rotate() {
   return auto_rotate;
 }

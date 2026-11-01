@@ -6,9 +6,9 @@
 // PC 와 함께 쓰는 화면 두 개. 단축키는 PC 도우미가 정해 둔 것만 연다·입력한다
 // (기기가 아무 명령·글이나 보내지 못하게).
 //  - 단축키: 왼쪽 끝 칸에서 "프로그램" / "키워드" 를 고른다.
-//      프로그램: 누르면 사용 중인 PC 에서 연다 (엑셀, 파워포인트, ORCA, 파워쉘, 관리자 파워쉘).
+//      프로그램: 누르면 사용 중인 PC 에서 연다 (엑셀, 파워포인트, 파워쉘, 관리자 파워쉘).
 //      키워드: 누르면 PC 에서 지금 커서가 있는 곳에 정해 둔 글을 입력하고 Enter 를 누른다 (커밋해줘 등).
-//  - PC 상태: 사용 중인 PC 의 CPU, GPU, 메모리, 드라이브별 디스크, 네트워크. 사용량 화면의 맨 마지막 페이지이고,
+//  - PC 상태: 사용 중인 PC 의 CPU, GPU, 메모리, 드라이브별 디스크, 네트워크. 사용량 화면의 맨 앞 페이지이고,
 //    그 페이지가 보이는 동안만 PC 가 3초마다 보내 준다.
 
 // 두 화면을 만든다 (ui.cpp 가 부른다). 처음에는 숨겨져 있다.
@@ -16,22 +16,22 @@ void pcpanel_build(lv_obj_t *parent);
 // 화면 크기가 바뀌면 (돌리기) 다시 배치한다. 상태줄 아래 영역.
 void pcpanel_layout(int x, int y, int w, int h);
 void pcpanel_show_shortcuts(bool on);
-// 단축키 화면에서 고를 묶음: 0 = 프로그램, 1 = 키워드
+// 단축키 화면에서 고를 묶음: 0 = 프로그램, 1 = 키워드, 2 = 리모컨
 void pcpanel_select_shortcuts(int page);
-// PC 상태는 사용량 페이지들의 맨 마지막 페이지다 (ui.cpp). 페이지를 다시 만들기 전에 떼어 두고, 만든 뒤 붙인다.
+// PC 상태는 사용량 페이지들의 맨 앞 페이지다 (ui.cpp). 페이지를 다시 만들기 전에 떼어 두고, 만든 뒤 붙인다.
 void pcpanel_status_attach(lv_obj_t *tile, int w, int h);
 void pcpanel_status_detach();
 // PC 상태 페이지가 지금 보이는지 (보이는 동안만 PC 에 계속 보내 달라고 한다)
 void pcpanel_show_status(bool on);
 bool pcpanel_status_visible();
-// 미러링을 나눠 쓰는 동안 기기 화면의 PC 상태 페이지 (mirror.cpp 의 사용량 페이지 맨 끝). tile 이 지워지면 같이 없어진다.
+// 미러링을 나눠 쓰는 동안 기기 화면의 PC 상태 페이지 (ui_usage_pages 의 맨 앞). tile 이 지워지면 같이 없어진다.
 void pcpanel_device_status(lv_obj_t *tile, int w, int h);
 // 기기 화면의 PC 상태 페이지가 지금 보이는지
 void pcpanel_device_watch(bool on);
 
 // 키워드 단축키 목록 (ORCA 화면의 세션 팝업도 같은 목록을 쓴다). 없는 번호면 false.
 bool pcpanel_keyword(int i, const char **id, const char **name, uint32_t *color);
-// PC 가 보낸 {"keywords": [{"id", "name", "obj"}]} (link.cpp 가 부른다). 최대 5개 + 맨 끝 Tab + Enter.
+// PC 가 보낸 {"keywords": [{"id", "name", "obj"}]} (link.cpp 가 부른다). 최대 7개 + 맨 끝 Tab + Enter.
 // 바뀌었을 때만 NVS 에 저장하고 키워드 버튼과 ORCA 팝업을 다시 만든다 (받은 적이 없으면 기본 목록).
 void pcpanel_set_keywords(JsonArrayConst list);
 

@@ -59,7 +59,6 @@ static lv_obj_t *tiles;
 static lv_obj_t *level_bar;
 static lv_obj_t *mic_btn;
 static lv_obj_t *mic_lbl;
-static void (*mic_toggle_cb)();
 static void (*rotate_cb)();
 static lv_obj_t *rotate_btn;
 static lv_obj_t *back_btn;  // 상태줄 왼쪽 끝. 홈이 아닐 때만 보인다
@@ -73,7 +72,6 @@ static lv_obj_t *wifi_bar[4];
 static char clock_date[24] = "";
 static char clock_time[8] = "";
 static bool waiting = true;
-static bool mic_on = false;
 // 화면을 돌릴 때 다시 그릴 수 있도록 마지막으로 받은 사용량을 가지고 있는다
 static JsonDocument last_usage(PSRAM_JSON);
 static uint32_t usage_version = 0;  // last_usage 가 바뀔 때마다 하나씩 는다
@@ -220,7 +218,7 @@ struct GaugeKey {
 #define MAX_GAUGES 8
 static GaugeKey gauge_keys[MAX_GAUGES];
 static int gauge_count = 0;
-static bool no_history = false;  // 미러링 중 기기 화면에 그릴 때는 눌러도 그래프를 열지 않는다
+static bool no_history = false;  // 그래프는 원래 화면에 열리므로 기기 화면의 페이지는 눌러도 열지 않는다 (build_usage_pages)
 static lv_obj_t *hist_panel, *hist_title, *hist_chart, *hist_note, *hist_left, *hist_right;
 static lv_obj_t *hist_mode_btn, *hist_mode_lbl, *hist_days;  // 24시간/7일 버튼, 7일 막대 아래 요일
 static lv_chart_series_t *hist_series;
@@ -1047,9 +1045,8 @@ void ui_set_home_actions(void (*open_camera)()) {
   camera_cb = open_camera;
 }
 
-void ui_init(void (*on_mic_toggle)(), void (*on_rotate)()) {
+void ui_init(void (*on_rotate)()) {
   ui_task = xTaskGetCurrentTaskHandle();
-  mic_toggle_cb = on_mic_toggle;
   rotate_cb = on_rotate;
 
   lv_disp_t *disp = lv_disp_get_default();
@@ -1201,7 +1198,6 @@ static void layout_status_right() {
 void ui_layout() {
   UI_LOOP_ONLY();
   int w = display_width(), h = display_height();
-  lv_obj_align(rotate_btn, LV_ALIGN_TOP_RIGHT, -2, 2);
   layout_status_right();
   if (w > h) {
     // 가로: 왼쪽에 페이지, 오른쪽에 마이크 버튼
@@ -1352,6 +1348,7 @@ void ui_set_usage(JsonArrayConst services) {
 static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool main_screen, uint32_t *side_rows,
                                  uint8_t first_row) {
   uint8_t index = first_row;
+  no_history = !main_screen;
   // 구독 한도 페이지가 둘 이상이면 처음 것 자리에 "구독제" 한 페이지로 모은다
   int limits = 0;
   for (JsonObjectConst svc : services) limits += is_limits_page(svc);
@@ -1466,15 +1463,12 @@ void ui_usage_pages(lv_obj_t *tv) {
     lv_obj_set_width(lbl, lv_pct(100));
     return;
   }
-  // 그래프는 원래 화면에 열리므로 기기 화면에서는 눌러도 열지 않는다
-  no_history = true;
   uint32_t side_rows;
   // 맨 앞은 원래 화면처럼 PC 상태
   lv_obj_t *tile = lv_tileview_add_tile(tv, 0, 0, LV_DIR_VER);
   lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
   pcpanel_device_status(tile, lv_obj_get_width(tv), lv_obj_get_height(tv));
   uint8_t count = build_usage_pages(tv, services, false, &side_rows, 1);
-  no_history = false;
   uint8_t row = keep >= count ? count - 1 : keep;
   lv_obj_set_tile_id(tv, keep_col && (side_rows & (1u << row)) ? 1 : 0, row, LV_ANIM_OFF);
 }
@@ -1509,7 +1503,6 @@ void ui_set_mic(bool on) {
   UI_LOOP_ONLY();
   // 기기 마이크(INMP441): 설정 > 알림 및 사운드, BOOT 버튼, PC(--mic) 로 켜고 끈다.
   // 사용량 화면 아래 버튼은 받아쓰기 버튼이다 (PC 마이크).
-  mic_on = on;
   if (!on) ui_set_level(0);
 }
 

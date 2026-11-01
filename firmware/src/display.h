@@ -36,7 +36,6 @@ void display_remote_touch(int x, int y, bool down);
 // 미러링 중 나눠 쓰기 (mirror.cpp). 켜면 기기 LCD 에는 원래 화면 대신 display_device_screen() 을 그리고,
 // 기기를 만진 것도 그 화면으로 간다. PC 창은 계속 원래 화면을 받고 PC 에서 누른 것만 원래 화면으로 간다.
 void display_split(bool on);
-bool display_split_on();
 lv_obj_t *display_device_screen();
 // 나눠 쓰는 동안 기기 화면을 누르고 있는지
 bool display_device_pressed();

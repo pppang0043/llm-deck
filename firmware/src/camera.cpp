@@ -286,10 +286,6 @@ bool camera_running() {
   return running;
 }
 
-const char *camera_model() {
-  return model;
-}
-
 void camera_set_mount(uint8_t rot, bool mirror) {
   load_mount();
   mount_rot = rot & 3;
@@ -649,14 +645,14 @@ static uint8_t *add_orientation(const uint8_t *jpg, size_t len, uint8_t k, size_
 
 static void set_lens(sensor_t *s, int pos);
 
-bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len, bool focus) {
+bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len) {
   // 녹화 중에 크기를 바꾸면 녹화 크기로 돌아오지 않는다
   if (!running || video_mode) return false;
   sensor_t *s = esp_camera_sensor_get();
   uint32_t t0 = millis();
   // 미리보기의 계속 맞추기가 이미 맞춰 두었으면(0x10) 다시 맞추지 않고 렌즈를 그 자리에 멈춘다 (1.3초 아낌)
   int caf = af_on ? s->get_reg(s, OV5640_CMD_FW_STATUS, 0xff) : -1;
-  bool kept = focus && caf == 0x20;  // 계속 맞추기가 맞춘 상태 (한 번 맞추기는 0x10)
+  bool kept = caf == 0x20;  // 계속 맞추기가 맞춘 상태 (한 번 맞추기는 0x10)
   // 찍는 동안 렌즈가 움직이지 않게: 초점 MCU 를 풀고(0x08) 그 자리를 직접 쓴다. 멈춤(0x06)은 답이 없어 5초를 기다렸다
   int hold = kept ? af_position(s) : -1;
   if (kept) {
@@ -678,7 +674,7 @@ bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len, bool focus) 
   s->set_reg(s, 0x3A0E, 0xff, step50 ? max(1, PHOTO_MAX_EXPO / step50) : bands50);
   char note[64] = "focus kept";
   if (kept) snprintf(note, sizeof(note), "focus kept (lens %d -> %d)", hold, af_position(s));
-  else if (focus) af_focus_once(s, note, sizeof(note));  // 그동안 자동 노출이 새 상한으로 내려온다
+  else af_focus_once(s, note, sizeof(note));  // 그동안 자동 노출이 새 상한으로 내려온다
   // 크기를 바꾼 직후 몇 장은 이전 크기가 섞여 나오므로 버리고, 노출이 상한 안으로 내려온 다음 장부터 쓴다.
   // 어두워 게인이 8배를 넘으면 잡음 때문에 JPEG 가 커진다: 게인 15.5배에서 865KB 까지 커졌고, 버퍼(약 980KB)를
   // 넘은 장은 오지 않고 카메라가 멈췄다 (52초 뒤 실패, 미리보기 0 fps, 2026-10-28). 그럴 때만 압축을 15 이상으로
@@ -691,7 +687,6 @@ bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len, bool focus) 
   int got = 0, settled = -1, missed = 0;
   char sizes[40] = "";
   uint32_t t_frames = millis();
-  int64_t prev_ts = 0, gap_ms = 0;
   for (int i = 0; i < 14 && got < 2; i++) {
     feed_wdt();  // 최대 크기는 한 장이 느리다
     camera_fb_t *f = esp_camera_fb_get();
@@ -704,21 +699,15 @@ bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len, bool focus) 
       if (f) esp_camera_fb_return(f);
       continue;
     }
-    int64_t ts = (int64_t)f->timestamp.tv_sec * 1000 + f->timestamp.tv_usec / 1000;
-    if (prev_ts) gap_ms = ts - prev_ts;
-    prev_ts = ts;
     got++;
     snprintf(sizes + strlen(sizes), sizeof(sizes) - strlen(sizes), "%s%u", got > 1 ? "/" : "", (unsigned)(f->len / 1000));
     if (!fb || f->len > fb->len) std::swap(fb, f);
     if (f) esp_camera_fb_return(f);
   }
   int gain = (reg(0x350A) & 0x03) << 8 | reg(0x350B);
-  Serial.printf("[camera] photo frames %sKB in %lu ms (gap %lld, q %d), expo %d lines, gain %d/16, band step %d/%d max %d/%d\n",
-                sizes, (unsigned long)(millis() - t_frames), (long long)gap_ms, s->status.quality, exposure(), gain, step60, step50, bands60,
+  Serial.printf("[camera] photo frames %sKB in %lu ms (q %d), expo %d lines, gain %d/16, band step %d/%d max %d/%d\n",
+                sizes, (unsigned long)(millis() - t_frames), s->status.quality, exposure(), gain, step60, step50, bands60,
                 bands50);
-  Serial.printf("[camera] pll 3034=%02x 3035=%02x 3036=%02x 3037=%02x 3108=%02x 3824=%02x 460c=%02x 4837=%02x hts %d\n",
-                reg(0x3034), reg(0x3035), reg(0x3036), reg(0x3037), reg(0x3108), reg(0x3824), reg(0x460C), reg(0x4837),
-                reg(0x380C) << 8 | reg(0x380D));
   s->set_reg(s, 0x3A0D, 0xff, bands60);
   s->set_reg(s, 0x3A0E, 0xff, bands50);
   if (s->status.quality != quality) s->set_quality(s, quality);

@@ -510,10 +510,6 @@ String net_saved_names() {
   return out;
 }
 
-int net_added_count() {
-  return saved.size();
-}
-
 void net_clear_wifi() {
   saved.to<JsonArray>();
   store_saved();

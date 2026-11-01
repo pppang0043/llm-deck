@@ -17,8 +17,6 @@ bool camera_start();
 // 카메라를 끈다 (전기와 메모리를 돌려준다).
 void camera_stop();
 bool camera_running();
-// 꽂혀 있는 카메라 이름 (예: "OV5640"). 모르면 "".
-const char *camera_model();
 // 마지막으로 켜지 못한 이유가 "카메라 없음" 인지 (아니면 메모리 부족 등)
 bool camera_missing();
 
@@ -56,8 +54,8 @@ uint8_t camera_turns(uint8_t screen_rot);
 
 // 큰 사진(JPEG, 2560x1920)을 찍는다. 화면 방향(screen_rot)에 맞게 바로 보이도록 회전 정보(EXIF)를 넣는다.
 // 성공하면 *jpg 에 ps_malloc 한 버퍼 (free 로 해제), *len 에 크기.
-// focus: 찍기 직전에 한 번 초점을 맞춘다 (1.2초). 연속 스캔은 첫 장만 맞추고 나머지는 연속 초점에 맡긴다
-bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len, bool focus = true);
+// 찍기 직전에 초점을 맞춘다 (1.2초). 미리보기의 계속 맞추기가 이미 맞춰 두었으면 렌즈를 그 자리에 둔다.
+bool camera_capture(uint8_t screen_rot, uint8_t **jpg, size_t *len);
 // QR·바코드 스캔 (2단계):
 //   1. camera_scan_locate: 화각 전체를 1024x768 로 한 장 (PC 가 바코드 자리를 찾는다)
 //   2. camera_scan_zoom: 그 자리(1단계 장 기준 0~1000)를 센서 원본 화소로 잘라 읽는 창으로 바꾸고,

@@ -470,10 +470,6 @@ bool display_device_double_tap(lv_point_t *at) {
   return true;
 }
 
-bool display_split_on() {
-  return split;
-}
-
 lv_obj_t *display_device_screen() {
   return lv_disp_get_scr_act(device_disp);
 }

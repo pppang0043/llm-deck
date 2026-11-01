@@ -3,8 +3,8 @@
 #include <ArduinoJson.h>
 #include <lvgl.h>
 
-// 화면 구성: 위쪽 상태줄(오른쪽 끝에 화면 돌리기 버튼) / 가운데 서비스별 페이지(위아래로 넘김, 맨 끝은 PC 상태) / 질문 버튼
-void ui_init(void (*on_mic_toggle)(), void (*on_rotate)());
+// 화면 구성: 위쪽 상태줄(오른쪽 끝에 화면 돌리기 버튼) / 가운데 서비스별 페이지(위아래로 넘김, 맨 앞은 PC 상태) / 질문 버튼
+void ui_init(void (*on_rotate)());
 
 // 상태줄 왼쪽 글자 (현재 연결 방식)
 void ui_set_status(const char *text);
@@ -13,7 +13,7 @@ const char *ui_status_text();  // 상태줄 왼쪽의 연결 상태 글자
 // 상태줄 오른쪽(배터리 옆)의 날짜와 시각. 자리가 모자라면 날짜는 빼고 시각만 보인다.
 void ui_set_clock(const char *date, const char *time);
 
-// 상태줄 오른쪽(화면 돌리기 버튼 옆)의 배터리 잔량. -1 이면 숨긴다. 충전 중이면 건전지 안에 번개를 그린다.
+// 상태줄 오른쪽(화면 돌리기 버튼 옆)의 배터리 잔량. -1 이면 숨긴다. 전원이 연결돼 있으면 건전지 안에 번개를 그린다.
 void ui_set_battery(int pct, bool charging);
 // Wi-Fi 신호 칸 수 0~4, -1 이면 숨긴다
 void ui_set_wifi(int bars);

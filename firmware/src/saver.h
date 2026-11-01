@@ -8,7 +8,6 @@ void saver_init();
 
 // main 이 켜고 끈다 (절전 상태와 함께 판단)
 void saver_set_visible(bool on);
-bool saver_visible();
 // 화면 방향이 바뀐 뒤 부른다
 void saver_layout();
 

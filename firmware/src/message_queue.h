@@ -44,16 +44,13 @@ class MessageQueue {
     if (replace < count_) {
       release_(items_[replace].data);
       erase(replace);
-      bytes_ -= old_size;
     }
     items_[count_++] = {copy, len, from, usage, snapshot, command_ticket, peer};
-    bytes_ += len + 1;
     return true;
   }
   bool pop(Item &out) {
     if (!count_) return false;
     out = items_[0];
-    bytes_ -= out.len + 1;
     erase(0);
     return true;  // out.data 는 호출자가 release 해야 한다
   }
@@ -64,7 +61,7 @@ class MessageQueue {
     --count_;
   }
   Item items_[16];
-  size_t count_ = 0, bytes_ = 0;
+  size_t count_ = 0;
   void *(*allocate_)(size_t);
   void (*release_)(void *);
 };

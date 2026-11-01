@@ -3,13 +3,13 @@
 #include <ArduinoJson.h>
 #include <lvgl.h>
 
-// ORCA 화면: PC 의 ORCA 에 열린 세션들과 작업 상태 (PC 도우미가 10초마다 읽어 바뀌면 보낸다, companion/orca.py).
+// ORCA 화면: PC 의 ORCA 에 열린 세션들과 작업 상태 (PC 도우미가 2초마다 읽어 바뀌면 보낸다, companion/orca.py).
 // 세션을 한 쪽에 2줄 x 3칸 (세로 화면은 3줄 x 2칸) 버튼으로 보이고, 6개가 넘으면 다음 쪽으로 (좌우로 밀어 넘긴다). 작업 상태는 버튼 색.
 // 프로젝트별로 모아 최근에 연 세션이 앞 (PC 가 정렬). 프로젝트가 바뀌는 버튼과 쪽의 첫 버튼 위에 프로젝트 이름.
 // 버튼을 누르면 PC 가 그 세션을 앞으로 띄운다. 띄운 버튼을 한 번 더 누르면 받아쓰기, 또 누르면 받아 적은 글을 넣는다 (Enter 없이).
-//   PC -> 기기: {"orca": {"ok": bool, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태}]}}
+//   PC -> 기기: {"orca": {"ok": bool, "a": PC 에서 보고 있는 세션, "list": [{"id", "t": 이름, "p": 프로젝트, "s": 상태, "m": 마지막 답변 요약, "q": 질문하는 중}]}}
 //   기기 -> PC: 버튼을 누르면 {"orca": "activate", "id": id}
-//              띄운 뒤 오른쪽 팝업(키워드 단축키, Tab, Tab + Enter, Enter)을 누르면 {"orca": "send", "id": id, "key": 이름}
+//              띄운 뒤 아래 팝업(키워드 단축키, Tab, Tab + Enter, Enter)을 누르면 {"orca": "send", "id": id, "key": 이름}
 //              띄운 버튼을 또 누르면 {"ask": "start", "mode": "dictate", "orca": id} ... {"ask": "stop"} (askpanel.cpp)
 //              길게 누르면 빠른 답 창: 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속 -> {"orca": "reply", "id": id, "reply": "allow" | "deny" | "continue"}
 // 상태가 바뀌면 (새 권한 요청, 작업 중 -> 완료·입력 기다림) 어느 화면에서나 알림과 소리 (처음 받은 목록은 알리지 않는다).

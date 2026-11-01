@@ -37,7 +37,7 @@ static bool error_reset = false;
 static bool when_saved = false;
 // 저장된 마지막 오류
 static uint8_t err_reason = 0;
-static uint32_t err_uptime_s = 0, err_min_internal = 0, err_count = 0;
+static uint32_t err_uptime_s = 0, err_count = 0;
 static int64_t err_when = 0;
 
 static const char *reason_text(int r) {
@@ -90,7 +90,6 @@ void health_init() {
   err_count = prefs.getUInt("count", 0);
   err_reason = prefs.getUChar("reason", 0);
   err_uptime_s = prefs.getUInt("uptime", 0);
-  err_min_internal = prefs.getUInt("min", 0);
   err_when = prefs.getLong64("when", 0);
 
   error_reset = is_error(reason);
@@ -98,12 +97,10 @@ void health_init() {
     err_count++;
     err_reason = reason;
     err_uptime_s = prev_uptime;
-    err_min_internal = prev_min;
     err_when = 0;  // 시각은 시계가 맞춰진 뒤에 적는다
     prefs.putUInt("count", err_count);
     prefs.putUChar("reason", err_reason);
     prefs.putUInt("uptime", err_uptime_s);
-    prefs.putUInt("min", err_min_internal);
     prefs.putLong64("when", 0);
   }
   char up[24];
@@ -198,7 +195,7 @@ bool health_crash_event(char *out, size_t size, const char *build) {
 void health_clear() {
   err_count = 0;
   err_reason = 0;
-  err_uptime_s = err_min_internal = 0;
+  err_uptime_s = 0;
   err_when = 0;
   error_reset = false;
   prefs.clear();

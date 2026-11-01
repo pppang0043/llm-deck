@@ -25,8 +25,6 @@ static uint32_t mdat_at = 0;
 static uint16_t width = 0, height = 0;
 static volatile uint32_t dropped = 0;
 static bool failed = false;
-static uint32_t result_frames = 0, result_dropped = 0;
-static bool result_failed = false;
 static char path[64];
 static uint32_t flushed_ms = 0;
 // 남은 공간: 시작할 때 센 값에서 쓴 만큼 뺀다. 목차(moov)를 쓸 자리는 남기고 멈춘다.
@@ -341,9 +339,6 @@ static void finish() {
   if (count) write_moov();
   file.close();
   if (!count) SD.remove(path);
-  result_frames = count;
-  result_dropped = dropped;
-  result_failed = failed;
   Serial.printf("[sdvideo] saved %s: %lu frames, %lu dropped%s\n", path, (unsigned long)count,
                 (unsigned long)dropped, failed ? ", write failed" : "");
   reset_index();
@@ -455,8 +450,3 @@ const char *sd_video_path() {
   return writing ? path : nullptr;
 }
 
-void sd_video_result(uint32_t *frames, uint32_t *d, bool *f) {
-  *frames = result_frames;
-  *d = result_dropped;
-  *f = result_failed;
-}

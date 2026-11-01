@@ -20,5 +20,3 @@ bool sd_video_active();
 bool sd_video_failed();
 // 지금 쓰고 있는 파일 경로 ("/videos/..."). 쓰는 중이 아니면 nullptr.
 const char *sd_video_path();
-// 마지막 녹화 결과: 쓴 장 수, 버린 장 수, 실패했는지
-void sd_video_result(uint32_t *frames, uint32_t *dropped, bool *failed);

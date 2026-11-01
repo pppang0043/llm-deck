@@ -117,10 +117,6 @@ void saver_layout() {
   if (visible) move_box();
 }
 
-bool saver_visible() {
-  return visible;
-}
-
 void saver_loop() {
   static uint32_t text_ms = 0;
   if (!visible) return;

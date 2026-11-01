@@ -79,23 +79,13 @@ static int tilt = 0;
 static void apply_rotation() {
   uint8_t rotation = (tilt + rotate_offset) & 3;
   if (rotation == display_rotation()) return;
-  uint32_t t[7];
-  t[0] = millis();
   display_set_rotation(rotation);
-  t[1] = millis();
   ui_layout();
-  t[2] = millis();
   camera_ui_layout();
-  t[3] = millis();
   gallery_layout();
-  t[4] = millis();
   saver_layout();
   quickpanel_layout();
-  t[5] = millis();
   lv_refr_now(nullptr);
-  t[6] = millis();
-  Serial.printf("[tilt] rotate %lu, ui %lu, camera %lu, gallery %lu, saver+panel %lu, draw %lu ms\n", t[1] - t[0],
-                t[2] - t[1], t[3] - t[2], t[4] - t[3], t[5] - t[4], t[6] - t[5]);
   Serial.printf("[main] screen rotation %d (tilt %d + button %d)\n", rotation, tilt, rotate_offset);
 }
 
@@ -146,20 +136,11 @@ static void follow_tilt() {
       apply_rotation();
     }
   }
-  // 회전이 얼마나 빨리 되는지 확인용: 자이로 최고값과 움직임이 멈춘 뒤 바뀌기까지 걸린 시간
-  static float peak = -1;
-  static uint32_t moved_ms = 0;
-  if (rate > peak) peak = rate;
-  if (rate >= TurnSettle::QUIET_DPS) moved_ms = millis();
   int next = turn.sample(millis(), rate, now, tilt);
   if (next >= 0) {
-    uint32_t t0 = millis();
     tilt = next;
     rotate_offset = 0;  // 새로 세운 방향은 기울기 그대로 (버튼으로 돌린 것은 잊는다)
     apply_rotation();
-    Serial.printf("[tilt] gyro peak %.0f dps, rate %.0f, %lu ms after stop, redraw %lu ms\n", peak, rate,
-                  (unsigned long)(t0 - moved_ms), (unsigned long)(millis() - t0));
-    peak = -1;
   }
 }
 
@@ -272,7 +253,6 @@ static void wake_on_pickup() {
   display_poke();
 }
 
-// 상태줄의 날짜와 시각. 시각은 Wi-Fi(인터넷) 또는 PC 도우미에게서 받으며, 받기 전에는 비워 둔다.
 // 정보 화면 내용 (보이는 동안 1초마다)
 static void show_info() {
   static uint32_t checked_ms = 0;
@@ -339,6 +319,7 @@ static void show_info() {
   ui_set_info(text);
 }
 
+// 상태줄의 날짜와 시각. 시각은 Wi-Fi(인터넷) 또는 PC 도우미에게서 받으며, 받기 전에는 비워 둔다.
 static void show_clock() {
   static uint32_t checked_ms = 0;
   if (millis() - checked_ms < 1000) return;
@@ -389,7 +370,7 @@ void setup() {
 
   display_init();
   mem_log("display");
-  ui_init(toggle_mic, rotate_by_button);
+  ui_init(rotate_by_button);
   mem_log("ui");
   camera_init();
   mem_log("camera");

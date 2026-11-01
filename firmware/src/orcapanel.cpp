@@ -72,7 +72,7 @@ static lv_obj_t *panel, *pager, *state_lbl;
 static int label_w = 80;  // 버튼 안 글자 폭 (orcapanel_layout)
 static int btn_w = 100, btn_h = 60;
 static int cols = 3, rows = 2;
-// 오른쪽 팝업: 띄운 세션(active_id)에 보낼 키워드와 키. 닫으면 다음에 세션을 띄울 때 다시 뜬다.
+// 아래 팝업: 띄운 세션(active_id)에 보낼 키워드와 키. 닫으면 다음에 세션을 띄울 때 다시 뜬다.
 static lv_obj_t *pop, *pop_title, *pop_list;
 static lv_obj_t *pop_rows[POP_ROWS];  // 줄마다 따로 옆으로 밀린다
 static lv_obj_t *pop_dictate;  // 녹음 버튼 (받아쓰는 중이면 빨갛게, 글자가 바뀐다)
@@ -95,7 +95,6 @@ static bool long_pressed = false;  // 길게 누른 뒤 손을 떼면 오는 CLI
 static lv_obj_t *ask_strip, *ask_strip_lbl;
 static void close_qr();
 static void place_qr();
-static void set_pop(bool open);
 
 // 작업 상태는 버튼 색으로 (orca.py 의 s)
 struct StateLook {
