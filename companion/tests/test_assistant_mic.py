@@ -5,6 +5,8 @@
 그래서 마이크는 녹음 프로세스에서만 열고, 장치 목록을 새로 읽을 때는 그 프로세스만 다시 띄운다.
 """
 
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -268,9 +270,60 @@ def test_probe_retries_then_reports_no_mic(fake):
         states.append(a.mic_state)
     assert states == ["checking"] * (assistant.PROBE_TRIES - 1) + ["none"]
     assert not a.mic and "소리가 오지 않습니다" in a.mic_reason
-    assert a._check_due > time.monotonic() + assistant.RECHECK_SECONDS - 5
+    assert a._check_due is None
     status = a.mic_status()
     assert status["state"] == "none" and status["why"]
+
+
+def no_mic(a, sd):
+    """모든 마이크가 조용해 연결 불가가 될 때까지 들어 본다."""
+    sd.loud.clear()
+    for _ in range(assistant.PROBE_TRIES):
+        a._quiet_until.clear()
+        probe(a)
+    assert a.mic_state == "none"
+
+
+def test_no_mic_does_not_respawn_or_open_mic_periodically(fake, monkeypatch):
+    # 2026-11-01: 덮개를 닫아 둔 동안 60초마다 녹음 프로세스를 죽이고 새로 띄워 마이크를 열었다
+    sd, a = fake
+    a._signature = a._device_signature()
+    no_mic(a, sd)
+    spawned = a.mics.spawned
+    real = time.monotonic
+    for hours in range(1, 4):
+        monkeypatch.setattr(assistant.time, "monotonic", lambda h=hours: real() + h * 3600)
+        a._watched = 0
+        a._watch_mics()
+        assert not a._probing
+    monkeypatch.setattr(assistant.time, "monotonic", real)
+    assert a.mics.spawned == spawned
+
+
+def test_picking_same_mic_rechecks_when_no_mic(fake):
+    # 권한을 켠 뒤처럼 장치 목록이 그대로일 때 기기에서 다시 고르면 다시 들어 본다
+    sd, a = fake
+    no_mic(a, sd)
+    a._pick("")
+    assert a._check_due is not None
+    sd.loud.add("MacBook Pro 마이크")
+    probe(a)
+    assert a.mic_state == "ok"
+
+
+def test_picking_same_mic_does_nothing_when_mic_works(fake):
+    sd, a = fake
+    probe(a)
+    assert a.mic_state == "ok"
+    a._pick("")
+    assert a._check_due is None
+
+
+def test_failed_recording_does_not_start_periodic_probing(fake):
+    sd, a = fake
+    sd.loud.clear()
+    record(a, 8)  # 두 마이크를 모두 들어 볼 만큼
+    assert a.mic_state == "none" and a._check_due is None
 
 
 def test_watch_probes_when_devices_change(fake, monkeypatch):
@@ -512,3 +565,60 @@ def test_closed_lid_is_the_reason_when_only_macbook_mic_is_silent(phone, monkeyp
     a._probe_round()
     assert a.mic_state == "none"
     assert a.mic_reason == assistant._LID_CLOSED_REASON
+
+
+def test_lid_keeps_last_value_when_the_check_times_out(monkeypatch):
+    monkeypatch.setattr(assistant.sys, "platform", "darwin")
+    monkeypatch.setattr(assistant, "_lid_last", True)
+
+    def slow(*args, **kwargs):
+        raise assistant.subprocess.TimeoutExpired("ioreg", 3)
+
+    monkeypatch.setattr(assistant.subprocess, "run", slow)
+    assert assistant._lid_closed() is True
+
+
+def test_stale_audio_sessions_counts_only_dead_processes(monkeypatch):
+    dead = subprocess.Popen([sys.executable, "-c", ""])
+    dead.wait()
+    out = f"""
+   pid 413(coreaudiod): [0x1] 05:44:08 PreventUserIdleSystemSleep named: "com.apple.audio.BuiltInSpeakerDevice.context"
+\tCreated for PID: {dead.pid}.
+   pid 413(coreaudiod): [0x2] 00:10:18 PreventUserIdleSystemSleep named: "com.apple.audio.BuiltInSpeakerDevice.context"
+\tCreated for PID: {os.getpid()}.
+   pid 99(other): [0x3] 00:10:18 PreventUserIdleSystemSleep named: "x"
+\tCreated for PID: {dead.pid}.
+"""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(assistant.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    assert assistant._stale_audio_sessions() == 1
+
+
+def test_stale_audio_warns_once_until_it_clears(fake, monkeypatch):
+    sd, a = fake
+    count = [assistant.STALE_AUDIO_LIMIT - 1]
+    monkeypatch.setattr(assistant, "_stale_audio_sessions", lambda: count[0])
+
+    def check():
+        a._audio_checked = 0.0
+        a.pending_toast = None
+        a._watch_audio()
+        return a.pending_toast
+
+    assert check() is None
+    count[0] = assistant.STALE_AUDIO_LIMIT
+    assert "오디오 세션" in check()
+    assert check() is None  # 쌓인 채로는 다시 알리지 않는다
+    count[0] = 1
+    assert check() is None
+    count[0] = 142
+    assert "142" in check()
+
+
+def test_stale_audio_is_checked_only_every_few_minutes(fake, monkeypatch):
+    sd, a = fake
+    calls = []
+    monkeypatch.setattr(assistant, "_stale_audio_sessions", lambda: calls.append(1) or 0)
+    a._watch_audio()
+    a._watch_audio()
+    assert len(calls) == 1

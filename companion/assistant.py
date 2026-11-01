@@ -26,6 +26,7 @@ import base64
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -67,7 +68,8 @@ PICKED_MIC_FILE = Path.home() / ".llm-deck" / "picked_mic.txt"
 # 쉬는 틈에 마이크를 미리 들어 보는 횟수 (모두 조용하면 PROBE_GAP 초 뒤 다시). 그래도 안 되면 "연결 불가"
 PROBE_TRIES = 3
 PROBE_GAP = 3
-# 연결 불가일 때 다시 들어 보는 간격 (덮개를 열었을 때처럼 장치 목록은 그대로인데 되살아나는 때)
+# Windows 가 마이크를 막았는지 다시 보는 간격 (마이크를 열지 않는다). 그 밖의 연결 불가는 마이크를 주기적으로 열지 않고,
+# 덮개·장치가 바뀌거나 기기에서 마이크를 다시 고를 때 들어 본다 (60초마다 열었더니 Mac coreaudiod 가 CPU 를 많이 썼다)
 RECHECK_SECONDS = 60
 # Mac 의 아이폰 마이크(연속성 카메라)는 기기에서 골라 허락했을 때만 쓰고, 그 마이크로 녹음하지 않은 채 이만큼 지나면 끊는다.
 # 자동으로 고르거나 미리 들어 보면 아이폰이 마이크를 수시로 켰다 (아이폰에 마이크 표시, 배터리)
@@ -391,16 +393,47 @@ def _write_text(path: Path, text: str) -> None:
         print(f"[assistant] {path.name} 에 적지 못했습니다: {e}")
 
 
+_lid_last = False
+
+
 def _lid_closed() -> bool:
-    """Mac 덮개가 닫혀 있는지. 닫히면 내장 마이크는 장치 목록에 그대로 있지만 소리가 0 으로만 들어온다."""
+    """Mac 덮개가 닫혀 있는지. 닫히면 내장 마이크는 장치 목록에 그대로 있지만 소리가 0 으로만 들어온다.
+    PC 가 바빠 못 읽으면 마지막 값을 쓴다 (열림으로 잘못 알면 이유 문구가 틀리고 마이크를 괜히 다시 듣는다)."""
+    global _lid_last
     if sys.platform != "darwin":
         return False
     try:
-        out = subprocess.run(["ioreg", "-r", "-k", "AppleClamshellState", "-d", "1"],
+        out = subprocess.run(["/usr/sbin/ioreg", "-r", "-k", "AppleClamshellState", "-d", "1"],
                              capture_output=True, text=True, timeout=3).stdout
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return '"AppleClamshellState" = Yes' in out
+        return _lid_last
+    _lid_last = '"AppleClamshellState" = Yes' in out
+    return _lid_last
+
+# 끝난 프로세스의 오디오 세션이 coreaudiod 에 이만큼 남으면 알린다 (평소 0~3개). 2026-11-01 에 142개 쌓여 CPU 를 200% 넘게 썼고
+# 대부분 알림음 afplay 의 것이었다. 왜 남는지는 모른다 (같은 afplay 가 안 남을 때도 있다). 재시작에는 관리자 권한이 필요해서 알리기만 한다
+STALE_AUDIO_LIMIT = 20
+STALE_AUDIO_CHECK_SECONDS = 300
+
+
+def _stale_audio_sessions() -> int:
+    """coreaudiod 가 붙들고 있는 세션 중 만든 프로세스가 이미 끝난 것의 수. Mac 이 아니거나 못 읽으면 0."""
+    if sys.platform != "darwin":
+        return 0
+    try:
+        out = subprocess.run(["/usr/bin/pmset", "-g", "assertions"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    stale = 0
+    for pid in re.findall(r"\(coreaudiod\):[^\n]*\n\s*Created for PID: (\d+)", out):
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            stale += 1
+        except OSError:  # 살아 있지만 권한이 없다
+            pass
+    return stale
+
 
 # Windows 에서 CLI 를 띄울 때 검은 창이 뜨지 않게 한다
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -727,6 +760,8 @@ class Assistant:
         # ORCA 세션에 받아쓰기할 때 쓴다 (main.py 가 넣어 준다)
         self.orca: orca.Orca | None = None
         self.pending_toast: str | None = None  # main.py 가 기기 알림으로 보낸다
+        self._audio_checked = 0.0  # _watch_audio
+        self._audio_warned = False
         # 기기 마이크 소리 (main.py 가 on_device_audio 로 넣는다). 기기 마이크로 녹음하는 동안만 받는다
         self._dev_audio: queue.Queue[bytes] = queue.Queue()
         self._dev_listening = False
@@ -921,7 +956,7 @@ class Assistant:
             self._end_take(take)
             if no_mic:
                 self._set_mic("none", why=reason)
-                self._check_due = time.monotonic() + RECHECK_SECONDS
+                self._check_due = time.monotonic() + RECHECK_SECONDS if reason == _PRIVACY_REASON else None
             if self.busy or not self.takes.empty():
                 # 앞 녹음의 답을 받는 중이면 그 화면을 덮지 않고 알림으로
                 self.pending_toast = reason
@@ -1119,7 +1154,8 @@ class Assistant:
     def _pick(self, name: str) -> None:
         """기기의 마이크 고르기 창에서 고른 마이크 (빈 글이면 자동). 바로 다시 들어 보고 상태를 알린다."""
         phone = self._phone(name)
-        if name == self._picked and not phone:  # 아이폰 마이크는 다시 고르면 시간을 새로 센다
+        # 아이폰 마이크는 다시 고르면 시간을 새로 센다. 연결 불가일 때 다시 고르면 다시 들어 본다 (권한을 켠 뒤 등)
+        if name == self._picked and not phone and self.mic_state != "none":
             return
         print(f"[assistant] 기기에서 마이크를 골랐습니다: {name or '자동'}")
         self._phone_until = time.monotonic() + PHONE_MIC_SECONDS if phone else 0.0
@@ -1193,7 +1229,7 @@ class Assistant:
 
     def _probe_round(self) -> None:
         """마이크를 순서대로 잠깐 들어 보고 소리가 오는 첫 마이크를 쓸 마이크로 정한다.
-        모두 조용하면 PROBE_GAP 초 뒤 다시, PROBE_TRIES 번이면 연결 불가로 알리고 RECHECK_SECONDS 마다 다시 본다."""
+        모두 조용하면 PROBE_GAP 초 뒤 다시, PROBE_TRIES 번이면 연결 불가로 알리고 장치가 바뀌거나 다시 고를 때까지 멈춘다."""
         try:
             if not self._audio_lock.acquire(blocking=False):  # 녹음 중
                 self._check_due = time.monotonic() + PROBE_GAP
@@ -1233,7 +1269,7 @@ class Assistant:
                 else:
                     why = _LID_CLOSED_REASON if lid and len(silent) == 1 else _NO_AUDIO_REASON
                 self._set_mic("none", why=why)
-                self._check_due = time.monotonic() + RECHECK_SECONDS
+                self._check_due = None
         finally:
             self._probing = False
 
@@ -1259,6 +1295,21 @@ class Assistant:
             return False
         finally:
             self.mics.halt()
+
+    def _watch_audio(self) -> None:
+        """끝난 프로세스의 오디오 세션이 쌓이면 한 번 알린다. 줄어들면 다음에 또 알린다."""
+        now = time.monotonic()
+        if now - self._audio_checked < STALE_AUDIO_CHECK_SECONDS:
+            return
+        self._audio_checked = now
+        stale = _stale_audio_sessions()
+        if stale < STALE_AUDIO_LIMIT:
+            self._audio_warned = False
+        elif not self._audio_warned:
+            self._audio_warned = True
+            print(f"[assistant] coreaudiod 에 끝난 프로세스의 오디오 세션이 {stale}개 남았습니다. "
+                  "CPU 가 높으면 관리자 권한으로 coreaudiod 를 재시작하세요 (killall coreaudiod)")
+            self.pending_toast = f"Mac 오디오 세션 {stale}개가 쌓였습니다\ncoreaudiod 재시작이 필요할 수 있습니다"
 
     def _stop(self) -> None:
         """녹음을 끝내고 줄에 넣는다. 처리는 _work 가 차례대로 한다 (그동안 새로 녹음할 수 있다)."""
@@ -1485,6 +1536,7 @@ class Assistant:
     def pending(self) -> dict | None:
         """기기로 보낼 것 (바뀌었을 때만). main.py 가 0.5초마다 부른다. 오래 안 쓰면 CLI 를 내린다."""
         self._watch_mics()
+        self._watch_audio()
         self._unload_if_idle()
         state = self._outgoing()
         if state is None or state == self.sent:
