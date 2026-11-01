@@ -76,6 +76,7 @@ static void wifi_task(void *) {
         (!on_ble || !ble_tried_ms || millis() - ble_tried_ms > 300000)) {
       if (on_ble) ble_tried_ms = millis();
       searched = multi.run(8000) != WL_CONNECTED;
+      if (!radio_on) WiFi.disconnect(true);  // 찾는 동안 설정에서 껐으면 run 이 다시 켠 라디오를 끈다
     }
     vTaskDelay(pdMS_TO_TICKS(searched ? 30000 : 3000));
   }
@@ -462,7 +463,7 @@ void net_init() {
   Serial.printf("[net] %u saved wifi networks%s\n", (unsigned)saved.size(), strlen(WIFI_SSID) > 0 ? " + secrets.h" : "");
   radio_on = settings_link_allowed(LINK_WIFI) || settings_link_allowed(LINK_CLOUD);
   if (!radio_on) Serial.println("[net] wifi off in settings");
-  ui_set_wifi_info(station ? "연결 중..." : "설정 안 됨");
+  ui_set_wifi_info(!radio_on ? "꺼짐 (설정)" : station ? "연결 중..." : "설정 안 됨");
   xTaskCreatePinnedToCore(wifi_task, "wifi", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(server_task, "web", 8192, NULL, 1, NULL, 0);
 }
@@ -514,7 +515,7 @@ void net_loop() {
   } else if (!connected && was_connected) {
     owner_reset();
     Serial.println("[net] wifi lost");
-    ui_set_wifi_info("다시 연결 중...");
+    ui_set_wifi_info(radio_on ? "다시 연결 중..." : "꺼짐 (설정)");
   }
   was_connected = connected;
   // 붙은 뒤 한 번과 그 뒤 5분마다 신호 세기를 적는다
