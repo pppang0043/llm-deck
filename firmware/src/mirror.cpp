@@ -10,6 +10,7 @@
 #include "mic.h"
 #include "net.h"
 #include "orcapanel.h"
+#include "pcmic.h"
 #include "pcpanel.h"
 #include "ui.h"
 #include "usb_link.h"
@@ -164,6 +165,7 @@ static void device_build() {
   lv_obj_set_style_text_font(dev_title, &font_ko_14, 0);
   lv_obj_set_style_text_color(dev_title, lv_color_hex(0x8A939E), 0);
   lv_obj_align(dev_title, LV_ALIGN_TOP_LEFT, 8, 8);
+  pcmic_build_device(scr);
   dev_clock = lv_label_create(scr);
   lv_label_set_text(dev_clock, "");
   lv_obj_set_style_text_font(dev_clock, &font_ko_14, 0);
@@ -237,6 +239,11 @@ static void device_title() {
   }
   if (strcmp(lv_label_get_text(dev_title), text)) lv_label_set_text(dev_title, text);
   lv_obj_set_style_text_color(dev_title, st == ASK_TALKING ? lv_color_white() : lv_color_hex(0x8A939E), 0);
+  // 글자 너비만큼만 차지하고 바로 오른쪽에 마이크 표시. 시계까지 자리가 모자라면 글자를 줄인다
+  int room = LV_MAX(1, lv_obj_get_x(dev_clock) - 16 - pcmic_device_width());
+  int width = LV_MIN(room, lv_txt_get_width(text, strlen(text), &font_ko_14, 0, LV_TEXT_FLAG_NONE) + 1);
+  lv_obj_set_width(dev_title, width);
+  pcmic_device_place(8 + width, 6);
 }
 
 // 1초마다: 시각, 그리고 사용량이나 화면 방향이 바뀌었으면 페이지를 새로 만든다
@@ -256,7 +263,6 @@ static void device_refresh() {
   lv_obj_t *status = quickpanel_status_before(dev_btn);
   lv_obj_align_to(dev_clock, status, LV_ALIGN_OUT_LEFT_MID, -8, 0);
   lv_obj_update_layout(dev_clock);
-  lv_obj_set_width(dev_title, LV_MAX(1, lv_obj_get_x(dev_clock) - 16));
   lv_obj_set_height(dev_title, 16);
   lv_label_set_long_mode(dev_title, LV_LABEL_LONG_DOT);
   if (dev_version == ui_usage_version() && dev_w == w && dev_h == h && lv_obj_get_child_cnt(dev_body)) return;

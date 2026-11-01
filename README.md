@@ -166,11 +166,11 @@ LLMDECK_OTA_PASSWORD=$(cat ~/.llm-deck/ota_password) ~/.local/bin/pio run -e ota
 ```
 무선으로 올린 펌웨어는 30초 동안 시험 상태다. 그 안에 다시 켜지면(죽어도, 전원을 꺼도) 부트로더가 앞 펌웨어로 되돌리고 로그에 `[ota] ... rolled back` 이 남는다. 이 30초 동안은 다음 무선 업로드도 받지 않을 수 있다 (시험하지 않음).
 
+도우미는 `~/.llm-deck/usb_serial` 에 적힌 보드의 USB 포트만 연다. 기기를 다른 보드로 바꿨다면 이 파일을 지우면 다음에 잡히는 보드를 다시 확인한다.
+
 롤백 시험은 USB 없이도 안전하게 할 수 있다: `setup()` 첫 줄에서 `RTC_NOINIT_ATTR` 표시를 보고 **한 번만** `esp_restart()` 하는 빌드를 복사본에서 만들어 무선으로 올린다. 도우미 로그의 `[version]` 빌드가 앞 펌웨어로 나오면 성공이고, 롤백이 안 되더라도 두 번째 부팅은 정상이라 다시 올릴 수 있다.
 
 인터넷 회사 DNS 가 `llm-deck.local` 에 바깥 주소를 대답하기도 해서, 업로드 전에 집 안 주소만 골라 쓴다 (`firmware/scripts/ota_port.py`).
-
-도우미는 `~/.llm-deck/usb_serial` 에 적힌 보드의 USB 포트만 연다. 기기를 다른 보드로 바꿨다면 이 파일을 지우면 다음에 잡히는 보드를 다시 확인한다.
 
 Mac 에서 위 명령이 `Sending invitation ... failed` / `Host ... Not Found` 로 끝나면, PlatformIO 의 Python 에 macOS "로컬 네트워크" 권한이 없어 집 안 주소로 보내지 못하는 것이다 (`No route to host`). 빌드는 위 명령으로 끝났으니 시스템 Python 으로 같은 업로드 도구를 돌린다:
 

@@ -25,7 +25,10 @@ static char list[MIC_MAX][128];
 static bool limited[MIC_MAX];  // 고른 뒤 2시간 안 쓰면 끊는 마이크 (Mac 의 아이폰 마이크)
 static int count = 0, left = 0;  // left: 고른 아이폰 마이크를 쓸 수 있는 남은 분
 
-static lv_obj_t *icon, *capsule, *stem, *base, *cross;
+struct MicIcon {
+  lv_obj_t *icon, *capsule, *stem, *base, *cross;
+};
+static MicIcon main_icon, device_icon;  // 상태줄, 미러링 중 기기 화면
 static lv_obj_t *panel, *panel_state, *panel_list;
 
 static bool pc_connected() {
@@ -183,56 +186,81 @@ static void open_panel(lv_event_t *e) {
   render_panel();
 }
 
-void pcmic_build(lv_obj_t *scr) {
-  icon = lv_obj_create(scr);
-  lv_obj_remove_style_all(icon);
-  lv_obj_set_size(icon, ICON_W, ICON_H);
-  lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_OVERFLOW_VISIBLE);
-  lv_obj_set_ext_click_area(icon, 10);
-  lv_obj_add_event_cb(icon, open_panel, LV_EVENT_CLICKED, NULL);
+static void build_icon(MicIcon &m, lv_obj_t *scr) {
+  m.icon = lv_obj_create(scr);
+  lv_obj_remove_style_all(m.icon);
+  lv_obj_set_size(m.icon, ICON_W, ICON_H);
+  lv_obj_add_flag(m.icon, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   // 마이크 모양: 둥근 머리, 기둥, 받침
-  capsule = add_part(icon, 2, 0, 8, 13, 4);
-  stem = add_part(icon, 5, 13, 2, 4, 0);
-  base = add_part(icon, 1, 17, 10, 2, 1);
+  m.capsule = add_part(m.icon, 2, 0, 8, 13, 4);
+  m.stem = add_part(m.icon, 5, 13, 2, 4, 0);
+  m.base = add_part(m.icon, 1, 17, 10, 2, 1);
   // 연결 불가: 오른쪽 아래에 작은 ×
-  cross = add_label(icon, LV_SYMBOL_CLOSE, &lv_font_montserrat_10, COLOR_NONE);
-  lv_obj_set_pos(cross, 9, 8);
-  lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
+  m.cross = add_label(m.icon, LV_SYMBOL_CLOSE, &lv_font_montserrat_10, COLOR_NONE);
+  lv_obj_set_pos(m.cross, 9, 8);
+  lv_obj_add_flag(m.icon, LV_OBJ_FLAG_HIDDEN);
+}
+
+void pcmic_build(lv_obj_t *scr) {
+  build_icon(main_icon, scr);
+  lv_obj_add_flag(main_icon.icon, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(main_icon.icon, 10);
+  lv_obj_add_event_cb(main_icon.icon, open_panel, LV_EVENT_CLICKED, NULL);
+}
+
+void pcmic_build_device(lv_obj_t *scr) {
+  build_icon(device_icon, scr);
+  lv_obj_clear_flag(device_icon.icon, LV_OBJ_FLAG_CLICKABLE);  // 표시만 한다. 두 번 탭과 밀기는 아래 화면이 받는다
+  pcmic_refresh();
+}
+
+int pcmic_device_width() {
+  return !device_icon.icon || lv_obj_has_flag(device_icon.icon, LV_OBJ_FLAG_HIDDEN) ? 0 : 8 + ICON_W;
+}
+
+void pcmic_device_place(int x, int y) {
+  if (device_icon.icon) lv_obj_set_pos(device_icon.icon, x + 8, y);
 }
 
 int pcmic_place(lv_obj_t *left) {
   lv_obj_update_layout(lv_obj_get_parent(left));
   int right = lv_obj_get_x(left) + lv_obj_get_width(left);
-  if (!icon || lv_obj_has_flag(icon, LV_OBJ_FLAG_HIDDEN)) return right;
-  lv_obj_align_to(icon, left, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+  if (!main_icon.icon || lv_obj_has_flag(main_icon.icon, LV_OBJ_FLAG_HIDDEN)) return right;
+  lv_obj_align_to(main_icon.icon, left, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
   return right + 8 + ICON_W;
 }
 
+static void paint_icon(const MicIcon &m) {
+  if (!m.icon) return;
+  if (state == MIC_UNKNOWN) {
+    lv_obj_add_flag(m.icon, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_color_t color = mic_present() || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING;
+  for (lv_obj_t *part : {m.capsule, m.stem, m.base}) lv_obj_set_style_bg_color(part, color, 0);
+  if (state == MIC_NONE && !mic_present()) {
+    lv_obj_clear_flag(m.cross, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(m.cross, LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_obj_clear_flag(m.icon, LV_OBJ_FLAG_HIDDEN);
+}
+
 void pcmic_refresh() {
-  if (!icon) return;
+  if (!main_icon.icon) return;
   if (!pc_connected()) {
     state = MIC_UNKNOWN;  // 다른 PC 가 붙을 수 있다
     close_panel();
   }
-  if (state == MIC_UNKNOWN) {
-    lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
-    return;
-  }
-  lv_color_t color = mic_present() || state == MIC_OK ? COLOR_OK : state == MIC_NONE ? COLOR_NONE : COLOR_CHECKING;
-  for (lv_obj_t *part : {capsule, stem, base}) lv_obj_set_style_bg_color(part, color, 0);
-  if (state == MIC_NONE && !mic_present()) {
-    lv_obj_clear_flag(cross, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(cross, LV_OBJ_FLAG_HIDDEN);
-  }
-  lv_obj_clear_flag(icon, LV_OBJ_FLAG_HIDDEN);
+  paint_icon(main_icon);
+  paint_icon(device_icon);
 }
 
 void pcmic_set(JsonObjectConst mic) {
   const char *s = mic["state"] | "";
   int next = strcmp(s, "ok") == 0 ? MIC_OK : strcmp(s, "none") == 0 ? MIC_NONE : MIC_CHECKING;
   bool lost = next == MIC_NONE && (state == MIC_OK || state == MIC_CHECKING);
-  bool was_hidden = !icon || lv_obj_has_flag(icon, LV_OBJ_FLAG_HIDDEN);
+  bool was_hidden = !main_icon.icon || lv_obj_has_flag(main_icon.icon, LV_OBJ_FLAG_HIDDEN);
   state = next;
   snprintf(name, sizeof(name), "%s", mic["name"] | "");
   snprintf(why, sizeof(why), "%s", mic["why"] | "");

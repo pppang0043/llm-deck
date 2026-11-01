@@ -16,6 +16,12 @@
 void pcmic_build(lv_obj_t *scr);
 // 상태줄에서 left 오른쪽에 둔다. 차지한 오른쪽 끝 x (숨었으면 left 의 오른쪽 끝)
 int pcmic_place(lv_obj_t *left);
+// 미러링 중 기기 화면에 같은 표시를 하나 더 둔다. 누를 수 없다 (고르기 창은 PC 창의 화면에 뜬다)
+void pcmic_build_device(lv_obj_t *scr);
+// 기기 화면의 표시가 차지하는 너비 (앞 간격 포함, 숨었으면 0)
+int pcmic_device_width();
+// 기기 화면의 글자 오른쪽 끝 x 뒤에 둔다
+void pcmic_device_place(int x, int y);
 void pcmic_set(JsonObjectConst mic);
 // 연결이 바뀌었을 때 (끊기면 숨기고 PC 가 다시 알려 줄 때까지 모른다)
 void pcmic_refresh();
