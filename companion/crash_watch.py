@@ -28,6 +28,7 @@ LOOP_SECONDS = 600  # 이 시간 안에 넘으면 크래시 루프
 NOTIFY_GAP = 600  # 바탕화면 알림 간격. 기록과 횟수는 매번 남긴다
 TELEGRAM_GAP = 3600
 TELEGRAM_TIMEOUT = 10
+TELEGRAM_PREFIX = "[IOT-DECK S3]"  # 공용 봇이라 메시지 앞에 서비스 이름을 붙인다
 
 
 def is_crash_line(text: str) -> bool:
@@ -76,7 +77,7 @@ def send_telegram(text: str) -> None:
     token, chat = env.get("TELEGRAM_BOT_TOKEN"), env.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
         return
-    body = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    body = urllib.parse.urlencode({"chat_id": chat, "text": f"{TELEGRAM_PREFIX} {text}"}).encode()
     try:
         urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=body, timeout=TELEGRAM_TIMEOUT).close()
     except Exception as e:
@@ -146,4 +147,4 @@ class CrashWatch:
         if recent >= LOOP_COUNT and (self._telegram_at is None or now - self._telegram_at >= TELEGRAM_GAP):
             self._telegram_at = now
             print(f"[crash] 크래시 루프입니다 ({LOOP_SECONDS // 60}분에 {recent}번).", flush=True)
-            _background(send_telegram, f"LLM Deck 크래시 루프: {LOOP_SECONDS // 60}분에 {recent}번 재시작. {detail}")
+            _background(send_telegram, f"크래시 루프: {LOOP_SECONDS // 60}분에 {recent}번 재시작. {detail}")

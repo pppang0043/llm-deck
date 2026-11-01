@@ -210,7 +210,8 @@ def test_telegram_request_has_timeout_and_reads_env_at_runtime(monkeypatch):
     crash_watch.send_telegram("hello")
     (url, data, timeout), = calls
     assert url == f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    assert b"chat_id=42" in data and b"text=hello" in data and timeout <= 15
+    fields = urllib.parse.parse_qs(data.decode())
+    assert fields["chat_id"] == ["42"] and fields["text"] == ["[IOT-DECK S3] hello"] and timeout <= 15
 
 
 @pytest.mark.parametrize("error", [
