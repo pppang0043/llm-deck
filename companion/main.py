@@ -180,7 +180,7 @@ class Collector:
         self.errors: dict[str, str] = {}  # 그때의 서비스별 오류 (기기 정보 화면에 보여준다)
 
     def start(self, limits_only: bool = False) -> None:
-        """모으기를 시작한다. 앞의 모으기가 아직 돌고 있으면 그것을 기다린다 (겹쳐 돌지 않는다)."""
+        """모으기를 시작한다. 앞의 모으기가 아직 돌고 있으면 그대로 둔다 (겹쳐 돌지 않는다)."""
         with self.lock:
             if self.thread and self.thread.is_alive():
                 if time.monotonic() - self.started_at > HANG_SECONDS:
@@ -370,7 +370,7 @@ def _private_files() -> None:
             pass
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LLM Deck PC companion")
     parser.add_argument("--link", choices=["auto", *TRANSPORTS], help="연결 방식 (기본: 설정 파일 값 또는 auto)")
     parser.add_argument("--dry-run", action="store_true", help="기기로 보내지 않고 보낼 내용만 출력")
@@ -408,27 +408,337 @@ def main() -> None:
     parser.add_argument("--sync-only", action="store_true", help="기기 없이 한도 사용률 공유만 한다")
     parser.add_argument("--setup-sync", action="store_true", help="공유에 쓸 비공개 gist 를 만든다")
     parser.add_argument("--log", metavar="FILE", help="출력을 파일에 덧붙여 쓴다 (창 없이 자동 실행할 때)")
-    args = parser.parse_args()
-    _private_files()
-    if hasattr(faulthandler, "register"):
-        import signal
-        # 멈춘 것 같을 때 kill -USR1 <pid> 로 어디서 기다리는지 기록에 남긴다 (Mac, Linux)
-        faulthandler.register(signal.SIGUSR1, all_threads=True)
-    if args.log:
-        path = Path(args.log).expanduser()
-        try:
-            if path.stat().st_size > LOG_LIMIT:
-                path.replace(path.with_name(path.name + ".1"))
-        except OSError:
-            pass  # 없거나, 앞 도우미가 아직 잡고 있으면 (Windows) 이번에는 그대로 이어 쓴다
-        log = open(path, "a", encoding="utf-8", buffering=1)
-        sys.stdout = sys.stderr = log
-    if args.install_statusline:
-        return statusline.install()
-    if args.uninstall_statusline:
-        return statusline.uninstall()
-    cfg = load_config()
+    return parser
 
+
+def _log_to_file(name: str) -> None:
+    path = Path(name).expanduser()
+    try:
+        if path.stat().st_size > LOG_LIMIT:
+            path.replace(path.with_name(path.name + ".1"))
+    except OSError:
+        pass  # 없거나, 앞 도우미가 아직 잡고 있으면 (Windows) 이번에는 그대로 이어 쓴다
+    sys.stdout = sys.stderr = open(path, "a", encoding="utf-8", buffering=1)
+
+
+def _pairs(text: str) -> list[list[str]]:
+    """"a=1,b=2" -> [["a", "1"], ["b", "2"]]"""
+    return [item.split("=") for item in text.split(",")]
+
+
+def _one_shot_fields(args) -> dict:
+    """명령줄로 준 한 번짜리 명령. 첫 사용량 메시지에 함께 싣는다."""
+    fields = {}
+    if args.mic:
+        fields["mic"] = args.mic == "on"
+    if args.test_photo:
+        fields["photo_test"] = True
+    if args.camera:
+        fields["camera"] = args.camera
+    if args.links:
+        fields["links"] = {k: v == "on" for k, v in _pairs(args.links)}
+    if args.view:
+        fields["view"] = args.view
+    if args.screenshot:
+        fields["screenshot"] = True
+    if args.sd_pull:
+        fields["sd_pull"] = True
+    if args.sd_clear:
+        fields["sd_clear"] = True
+    if args.bt_check:
+        fields["bt_check"] = args.bt_check
+    if args.rotate:
+        fields["rotate"] = True
+    if args.saver:
+        fields["saver"] = True
+    if args.test_video:
+        fields["camera"] = "record"
+    if args.camera_mount:
+        fields["camera_mount"] = {"rot": int(args.camera_mount[0]), "mirror": args.camera_mount.endswith("m")}
+    if args.camera_ctl:
+        fields["camera_ctl"] = {k: int(v) for k, v in _pairs(args.camera_ctl)}
+    if args.battery is not None:
+        fields["battery_mv"] = round(args.battery * 1000)
+    return fields
+
+
+class DeviceLoop:
+    """기기와 주고받는 바퀴. 사용량을 INTERVAL 초마다 보내고, 그 사이에 작은 메시지를 보낸다.
+
+    연결이 끊기면 다시 붙고, 예상하지 못한 오류가 나도 멈추지 않는다. 한 번짜리 명령이면 결과를 기다려 끝난다.
+    """
+
+    def __init__(self, args, cfg: dict, link: str):
+        self.args = args
+        self.cfg = cfg
+        self.link = link
+        self.names = list(TRANSPORTS) if link == "auto" else [link]
+        self.sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
+        self.speaker = sounds.Sounds(cfg.get("sounds", {}))
+        self.movies = videos.VideoReceiver(cfg.get("videos", {}))
+        self.receiver = photos.PhotoReceiver(cfg.get("photos", {}), self.movies.dir, cfg.get("scan", {}))
+        self.apps = launcher.Launcher()
+        self.pc = pcstats.PcStats()
+        typer.configure(cfg.get("keywords"))  # config.toml 의 키워드 버튼 (없으면 기본 목록)
+        self.keys = typer.Typer()
+        self.ask = assistant.Assistant(cfg.get("assistant", {}), cfg.get("storage", {}).get("model_dir", ""))
+        # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
+        self.sessions = orca.Orca(cfg.get("orca", {}))
+        self.ask.orca = self.sessions
+        # 기기 펌웨어와 버전이 맞는지 (기기가 {"fw_proto"} 로 알려 준다)
+        self.peer = version.Peer()
+        print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
+        self.crash = crash_watch.CrashWatch()
+        frames.log_sink = self.crash.on_log_line
+        self.transport = None
+        # 기기 화면 미러링 (브라우저 창). 화면 조각은 연결 쪽에서 바로 넘긴다
+        self.view = mirror.Mirror(cfg.get("mirror", {}), lambda: self.transport)
+        frames.mirror_sink = self.view.on_frame
+        self.first = True  # 아직 첫 사용량 메시지를 보내지 못했다
+        self.sent_mic = True
+        self.sent_mic_status = None
+        self.wifi_tried = time.time()
+        self.collector = Collector(cfg)
+        self.watchdog = Watchdog()
+
+    def on_audio(self, seq: int, pcm: bytes) -> None:
+        # 기기 마이크 소리: 가상 마이크로 내보내고, 질문 녹음 중이면 녹음에도 쓴다
+        self.sink.push(seq, pcm)
+        self.ask.on_device_audio(seq, pcm)
+
+    def on_event(self, event: dict) -> None:
+        if isinstance(event, dict) and event.get("link_error") == "not_queued":
+            print("[device] 기기가 요청을 받지 못했습니다 (큐/메모리 제한 또는 잘못된 메시지). 잠시 뒤 다시 시도하세요.")
+        if isinstance(event, dict) and event.get("link_error") == "not_owner":
+            print("[device] 다른 PC 가 기기를 사용 중이라 제어 명령을 거절했습니다.")
+        # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
+        for handler in (self.speaker, self.receiver, self.movies, self.apps, self.keys, self.pc, self.ask,
+                        self.sessions, self.peer, self.crash):
+            try:
+                handler.on_event(event)
+            except Exception:
+                frames.report(type(handler).__name__)
+
+    def _handlers(self) -> tuple:
+        return self.on_audio, self.on_event, self.receiver.on_chunk, self.movies.on_chunk
+
+    def _connect(self) -> None:
+        # 끊긴 연결로 받던 녹화가 있으면 받은 데까지 재생되는 파일로 마무리한다
+        self.movies.finish()
+        self.view.link_lost()
+        self.transport = connect(self.names, self.cfg, *self._handlers())
+        if not self.transport:
+            return
+        self.sessions.resend()  # 새로 연결한 기기에도 세션 목록을 보낸다
+        self.peer.reset()
+        if getattr(self.transport, "confirmed", True):
+            self.view.link_up(self.transport.name)
+        else:
+            # USB 는 LLM Deck 인지 확인된 뒤에 알린다 (다른 ESP32 보드에 미러링 창을 열지 않게)
+            self.transport.on_confirm = lambda name=self.transport.name: self.view.link_up(name)
+            if self.transport.confirmed:  # 그 사이에 확인됐으면
+                self.transport.take_confirm()
+
+    def _send(self, message: dict) -> bool:
+        """보내고 True. 연결 문제면 닫아서 다음 바퀴가 다시 붙게 하고 False. 명령 오류는 그대로 올린다."""
+        try:
+            self.transport.send(message)
+            return True
+        except CommandError:
+            raise
+        except OSError as e:
+            print(f"[device] 전송 실패: {e}")
+            usb_health(self.transport, False)
+            self._disconnect()
+            return False
+
+    def _disconnect(self) -> None:
+        self.transport.close()
+        self.transport = None
+
+    def _send_usage(self) -> None:
+        # 모으기는 따로 돈다. 보통 금방 끝나니 잠깐 기다려 새 값을 보내고, 느리면 지난 값을 보낸다 (새 값은 다음 차례에)
+        self.collector.start()
+        message = self.collector.take(wait=2)
+        # PC 마이크를 쓸 수 있는지 (없으면 기기의 말하기 버튼이 꺼진다)
+        self.sent_mic = message["ask_mic"] = self.ask.mic
+        # 기기 상태줄의 PC 마이크 표시와 마이크 고르기 창
+        self.sent_mic_status = message["pc_mic"] = self.ask.mic_status()
+        # 키워드 버튼 이름 (기기가 바뀐 것만 저장하고 단축키 화면·ORCA 팝업을 다시 만든다)
+        message["keywords"] = typer.ITEMS
+        # 기기 버전을 아직 모르면 다시 알려 달라고 한다 (도우미만 다시 켜면 기기는 같은 연결로 보고 알려 주지 않는다)
+        if self.peer.proto is None:
+            message["ask_fw"] = True
+        if self.first:
+            message.update(_one_shot_fields(self.args))
+        if self._send(message):
+            usb_health(self.transport, True)
+            print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
+            self.first = False
+            self.peer.sent()
+
+    def _switch_to_faster_link(self) -> bool:
+        """더 빠른 연결로 갈아탔으면 True. 기기도 같은 순서로 우선한다 (link.cpp)."""
+        if not self.transport or self.link != "auto":
+            return False
+        # 블루투스·Wi-Fi 로 붙어 있는데 USB 케이블이 꽂히면 USB 로 갈아탄다
+        if self.transport.name != "USB" and usb_plugged(self.cfg):
+            print(f"[device] USB 케이블이 연결되어 {self.transport.name} 에서 USB 로 바꿉니다.")
+            self._disconnect()
+            return True
+        # 블루투스로 붙어 있으면 가끔 Wi-Fi 를 찾아, 되면 갈아탄다 (더 빠르고 인증도 된다)
+        if self.transport.name != "Bluetooth" or time.time() - self.wifi_tried <= WIFI_RETRY:
+            return False
+        self.wifi_tried = time.time()
+        faster = TRANSPORTS["wifi"](self.cfg.get("device", {}), *self._handlers())
+        if not faster.open():
+            faster.close()
+            return False
+        print("[device] Wi-Fi 로 기기를 찾아 블루투스에서 Wi-Fi 로 바꿉니다.")
+        self.transport.close()
+        self.transport = CommandTransport(faster)
+        self.sessions.resend()
+        self.peer.reset()
+        self.view.link_up(self.transport.name)
+        return True
+
+    def _wait_for_one_shot(self) -> bool:
+        """한 번짜리 명령이 있었으면 결과를 기다리고 True. 계속 도는 명령(--mic 등)이면 False."""
+        args = self.args
+        if args.test_video:
+            # 정해진 초만큼 녹화하고 멈춘 뒤, 파일이 다 쓰일 때까지 기다린다
+            time.sleep(args.test_video)
+            self.transport.send({"camera": "record"})
+            for _ in range(30):
+                time.sleep(1)
+                if self.movies.writer is None:
+                    break
+            self.transport.send({"camera": "close"})
+            time.sleep(1)
+        elif args.camera in ("open", "close", "gallery") or args.camera_mount or args.camera_ctl or args.links:
+            time.sleep(2)
+        elif (args.view or args.saver or args.sd_clear or args.rotate) and not args.screenshot:
+            time.sleep(1)
+        elif args.test_photo or args.screenshot or args.sd_pull or args.camera in ("shoot", "dump"):
+            # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
+            for _ in range(60):
+                time.sleep(1)
+                if self.receiver.buf is None and self.receiver.name:
+                    break
+        elif args.bt_check:
+            # 기기가 10초 동안 주변을 찾고 결과를 적는다 (USB 로그에 "기기> [bt-check]" 로 보인다)
+            # 서비스 목록까지 읽으면 기기마다 수 초씩 더 걸린다 (최대 8대)
+            time.sleep(20 if args.bt_check is True else 120)
+            print("[bt-check] 블루투스 스피커는 보통 클래식 블루투스(A2DP)로 소리를 받습니다.")
+            print("           위에 'Bluetooth Classic ... NO' 이면 이 기기의 칩으로는 그런 스피커에 소리를 보낼 수 없습니다.")
+            print("           [LE Audio] 표시가 있는 스피커가 있어도, ESP32-S3 는 LE Audio(BLE 5.2) 도 지원하지 않습니다.")
+        elif args.battery is not None:
+            print(f"[device] 배터리 전압 {args.battery:.3f}V 로 보정했습니다." if args.battery else "[device] 배터리 보정을 지웠습니다.")
+            time.sleep(1)
+        else:
+            return False
+        return True
+
+    def _finished(self) -> bool:
+        """한 번짜리 명령을 마쳤으면 연결을 닫고 True."""
+        if self.transport and not self.first and self._wait_for_one_shot():
+            self.transport.close()
+            return True
+        if not self.args.record:
+            return False
+        if self.transport:
+            print(f"[audio] {RECORD_SECONDS}초간 녹음합니다. 기기의 마이크가 켜져 있어야 합니다.")
+            time.sleep(RECORD_SECONDS)
+            self.transport.close()
+        self.sink.close()
+        return True
+
+    def _small_updates(self) -> dict:
+        """기기 화면이 원할 때만 보내는 작은 메시지: PC 상태, 단축 버튼 결과 알림, 말로 묻기 상태 등."""
+        extra = {}
+        if self.pc.due():
+            extra["pc"] = self.pc.collect()
+        for source in (self.apps, self.keys, self.ask, self.sessions, self.receiver):
+            if source.pending_toast:
+                # 메시지 하나에 알림 하나만 실린다. 나머지는 다음 차례에 보낸다
+                extra["toast"], source.pending_toast = source.pending_toast, None
+                break
+        if self.receiver.pending_scan:  # 기기 카메라의 연속 스캔 결과 (photos.py)
+            extra["scan"], self.receiver.pending_scan = self.receiver.pending_scan, None
+        if self.receiver.pending_roi is not None:  # 스캔 1단계 장의 바코드 자리 ([] 면 못 찾음)
+            extra["scan_roi"], self.receiver.pending_roi = self.receiver.pending_roi, None
+        # 말로 묻기: 상태(듣는 중·생각 중)와 나오는 중인 답
+        orca_state = self.sessions.pending()
+        if orca_state:
+            extra["orca"] = orca_state
+        answer = self.ask.pending()
+        if answer:
+            extra["ask"] = answer
+        if self.ask.mic != self.sent_mic:
+            extra["ask_mic"] = self.sent_mic = self.ask.mic
+        if self.ask.mic_status() != self.sent_mic_status:
+            extra["pc_mic"] = self.sent_mic_status = self.ask.mic_status()
+        extra.update(self.view.pending() or {})
+        return extra
+
+    def _serve_until_next_usage(self) -> None:
+        # 다음 전송까지 기다리되, 연결이 끊기면(기기를 껐다 켬, 블루투스 끊김) 바로 다시 연결한다
+        for _ in range(INTERVAL * 2):
+            self.watchdog.beat()
+            if not self.transport.connected():
+                print(f"[device] {self.transport.name} 연결이 끊겼습니다. 다시 연결합니다.")
+                self._disconnect()
+                return
+            extra = self._small_updates()
+            if extra and not self._send({**extra, "host": _host_name()}):
+                return
+            time.sleep(0.5)
+
+    def _tick(self) -> bool:
+        """한 바퀴. 한 번짜리 명령을 마쳐 끝낼 때만 True."""
+        if self.transport is None:
+            self._connect()
+        if self.transport:
+            self._send_usage()
+            if self._switch_to_faster_link():
+                return False
+        else:
+            # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
+            self.collector.start(limits_only=True)
+        if self._finished():
+            return True
+        if self.transport:
+            self._serve_until_next_usage()
+        else:
+            time.sleep(2)
+        return False
+
+    def run(self) -> None:
+        while True:
+            self.watchdog.beat()
+            try:
+                if self._tick():
+                    return
+            except CommandError as exc:
+                if self.transport:
+                    self.transport.close()
+                # 명령이 실행됐을 수 있으므로 first=True 인 채 재연결해 새 ID 로 반복하지 않는다.
+                raise SystemExit(f"[device] {exc}") from exc
+            except Exception:
+                # 예상하지 못한 오류로 도우미가 꺼지지 않게 한다. Windows 의 자동 시작은 꺼지면 다음 로그인까지 다시 켜지지 않는다.
+                print("[device] 오류가 나서 10초 뒤 다시 시작합니다:")
+                traceback.print_exc()
+                if self.transport:
+                    try:
+                        self.transport.close()
+                    except Exception:
+                        pass
+                self.transport = None
+                time.sleep(10)
+
+
+def _run_without_device(args, cfg: dict) -> bool:
+    """기기 바퀴 없이 끝나는 명령을 처리했으면 True."""
     if args.assistant_check:
         found = assistant.find_command(cfg.get("assistant", {}))
         print(f"[assistant] 질문 폴더: {assistant.workdir()}")
@@ -439,28 +749,56 @@ def main() -> None:
             print(f"[sound] {name}")
             speaker.play(name)
             time.sleep(1)
-        return
+        return True
     if args.add_wifi or args.clear_wifi:
         if not claim_device():
             raise SystemExit("이미 실행 중인 PC 도우미를 먼저 종료하세요.")
-        return wifi_setup(cfg, add=args.add_wifi)
+        wifi_setup(cfg, add=args.add_wifi)
+        return True
     if args.setup_sync:
-        return sync.create(cfg.get("sync", {}))
+        sync.create(cfg.get("sync", {}))
+        return True
     if args.sync_only:
         print("[sync] 이 PC 의 한도 사용률을 공유합니다. (Ctrl+C 로 종료)")
         while True:
             collect_limits(cfg)
             time.sleep(INTERVAL)
-
     if args.mirror:
         if not mirror.open_window():
             sys.exit(1)  # mirror.cmd 가 창을 닫지 않고 이유를 보여 주게
-        return
-
+        return True
     if args.dry_run:
         print(json.dumps(collect_all(cfg), indent=2, ensure_ascii=False))
-        return
+        return True
+    return False
 
+
+def _print_command_status(args, names: list[str], cfg: dict) -> None:
+    transport = connect(names, cfg, lambda *a: None, lambda *a: None, lambda *a: None, lambda *a: None)
+    if not transport:
+        raise SystemExit(1)
+    try:
+        print(json.dumps(transport.command_status(acknowledge=args.acknowledge_command), ensure_ascii=False))
+    finally:
+        transport.close()
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    _private_files()
+    if hasattr(faulthandler, "register"):
+        import signal
+        # 멈춘 것 같을 때 kill -USR1 <pid> 로 어디서 기다리는지 기록에 남긴다 (Mac, Linux)
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
+    if args.log:
+        _log_to_file(args.log)
+    if args.install_statusline:
+        return statusline.install()
+    if args.uninstall_statusline:
+        return statusline.uninstall()
+    cfg = load_config()
+    if _run_without_device(args, cfg):
+        return
     if not claim_device():
         log = Path.home() / ".llm-deck" / "companion.log"
         print("[device] 이 PC 에서 이미 다른 도우미가 기기에 연결되어 있습니다 (로그인할 때 자동으로 켜진 것일 수 있습니다).")
@@ -469,272 +807,9 @@ def main() -> None:
         print("         Windows: 작업 관리자에서 python.exe 종료 / Mac: launchctl bootout gui/$(id -u)/com.llmdeck.companion")
         return
     link = args.link or cfg.get("device", {}).get("link", "auto")
-    names = list(TRANSPORTS) if link == "auto" else [link]
     if args.command_status or args.acknowledge_command:
-        transport = connect(names, cfg, lambda *a: None, lambda *a: None, lambda *a: None, lambda *a: None)
-        if not transport:
-            raise SystemExit(1)
-        try:
-            print(json.dumps(transport.command_status(acknowledge=args.acknowledge_command), ensure_ascii=False))
-        finally:
-            transport.close()
-        return
-
-    sink = audio.Recorder(args.record) if args.record else audio.Player(cfg.get("audio", {}))
-    speaker = sounds.Sounds(cfg.get("sounds", {}))
-    movies = videos.VideoReceiver(cfg.get("videos", {}))
-    receiver = photos.PhotoReceiver(cfg.get("photos", {}), movies.dir, cfg.get("scan", {}))
-    apps = launcher.Launcher()
-    pc = pcstats.PcStats()
-    typer.configure(cfg.get("keywords"))  # config.toml 의 키워드 버튼 (없으면 기본 목록)
-    keys = typer.Typer()
-    ask = assistant.Assistant(cfg.get("assistant", {}), cfg.get("storage", {}).get("model_dir", ""))
-
-    def on_audio(seq: int, pcm: bytes) -> None:
-        # 기기 마이크 소리: 가상 마이크로 내보내고, 질문 녹음 중이면 녹음에도 쓴다
-        sink.push(seq, pcm)
-        ask.on_device_audio(seq, pcm)
-    # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
-    sessions = orca.Orca(cfg.get("orca", {}))
-    ask.orca = sessions
-    # 기기 펌웨어와 버전이 맞는지 (기기가 {"fw_proto"} 로 알려 준다)
-    peer = version.Peer()
-    print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
-    crash = crash_watch.CrashWatch()
-    frames.log_sink = crash.on_log_line
-
-    def on_event(event: dict) -> None:
-        if isinstance(event, dict) and event.get("link_error") == "not_queued":
-            print("[device] 기기가 요청을 받지 못했습니다 (큐/메모리 제한 또는 잘못된 메시지). 잠시 뒤 다시 시도하세요.")
-        if isinstance(event, dict) and event.get("link_error") == "not_owner":
-            print("[device] 다른 PC 가 기기를 사용 중이라 제어 명령을 거절했습니다.")
-        # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
-        for handler in (speaker, receiver, movies, apps, keys, pc, ask, sessions, peer, crash):
-            try:
-                handler.on_event(event)
-            except Exception:
-                frames.report(type(handler).__name__)
-
-    transport = None
-    # 기기 화면 미러링 (브라우저 창). 화면 조각은 연결 쪽에서 바로 넘긴다
-    view = mirror.Mirror(cfg.get("mirror", {}), lambda: transport)
-    frames.mirror_sink = view.on_frame
-    first = True
-    sent_mic = True
-    sent_mic_status = None
-    wifi_tried = time.time()
-    collector = Collector(cfg)
-    watchdog = Watchdog()
-    while True:
-        watchdog.beat()
-        try:
-            if transport is None:
-                # 끊긴 연결로 받던 녹화가 있으면 받은 데까지 재생되는 파일로 마무리한다
-                movies.finish()
-                view.link_lost()
-                transport = connect(names, cfg, on_audio, on_event, receiver.on_chunk, movies.on_chunk)
-                if transport:
-                    sessions.resend()  # 새로 연결한 기기에도 세션 목록을 보낸다
-                    peer.reset()
-                    if getattr(transport, "confirmed", True):
-                        view.link_up(transport.name)
-                    else:
-                        # USB 는 LLM Deck 인지 확인된 뒤에 알린다 (다른 ESP32 보드에 미러링 창을 열지 않게)
-                        transport.on_confirm = lambda name=transport.name: view.link_up(name)
-                        if transport.confirmed:  # 그 사이에 확인됐으면
-                            transport.take_confirm()
-            if transport:
-                # 모으기는 따로 돈다. 보통 금방 끝나니 잠깐 기다려 새 값을 보내고, 느리면 지난 값을 보낸다 (새 값은 다음 차례에)
-                collector.start()
-                message = collector.take(wait=2)
-                # PC 마이크를 쓸 수 있는지 (없으면 기기의 말하기 버튼이 꺼진다)
-                message["ask_mic"] = ask.mic
-                # 기기 상태줄의 PC 마이크 표시와 마이크 고르기 창
-                message["pc_mic"] = sent_mic_status = ask.mic_status()
-                # 키워드 버튼 이름 (기기가 바뀐 것만 저장하고 단축키 화면·ORCA 팝업을 다시 만든다)
-                message["keywords"] = typer.ITEMS
-                # 기기 버전을 아직 모르면 다시 알려 달라고 한다 (도우미만 다시 켜면 기기는 같은 연결로 보고 알려 주지 않는다)
-                if peer.proto is None:
-                    message["ask_fw"] = True
-                sent_mic = ask.mic
-                if first and args.mic:
-                    message["mic"] = args.mic == "on"
-                if first and args.test_photo:
-                    message["photo_test"] = True
-                if first and args.camera:
-                    message["camera"] = args.camera
-                if first and args.links:
-                    message["links"] = {k: v == "on" for k, v in (item.split("=") for item in args.links.split(","))}
-                if first and args.view:
-                    message["view"] = args.view
-                if first and args.screenshot:
-                    message["screenshot"] = True
-                if first and args.sd_pull:
-                    message["sd_pull"] = True
-                if first and args.sd_clear:
-                    message["sd_clear"] = True
-                if first and args.bt_check:
-                    message["bt_check"] = args.bt_check
-                if first and args.rotate:
-                    message["rotate"] = True
-                if first and args.saver:
-                    message["saver"] = True
-                if first and args.test_video:
-                    message["camera"] = "record"
-                if first and args.camera_mount:
-                    rot = int(args.camera_mount[0])
-                    message["camera_mount"] = {"rot": rot, "mirror": args.camera_mount.endswith("m")}
-                if first and args.camera_ctl:
-                    message["camera_ctl"] = {k: int(v) for k, v in (item.split("=") for item in args.camera_ctl.split(","))}
-                if first and args.battery is not None:
-                    message["battery_mv"] = round(args.battery * 1000)
-                try:
-                    transport.send(message)
-                    usb_health(transport, True)
-                    print(f"[device] {message['updated']} 사용량 전송 ({len(message['services'])}개 서비스)")
-                    first = False
-                    peer.sent()
-                except CommandError:
-                    raise
-                except OSError as e:
-                    print(f"[device] 전송 실패: {e}")
-                    usb_health(transport, False)
-                    transport.close()
-                    transport = None
-                # 블루투스·Wi-Fi 로 붙어 있는데 USB 케이블이 꽂히면 USB 로 갈아탄다 (더 빠르고, 기기도 USB 를 우선한다)
-                if transport and link == "auto" and transport.name != "USB" and usb_plugged(cfg):
-                    print(f"[device] USB 케이블이 연결되어 {transport.name} 에서 USB 로 바꿉니다.")
-                    transport.close()
-                    transport = None
-                    continue
-                # 블루투스로 붙어 있으면 가끔 Wi-Fi 를 찾아, 되면 갈아탄다 (Wi-Fi 가 더 빠르고 인증도 되며, 기기도 Wi-Fi 를 우선한다)
-                if transport and link == "auto" and transport.name == "Bluetooth" and time.time() - wifi_tried > WIFI_RETRY:
-                    wifi_tried = time.time()
-                    faster = TRANSPORTS["wifi"](cfg.get("device", {}), on_audio, on_event, receiver.on_chunk, movies.on_chunk)
-                    if not faster.open():
-                        faster.close()
-                    else:
-                        print("[device] Wi-Fi 로 기기를 찾아 블루투스에서 Wi-Fi 로 바꿉니다.")
-                        transport.close()
-                        transport = CommandTransport(faster)
-                        sessions.resend()
-                        peer.reset()
-                        view.link_up(transport.name)
-                        continue
-            else:
-                # 기기가 없어도 이 PC 의 한도 사용률은 계속 공유한다 (기기가 클라우드로 읽어 갈 수 있게)
-                collector.start(limits_only=True)
-            if args.test_video and transport and not first:
-                # 정해진 초만큼 녹화하고 멈춘 뒤, 파일이 다 쓰일 때까지 기다린다
-                time.sleep(args.test_video)
-                transport.send({"camera": "record"})
-                for _ in range(30):
-                    time.sleep(1)
-                    if movies.writer is None:
-                        break
-                transport.send({"camera": "close"})
-                time.sleep(1)
-                transport.close()
-                return
-            if (args.camera in ("open", "close", "gallery") or args.camera_mount or args.camera_ctl or args.links) and transport and not first:
-                time.sleep(2)
-                transport.close()
-                return
-            if (args.view or args.saver or args.sd_clear or args.rotate) and not args.screenshot and transport and not first:
-                time.sleep(1)
-                transport.close()
-                return
-            if (args.test_photo or args.screenshot or args.sd_pull or args.camera in ("shoot", "dump")) and transport and not first:
-                # 사진이 다 올 때까지 기다린다 (블루투스는 수 초)
-                for _ in range(60):
-                    time.sleep(1)
-                    if receiver.buf is None and receiver.name:
-                        break
-                transport.close()
-                return
-            if args.bt_check and transport and not first:
-                # 기기가 10초 동안 주변을 찾고 결과를 적는다 (USB 로그에 "기기> [bt-check]" 로 보인다)
-                # 서비스 목록까지 읽으면 기기마다 수 초씩 더 걸린다 (최대 8대)
-                time.sleep(20 if args.bt_check is True else 120)
-                transport.close()
-                print("[bt-check] 블루투스 스피커는 보통 클래식 블루투스(A2DP)로 소리를 받습니다.")
-                print("           위에 'Bluetooth Classic ... NO' 이면 이 기기의 칩으로는 그런 스피커에 소리를 보낼 수 없습니다.")
-                print("           [LE Audio] 표시가 있는 스피커가 있어도, ESP32-S3 는 LE Audio(BLE 5.2) 도 지원하지 않습니다.")
-                return
-            if args.battery is not None and transport and not first:
-                print(f"[device] 배터리 전압 {args.battery:.3f}V 로 보정했습니다." if args.battery else "[device] 배터리 보정을 지웠습니다.")
-                time.sleep(1)
-                transport.close()
-                return
-            if args.record:
-                if transport:
-                    print(f"[audio] {RECORD_SECONDS}초간 녹음합니다. 기기의 마이크가 켜져 있어야 합니다.")
-                    time.sleep(RECORD_SECONDS)
-                    transport.close()
-                sink.close()
-                return
-            if transport:
-                # 다음 전송까지 기다리되, 연결이 끊기면(기기를 껐다 켬, 블루투스 끊김) 바로 다시 연결한다
-                for _ in range(INTERVAL * 2):
-                    watchdog.beat()
-                    if not transport.connected():
-                        print(f"[device] {transport.name} 연결이 끊겼습니다. 다시 연결합니다.")
-                        transport.close()
-                        transport = None
-                        break
-                    # 기기 화면이 원할 때만 보내는 작은 메시지: PC 상태, 단축 버튼 결과 알림
-                    extra = {}
-                    if pc.due():
-                        extra["pc"] = pc.collect()
-                    for source in (apps, keys, ask, sessions, receiver):
-                        if source.pending_toast:
-                            extra["toast"], source.pending_toast = source.pending_toast, None
-                    if receiver.pending_scan:  # 기기 카메라의 연속 스캔 결과 (photos.py)
-                        extra["scan"], receiver.pending_scan = receiver.pending_scan, None
-                    if receiver.pending_roi is not None:  # 스캔 1단계 장의 바코드 자리 ([] 면 못 찾음)
-                        extra["scan_roi"], receiver.pending_roi = receiver.pending_roi, None
-                    # 말로 묻기: 상태(듣는 중·생각 중)와 나오는 중인 답
-                    orca_state = sessions.pending()
-                    if orca_state:
-                        extra["orca"] = orca_state
-                    answer = ask.pending()
-                    if answer:
-                        extra["ask"] = answer
-                    if ask.mic != sent_mic:
-                        extra["ask_mic"] = sent_mic = ask.mic
-                    if ask.mic_status() != sent_mic_status:
-                        extra["pc_mic"] = sent_mic_status = ask.mic_status()
-                    extra.update(view.pending() or {})
-                    if extra:
-                        try:
-                            transport.send({**extra, "host": _host_name()})
-                        except CommandError:
-                            raise
-                        except OSError as e:
-                            print(f"[device] 전송 실패: {e}")
-                            usb_health(transport, False)
-                            transport.close()
-                            transport = None
-                            break
-                    time.sleep(0.5)
-            else:
-                time.sleep(2)
-        except CommandError as exc:
-            if transport:
-                transport.close()
-            # 명령이 실행됐을 수 있으므로 first=True 인 채 재연결해 새 ID 로 반복하지 않는다.
-            raise SystemExit(f"[device] {exc}") from exc
-        except Exception:
-            # 예상하지 못한 오류로 도우미가 꺼지지 않게 한다. Windows 의 자동 시작은 꺼지면 다음 로그인까지 다시 켜지지 않는다.
-            print("[device] 오류가 나서 10초 뒤 다시 시작합니다:")
-            traceback.print_exc()
-            if transport:
-                try:
-                    transport.close()
-                except Exception:
-                    pass
-            transport = None
-            time.sleep(10)
+        return _print_command_status(args, list(TRANSPORTS) if link == "auto" else [link], cfg)
+    DeviceLoop(args, cfg, link).run()
 
 
 if __name__ == "__main__":

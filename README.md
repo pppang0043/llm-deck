@@ -272,6 +272,27 @@ uv run main.py --acknowledge-command
 
 Wi-Fi는 인증된 주소 하나를 선택해 유지하며 대기 PC의 데이터가 마이크·사진 목적지를 바꾸거나 소유자 수명을 늘리지 못한다. BLE는 연결할 때의 도전값으로 연결 세대까지 구분하므로, 같은 슬롯이 다른 PC에 재사용돼도 이전 큐 항목이 실행되지 않는다. 버전·명령 결과 조회는 대기 PC에서도 가능하다.
 
+## 코드를 고칠 때
+
+**펌웨어가 받은 메시지**는 두 단계로 처리한다 (`firmware/src/link.cpp`).
+
+- `link_submit`: 아무 태스크에서나 불린다. 형식을 보고 큐에 넣거나 바로 답한다. 화면(LVGL)을 만지면 안 된다.
+- `link_loop` → `apply_message`: `loop()` 에서 큐의 메시지를 실행한다. 새 메시지 칸은 성격에 맞는 곳에 한 줄 넣는다.
+  - `apply_commands`: 제어 명령 (사용 중인 PC·USB). `command_protocol.h` 의 `COMMAND_FIELDS` 와 `companion/transports/commands.py` 의 같은 이름 목록에도 넣는다.
+  - `apply_usb_commands`: 케이블로 꽂은 PC 만 보낼 수 있는 명령 (`USB_ONLY_FIELDS` 에도).
+  - `apply_owner_state`: 사용 중인 PC 가 보내는 상태.
+- 누가 실행해도 되는지는 `control_policy.h` 에 모으고, 기기 없이 도는 `firmware/tests/control_policy_test.cpp` 로 시험한다.
+
+**화면(LVGL)**
+
+- `loop()` 밖의 태스크에서 만지지 않는다. 알림은 `ui_toast` 만 어디서나 부를 수 있다.
+- LVGL 8.4 는 같은 값을 넣어도 다시 그린다 (`lv_obj_set_style_*`, `lv_obj_align`, `lv_obj_set_pos`, `lv_obj_set_width` 가 모두 `lv_obj_invalidate` 를 부른다). `loop()` 나 짧은 타이머에서 도는 코드는 값이 바뀔 때만 넣는다. 그렇지 않으면 화면을 쉬지 않고 다시 그린다. `lv_label_set_text` 도 `strcmp` 로 먼저 비교한다.
+
+**PC 도우미**
+
+- 기기와 주고받는 바퀴는 `companion/main.py` 의 `DeviceLoop` 이다. 명령줄의 한 번짜리 명령은 `_one_shot_fields`(보낼 칸)와 `_wait_for_one_shot`(결과 기다리기)에 나란히 넣는다.
+- 동작은 `companion/tests/test_main_loop.py` 가 가짜 부품으로 `main()` 을 처음부터 돌려 확인한다.
+
 ## 기기 마이크 (INMP441)
 
 I2S 마이크 INMP441 을 헤더 핀에 연결한다 (`firmware/include/pins.h`). 보드 헤더는 2.54mm 수핀이 뒷면으로 납땜된 채 나오므로 (Waveshare 치수도) 보드 쪽은 암 듀폰선을 꽂으면 된다. 모듈 핀은 3개씩 2줄이고, 소리 구멍이 막히지 않게 구멍 반대쪽 면으로 핀을 낸다:
