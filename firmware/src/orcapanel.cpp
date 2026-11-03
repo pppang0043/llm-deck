@@ -587,9 +587,7 @@ static void pop_event(lv_event_t *e) {
   char json[96];
   snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"%s\"}", active_id, key);
   link_send_event(json);
-  // Tab, 지우기, Esc 만 빼면 모두 끝에 Enter 를 친다 (companion/orca.py 의 KEYS, 키워드): 보냈으니 닫는다.
-  // / 명령 줄 (청록 버튼: orch, clr, 리슘 처럼 이름에 / 가 없다) 은 이어서 다른 걸 누르도록 그대로 둔다
-  if (!pop_stays_open(key, item->slash)) close_pop();
+  // 보낸 뒤에도 팝업은 둔다 (Enter 가 함께 나가는 키도. 이어서 누르도록). 닫기는 끌어 내리기로 한다
 }
 
 // 꾹 누르면 수정 / 위치 조정 / 취소. 손을 떼기 전에 뜨므로 손을 뗄 때까지 아무것도 누르지 않게 한다
