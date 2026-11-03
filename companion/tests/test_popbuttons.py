@@ -33,6 +33,7 @@ def o(monkeypatch):
     inst.handles = {"abc": "term_abc"}
     inst._run = lambda *a, **k: inst.sent_cmds.append(a) or {}
     monkeypatch.setattr(orca.time, "sleep", lambda s: None)
+    monkeypatch.setattr(typer, "mirror_in_front", lambda: False)  # 테스트 중 실제 앞 앱을 보지 않는다
     inst.opened = []
     inst.open_editor = lambda: inst.opened.append(1)
     inst.on_event({"orca": "saved_end"})  # 보드에 저장된 것이 없다
@@ -62,26 +63,50 @@ class Board:
                 store.pop(item["id"], None)
                 if item[key] is not None:
                     store[item["id"]] = item[key]
-            inst.on_event(self.item(item["id"], ack=True))
+            self.send_item(inst, item["id"], ack=True)
 
-    def item(self, kid, ack=False):
+    def item_events(self, kid, ack=False):
+        """orcapanel.cpp 의 send_saved_item 처럼: 짧으면 글을 한 번에, 길면 조각으로 먼저 보내고 saved_item 에는 바이트 수"""
         event = {"orca": "saved_item", "id": kid}
         if kid in self.names:
             event["name"] = self.names[kid]
         if kid in self.texts:
             event["text"] = self.texts[kid]
-        return {**event, "ack": True} if ack else event
+        if ack:
+            event["ack"] = True
+        if len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode()) <= 200 or kid not in self.texts:
+            return [event]
+        text = event.pop("text")
+        event["tl"] = len(text.encode())
+        return [{"orca": "saved_text", "id": kid, "t": t} for t in parts(text)] + [event]
 
-    def send_layout(self, inst):
+    def send_item(self, inst, kid, ack=False):
+        for event in self.item_events(kid, ack):
+            inst.on_event(event)
+
+    def send_layout(self, inst, items=None):
         if self.layout:
             for row, ids_text in enumerate(self.layout.split(";")):
                 inst.on_event({"orca": "saved_row", "row": row, "ids": ids_text})
-        inst.on_event({"orca": "saved_end"})
+        inst.on_event({"orca": "saved_end"} if items is None else {"orca": "saved_end", "n": items})
 
     def sync(self, inst):
-        for kid in {*self.names, *self.texts}:
-            inst.on_event(self.item(kid))
-        self.send_layout(inst)
+        kids = {*self.names, *self.texts}
+        for kid in kids:
+            self.send_item(inst, kid)
+        self.send_layout(inst, len(kids))
+
+
+def parts(text, size=60):
+    """보드의 pop_text_part 처럼 UTF-8 글자를 자르지 않고 size 바이트씩"""
+    data, out, at = text.encode(), [], 0
+    while at < len(data):
+        n = min(size, len(data) - at)
+        while n > 1 and at + n < len(data) and data[at + n] & 0xC0 == 0x80:
+            n -= 1
+        out.append(data[at:at + n].decode())
+        at += n
+    return out
 
 
 def ids(rows):
@@ -444,6 +469,82 @@ def test_new_button_edit_keeps_its_values(o):
     assert (req["name"], req["text"], req["has_text"]) == ("하나", "하나요", True)
     assert save(o, req, name="둘", text="둘이요")[0] == 200
     assert o.board.names["u1"] == "둘" and o.buttons.text("u1") == "둘이요"
+
+
+# --- 긴 입력 글은 조각으로 (블루투스 이벤트는 약 210바이트), 잃으면 다시 읽기 ---
+
+LONG = "커밋하기 전에 바뀐 파일을 모두 살펴보고 테스트를 돌린 뒤 결과를 한글로 정리해서 알려 주고 문제가 없으면 커밋해 줘 " * 2
+
+
+def test_long_text_arrives_in_parts_and_is_typed(o):
+    req = begin(o, "commit")
+    assert save(o, req, name="커밋", text=LONG[:typer.MAX_TEXT]) == (200, {})
+    assert len(parts(o.board.texts["commit"])) > 3 and o.pending_toast == "저장했습니다"
+    o.resend()
+    o.pending_pop_commands()
+    o.board.sync(o)
+    assert o.buttons.synced and o.buttons.text("commit") == LONG[:typer.MAX_TEXT]
+    o.sent_cmds.clear()
+    o.send_key("abc", "commit")
+    assert o.sent_cmds[0][-1] == LONG[:typer.MAX_TEXT]
+
+
+def test_long_custom_button_survives_reconnect(o):
+    make(o, "commit", "긴 버튼", LONG[:150])
+    o.resend()
+    o.pending_pop_commands()
+    o.board.sync(o)
+    assert "u1" in ids(o.pending_pop())[0] and o.buttons.text("u1") == LONG[:150]
+
+
+def test_lost_part_on_connect_reads_again(o, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(popbuttons.time, "monotonic", lambda: now[0])
+    o.board = Board()
+    o.board.texts = {"commit": LONG[:100]}
+    o.resend()
+    assert o.pending_pop_commands() == {"pop_sync": True}
+    events = o.board.item_events("commit")
+    for event in events[1:]:  # 첫 조각을 잃었다
+        o.on_event(event)
+    o.board.send_layout(o, 1)
+    assert not o.buttons.synced and o.buttons.text("commit") is None
+    assert o.pending_pop() is None  # 틀린 표를 기기에 보내지 않는다
+    now[0] += popbuttons.SYNC_RETRY_S
+    assert o.pending_pop_commands() == {"pop_sync": True}
+    o.board.sync(o)
+    assert o.buttons.synced and o.buttons.text("commit") == LONG[:100]
+
+
+def test_lost_item_on_connect_reads_again(o, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(popbuttons.time, "monotonic", lambda: now[0])
+    o.board = Board()
+    o.board.names = {"commit": "올리기", "push": "밀기"}
+    o.resend()
+    o.pending_pop_commands()
+    o.board.send_item(o, "push")  # commit 은 잃었다
+    o.board.send_layout(o, 2)
+    assert not o.buttons.synced
+    now[0] += popbuttons.SYNC_RETRY_S
+    o.pending_pop_commands()
+    o.board.sync(o)
+    assert o.buttons.synced and o.buttons.names == {"commit": "올리기", "push": "밀기"}
+
+
+def test_lost_part_of_saved_answer_reads_again(o):
+    req = begin(o, "commit")
+    o.answer_edit({"seq": req["seq"], "id": "commit", "name": "커밋", "text": LONG[:120]})
+    o.board = Board()
+    o.board.take(o)  # 보드가 저장했다
+    o.buttons.synced = True
+    o.buttons.texts.pop("commit", None)
+    events = o.board.item_events("commit", ack=True)
+    for event in events[:1] + events[2:]:  # 가운데 조각을 잃었다
+        o.on_event(event)
+    assert not o.buttons.synced and o.pending_pop_commands() == {"pop_sync": True}
+    o.board.sync(o)
+    assert o.buttons.text("commit") == LONG[:120]
 
 
 def test_new_button_needs_name_and_text(o):

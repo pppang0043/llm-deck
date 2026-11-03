@@ -36,6 +36,9 @@ class FakeAssistant(Part):
         self.orca = None
         self.audio = []
 
+    def cursor_dictation_pending(self):
+        return False
+
     def mic_status(self):
         return self.status
 

@@ -502,6 +502,8 @@ class Orca:
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
         self.enabled = cfg.get("enabled", True)
+        # 커서 자리로 갈 받아쓰기가 남아 있으면 True (main.py 가 assistant 것을 넣는다). 그동안은 ORCA 를 앞으로 띄우지 않는다
+        self.keep_focus = lambda: False
         self.cli: str | None = None
         self.handles: dict[str, str] = {}  # 기기에 보낸 짧은 id -> orca 터미널 handle
         self.tabs: dict[str, str] = {}  # 터미널 handle -> ORCA 탭 id (화면에 보이는지 볼 때)
@@ -702,11 +704,14 @@ class Orca:
                 print(f"[orca] 팝업 버튼을 고쳤습니다: {event['id']}")
                 self.pending_toast = "저장했습니다"
             return
+        if event.get("orca") == "saved_text":
+            self.buttons.on_saved_text(event)
+            return
         if event.get("orca") == "saved_row":
             self.buttons.on_saved_row(event)
             return
         if event.get("orca") == "saved_end":
-            self.buttons.on_saved_end()
+            self.buttons.on_saved_end(event)
             return
         if not isinstance(event.get("id"), str):
             return
@@ -745,13 +750,28 @@ class Orca:
             self.pending_toast = "ORCA 세션을 찾지 못했습니다\n목록을 새로 읽습니다"
             self._wake.set()
             return None
+        self._show(handle)
+        return handle
+
+    def _show(self, handle: str) -> None:
+        """그 세션 탭으로 바꾸고 ORCA 를 앞으로 띄운다."""
         if self._run("terminal", "switch", "--terminal", handle) is None:
-            print(f"[orca] {short} 로 바꾸지 못했습니다")
+            print(f"[orca] {self._title(handle)} 로 바꾸지 못했습니다")
         if sys.platform == "darwin":
             subprocess.run(["open", "-b", BUNDLE_ID], capture_output=True, timeout=10)
         elif sys.platform == "win32":
             _front_windows()
-        return handle
+
+    def _show_if_mirror(self, handle: str) -> None:
+        """미러링 창에서 누른 버튼이면 (미러링 창이 맨 앞) 글이 들어간 세션을 앞으로 띄운다.
+        기기 화면을 직접 눌렀을 때는 지금 보던 창을 그대로 둔다.
+        세션과 상관없는 받아쓰기(커서 자리로 간다)가 녹음·처리 중이면 띄우지 않는다: 띄우면 그 글이 ORCA 로 들어간다."""
+        if self.keep_focus():
+            print("[orca] 커서 자리로 갈 받아쓰기가 남아 있어 ORCA 를 앞으로 띄우지 않습니다")
+            return
+        if typer.mirror_in_front():
+            print(f"[orca] 미러링 창에서 눌러 {self._title(handle)} 를 앞으로 띄웁니다")
+            self._show(handle)
 
     def commands(self) -> list[str]:
         if self._commands is None:
@@ -796,6 +816,8 @@ class Orca:
             ok = self._run("terminal", "send", "--terminal", handle, "--enter") is not None
         print(f"[orca] {short} 에 {shown} {'보냈습니다' if ok else '보내지 못했습니다'}")
         self.pending_toast = f"보냈습니다: {shown}" if ok else f"ORCA 세션에 {shown}\n보내지 못했습니다"
+        if ok:
+            self._show_if_mirror(handle)
         self._wake.set()  # 상태가 곧 바뀐다
 
     def reply(self, short: str, name: str) -> None:
@@ -820,6 +842,8 @@ class Orca:
             ok = self._run("terminal", "send", "--terminal", handle, "--enter") is not None
         print(f"[orca] {short} 에 {shown} {'보냈습니다' if ok else '보내지 못했습니다'}")
         self.pending_toast = f"{row['t']}\n{shown} 보냈습니다" if ok else f"ORCA 세션에 {shown}\n보내지 못했습니다"
+        if ok:
+            self._show_if_mirror(handle)
         self._wake.set()  # 상태가 곧 바뀐다
 
     def _tab_title(self, tab: str | None) -> str:

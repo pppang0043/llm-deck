@@ -747,6 +747,7 @@ class Assistant:
         self.take: _Take | None = None  # 지금 녹음 중인 것
         self.takes: queue.Queue[_Take] = queue.Queue()  # 녹음을 마치고 처리를 기다리는 것
         self.busy = False  # 받아 적기·답 받기 중 (처리 스레드)
+        self.working: _Take | None = None  # 처리 스레드가 지금 받아 적는 것
         threading.Thread(target=self._work, daemon=True).start()
         # PC 마이크 상태 (기기 상태줄의 마이크 표시, mic_status): "checking" 들어 보는 중, "ok" 쓸 수 있음, "none" 연결 불가.
         # self.mic 이 False 면 기기는 말하기 버튼을 끈다. 녹음과 미리 들어 보기(_probe_round)가 고친다.
@@ -1359,10 +1360,17 @@ class Assistant:
         while True:
             take = self.takes.get()
             self.busy = True
+            self.working = take
             try:
                 self._answer(take)
             finally:
+                self.working = None
                 self.busy = False
+
+    def cursor_dictation_pending(self) -> bool:
+        """세션을 고르지 않은 받아쓰기(커서 자리에 넣는다)가 녹음 중이거나 넣기를 기다리는지."""
+        takes = [self.take, self.working, *list(self.takes.queue)]
+        return any(t is not None and t.dictate and not t.orca_pick for t in takes)
 
     def _warm(self, take: _Take) -> None:
         try:

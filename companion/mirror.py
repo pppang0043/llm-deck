@@ -234,6 +234,7 @@ class Mirror:
         self.lost_at = 0.0  # 연결이 끊긴 시각 (0 = 붙어 있음)
         self.auto_open = False
         self.orca = None  # ORCA 팝업 버튼 수정 요청을 묻는 곳 (main.py 가 넣는다)
+        self.split = None  # 기기의 나눠 쓰기 (True = 기기 LCD 는 사용량, False = 같은 화면, None = 모름·옛 펌웨어)
         if not cfg.get("enabled", True):
             return
         try:
@@ -246,7 +247,13 @@ class Mirror:
         print(f"[mirror] 미러링 창: {URL} (uv run main.py --mirror 로도 열린다)")
         self.auto_open = cfg.get("auto_open", True)
 
+    def on_event(self, event: dict) -> None:
+        """기기가 알려 준 나눠 쓰기 상태 {"mirror_split": bool} (미러링 중 바뀔 때와 10초마다)"""
+        if isinstance(event, dict) and isinstance(event.get("mirror_split"), bool):
+            self.split = event["mirror_split"]
+
     def link_lost(self) -> None:
+        self.split = None
         if self.link and not self.lost_at:
             self.lost_at = time.time()
 
@@ -314,6 +321,7 @@ class Mirror:
                 return {"mirror": True}
         elif self.sent_on:
             self.sent_on = 0.0
+            self.split = None
             return {"mirror": False}
         return None
 
@@ -329,6 +337,10 @@ class Mirror:
         """미러링에 쓸 연결 (블루투스는 너무 느려서 쓰지 않는다)"""
         transport = self.get_transport()
         return transport if transport and transport.name in ("USB", "Wi-Fi") else None
+
+    def _split_header(self) -> dict:
+        """미러링 앱의 합치기·분리 단추에 쓰는 기기 상태 (모르면 보내지 않아 단추를 숨긴다)"""
+        return {} if self.split is None else {"X-Split": "1" if self.split else "0"}
 
     def _handler(self):
         mirror = self
@@ -414,14 +426,15 @@ class Mirror:
                         self._reply(503, ("기기가 응답하지 않습니다. 기기가 멈췄거나 펌웨어 올리기가 중간에 끊겼을 수 있습니다. "
                                           "기기를 다시 켜거나 펌웨어를 다시 올리세요.").encode(), "text/plain; charset=utf-8")
                         return
-                    self._reply(204, b"", "text/plain")
+                    self._reply(204, b"", "text/plain", mirror._split_header())
                     return
-                self._reply(200, frame, "application/octet-stream", {"X-Seq": str(seq), "X-Width": str(w), "X-Height": str(h)})
+                self._reply(200, frame, "application/octet-stream",
+                            {"X-Seq": str(seq), "X-Width": str(w), "X-Height": str(h), **mirror._split_header()})
 
             def do_POST(self) -> None:
                 path = self._allowed()
                 # JSON 으로만 받는다 (다른 사이트의 폼 전송은 이 형식을 쓸 수 없다)
-                if path not in ("touch", "home", "edit") or self.headers.get("Content-Type") != "application/json":
+                if path not in ("touch", "home", "edit", "split") or self.headers.get("Content-Type") != "application/json":
                     self._reply(404, b"", "text/plain")
                     return
                 if path == "edit":
@@ -431,6 +444,10 @@ class Mirror:
                     body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 2000)))
                     if path == "home":
                         message = {"view": "home"}
+                    elif path == "split":
+                        if not isinstance(body["on"], bool):
+                            raise ValueError
+                        message = {"split": body["on"]}
                     elif "points" in body:
                         # 기기는 한 번에 16개까지 쌓아 둔다
                         message = {"touch": [_point(p) for p in body["points"][:14]]}

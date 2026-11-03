@@ -91,6 +91,15 @@ inline bool pop_layout_text(char *out, size_t size, const char *const *ids, cons
   return true;
 }
 
+#define POP_EVENT_MAX 200  // 이보다 긴 saved_item 은 글을 조각으로 나눈다. 블루투스 이벤트 한도 약 210바이트 (ble_link.cpp)
+// 입력 글을 조각으로 보낼 때 at 부터 max 바이트 안에서 한 조각의 길이. UTF-8 글자 중간에서 자르지 않는다
+#define POP_TEXT_PART 60  // 블루투스는 이벤트 하나가 약 210바이트까지다 (ble_link.cpp). " 와 \ 가 두 배로 늘어도 들어간다
+inline size_t pop_text_part(const char *text, size_t len, size_t at, size_t max) {
+  size_t n = len - at < max ? len - at : max;
+  while (n > 1 && at + n < len && ((uint8_t)text[at + n] & 0xC0) == 0x80) n--;
+  return n;
+}
+
 // 버튼마다 고친 표시명('n')과 입력 글('t')의 NVS 키. NVS 키는 15자까지라 id 를 해시한다
 inline void pop_nvs_key(char *out, size_t size, char kind, const char *id) {
   uint32_t h = 2166136261u;

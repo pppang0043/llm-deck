@@ -80,5 +80,19 @@ int main() {
   assert(pop_drop_row(rows, 3, 30) == 1);
   assert(pop_drop_row(rows, 3, 44) == 2);
   assert(pop_drop_row(rows, 3, 300) == 2);
+
+  // 입력 글 조각: 한글(3바이트) 중간에서 자르지 않고, 이어 붙이면 원래 글이다
+  const char *ko = "a가나다라";  // 1 + 3 * 4 바이트
+  size_t len = strlen(ko);
+  assert(pop_text_part(ko, len, 0, 5) == 4);    // "a가"
+  assert(pop_text_part(ko, len, 4, 5) == 3);    // "나"
+  assert(pop_text_part(ko, len, 10, 60) == 3);  // 마지막 "라"
+  char joined[32] = "";
+  for (size_t at = 0, n; at < len; at += n) {
+    n = pop_text_part(ko, len, at, 4);
+    assert(n > 0);
+    strncat(joined, ko + at, n);
+  }
+  assert(strcmp(joined, ko) == 0);
   return 0;
 }

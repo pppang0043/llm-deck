@@ -10,6 +10,7 @@ def o(tmp_path, monkeypatch):
     monkeypatch.setattr(orca, "_custom_titles", lambda: {})
     monkeypatch.setattr(orca.time, "sleep", lambda s: None)
     monkeypatch.setattr(orca, "HIDDEN_FILE", tmp_path / "orca_hidden.json")
+    monkeypatch.setattr(typer, "mirror_in_front", lambda: False)  # 테스트 중 실제 앞 앱을 보지 않는다
     inst = orca.Orca({"enabled": False})  # 읽는 스레드는 띄우지 않는다
     inst.sent_cmds = []
     return inst
@@ -359,3 +360,41 @@ def test_pending_keeps_selection_when_pc_state_unavailable(o, monkeypatch):
     o.state = {"ok": True, "a": "a", "list": [{"id": "a"}]}
     monkeypatch.setattr(orca, "active_tab", lambda: None)
     assert o.pending()["a"] == "a"
+
+
+@pytest.mark.parametrize("mirror", [True, False])
+def test_send_from_mirror_shows_session(o, monkeypatch, mirror):
+    """미러링 창에서 누르면 글을 보낸 뒤 그 세션 탭으로 바꾸고 ORCA 를 띄운다. 기기를 직접 누르면 그대로 둔다."""
+    fake_session(o, {"s": "waiting"})
+    o.handles = {"abc": "term_abc"}
+    opened = []
+    monkeypatch.setattr(typer, "mirror_in_front", lambda: mirror)
+    monkeypatch.setattr(orca.sys, "platform", "darwin")
+    monkeypatch.setattr(orca.subprocess, "run", lambda args, **k: opened.append(args))
+    o.send_key("abc", "push")
+    switch = ("terminal", "switch", "--terminal", "term_abc")
+    assert o.sent_cmds[:2] == [("terminal", "send", "--terminal", "term_abc", "--text", typer.KEYWORDS["push"]),
+                               ("terminal", "send", "--terminal", "term_abc", "--enter")]
+    assert (o.sent_cmds[2:] == [switch]) is mirror
+    assert (opened == [["open", "-b", orca.BUNDLE_ID]]) is mirror
+    o.sent_cmds.clear()
+    o.reply("abc", "continue")
+    assert (switch in o.sent_cmds) is mirror
+
+
+def test_send_failure_does_not_show(o, monkeypatch):
+    o.handles = {"abc": "term_abc"}
+    o._run = lambda *a, **k: o.sent_cmds.append(a) and None
+    monkeypatch.setattr(typer, "mirror_in_front", lambda: True)
+    o.send_key("abc", "push")
+    assert not any(c[:2] == ("terminal", "switch") for c in o.sent_cmds)
+
+
+def test_cursor_dictation_keeps_focus(o, monkeypatch):
+    """커서 자리로 갈 받아쓰기가 남아 있으면 미러링 창에서 눌러도 ORCA 를 띄우지 않는다 (글이 ORCA 로 가지 않게)."""
+    fake_session(o, {"s": "waiting"})
+    o.handles = {"abc": "term_abc"}
+    monkeypatch.setattr(typer, "mirror_in_front", lambda: True)
+    o.keep_focus = lambda: True
+    o.send_key("abc", "push")
+    assert len(o.sent_cmds) == 2 and not any(c[:2] == ("terminal", "switch") for c in o.sent_cmds)

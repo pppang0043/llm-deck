@@ -3,7 +3,11 @@
   PC -> 기기: {"pop_sync": true} 저장된 것을 보내라, {"pop_set": [{"id", "name", "text"} | {"rows": "a,b;c;d"}]} 저장 (null 은 기본값으로),
              {"pop": [[{"id", "name", "s"}, ...], [...], [...]]} 지금 있는 버튼에 맞춰 합친 표. s: 글이 / 로 시작한다
   기기 -> PC: {"orca": "edit", "key": id} 수정 요청, {"orca": "saved_item", "id", "name"?, "text"?, "ack"?},
-             {"orca": "saved_row", "row", "ids": "a,b"}, {"orca": "saved_end"}. 위치 조정은 기기에서 저장한 뒤 알려 준다.
+             {"orca": "saved_row", "row", "ids": "a,b"}, {"orca": "saved_end", "n"?}. 위치 조정은 기기에서 저장한 뒤 알려 준다.
+             입력 글은 saved_item 의 "text" 로 오고, 이벤트가 200바이트를 넘으면 (블루투스 한도 약 210바이트)
+             조각 {"orca": "saved_text", "id", "t"} 로 먼저 오고 saved_item 의 "tl" 이 전체 바이트 수다.
+             연결할 때 읽기의 saved_end 에는 보낸 saved_item 수 "n" 이 있다.
+             길이나 수가 안 맞으면 (Wi-Fi 는 UDP 라 잃을 수 있다) 다시 읽는다.
              {"orca": "new", "after": id} 그 버튼 뒤에 새 버튼. 입력은 수정과 같은 창에서 하고, id 는 u1, u2... ("new": true 로 저장)
   수정은 기기에 키보드가 없어 미러 창에서 한다: 미러 창이 GET /edit 로 요청을 읽어 입력 창을 띄우고 POST /edit 로 답한다 (mirror.py).
 저장한 글은 터미널에 입력되므로 typer 의 키워드와 같은 규칙으로 거른다.
@@ -87,6 +91,8 @@ class PopButtons:
         self.incoming: dict = {"rows": [None] * ROWS, "names": {}, "texts": {}}
         self.outbox: list[dict] = []  # 보드에 저장할 것 {"pop_set"}
         self.custom: list[str] = []  # 새로 만든 버튼 (표시명과 글은 names, texts 에)
+        self.parts: dict[str, str] = {}  # 조각으로 받는 중인 입력 글
+        self.got, self.lost = 0, False  # 이번 읽기에서 받은 saved_item 수, 글 조각을 잃었다
 
     def _all(self) -> dict[str, tuple[str, str | None]]:
         """_base 와 새로 만든 버튼. 새 버튼은 기본값이 없어 표시명과 글을 늘 저장한다"""
@@ -136,7 +142,8 @@ class PopButtons:
                     return None
                 self.asked = time.monotonic()
                 self.incoming = {"rows": [None] * ROWS, "names": {}, "texts": {}}
-                self.custom = []
+                self.custom, self.parts = [], {}
+                self.got, self.lost = 0, False
                 return {"pop_sync": True}
             if self.outbox:
                 out, self.outbox = self.outbox, []
@@ -156,10 +163,30 @@ class PopButtons:
         """사용자가 고친 글. 없으면 None (그때는 기본 글)"""
         return self.texts.get(kid)
 
+    def on_saved_text(self, event: dict) -> None:
+        """입력 글 조각 {"id", "t"}. 뒤따르는 saved_item 이 이어 붙인 글을 쓴다"""
+        kid, part = event.get("id"), event.get("t")
+        with self.lock:
+            if not self.synced:
+                self.asked = time.monotonic()  # 보드가 답하는 중이다: 다시 묻지 않는다
+            if isinstance(kid, str) and isinstance(part, str):
+                self.parts[kid] = self.parts.get(kid, "") + part
+
     def on_saved_item(self, event: dict) -> bool:
-        """보드가 알려 준 버튼 하나 {"id", "name"?, "text"?, "ack"?}. 없는 칸은 기본값이다. 저장의 답이면 True."""
+        """보드가 알려 준 버튼 하나 {"id", "name"?, "tl"? 또는 "text"?, "ack"?}. 없는 칸은 기본값이다. 저장의 답이면 True."""
         with self.lock:
             kid, name, text = event.get("id"), event.get("name"), event.get("text")
+            if not self.synced:
+                self.asked = time.monotonic()
+                self.got += event.get("ack") is not True
+            if "tl" in event:
+                text = self.parts.pop(kid, "") if isinstance(kid, str) else ""
+                if len(text.encode()) != event["tl"]:  # 조각을 잃었다: 이 값을 쓰지 않고 다시 읽는다
+                    print(f"[orca] 보드에서 {kid} 의 입력 내용을 다 받지 못했습니다. 다시 읽습니다")
+                    if self.synced:
+                        self.synced, self.asked = False, 0.0
+                    self.lost = True
+                    return False
             if isinstance(kid, str) and CUSTOM_ID.fullmatch(kid) and not name_error(name) and not text_error(text):
                 if kid not in self.custom:
                     self.custom.append(kid)
@@ -182,12 +209,19 @@ class PopButtons:
     def on_saved_row(self, event: dict) -> None:
         row, ids = event.get("row"), event.get("ids")
         with self.lock:
+            if not self.synced:
+                self.asked = time.monotonic()
             if isinstance(row, int) and 0 <= row < ROWS and isinstance(ids, str):
                 self.incoming["rows"][row] = [kid for kid in ids.split(",") if kid]
 
-    def on_saved_end(self) -> None:
+    def on_saved_end(self, event: dict | None = None) -> None:
         """보드의 저장을 다 읽었다 (연결할 때, 또는 위치 조정을 끝냈을 때). 합친 표를 기기에 돌려준다."""
+        n = (event or {}).get("n")
         with self.lock:
+            if not self.synced and (self.lost or isinstance(n, int) and n != self.got):
+                # 일부를 잃었다. SYNC_RETRY_S 뒤 commands 가 다시 묻는다
+                print(f"[orca] 보드의 팝업 버튼 저장을 다 받지 못했습니다 ({self.got}/{n}). 다시 읽습니다")
+                return
             got = self.incoming["rows"]
             if any(r is not None for r in got):
                 self.rows = self._merge(got)

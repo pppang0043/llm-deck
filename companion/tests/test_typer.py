@@ -149,6 +149,13 @@ def test_mirror_window_in_front_returns_to_previous_app(monkeypatch):
     assert fake.opened == ["com.stablyai.orca"]
 
 
+@pytest.mark.parametrize("front, expected", [(typer.OWN_BUNDLE, True), ("com.stablyai.orca", False)])
+def test_mirror_in_front_mac(monkeypatch, front, expected):
+    monkeypatch.setattr(typer.sys, "platform", "darwin")
+    monkeypatch.setattr(typer.subprocess, "run", _FakeLsappinfo([front, "com.apple.finder"]))
+    assert typer.mirror_in_front() is expected
+
+
 def test_other_app_in_front_is_left_alone(monkeypatch):
     fake = _FakeLsappinfo(["com.stablyai.orca", typer.OWN_BUNDLE])
     monkeypatch.setattr(typer.subprocess, "run", fake)

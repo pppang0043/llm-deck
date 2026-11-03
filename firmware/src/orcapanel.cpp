@@ -421,7 +421,8 @@ void orcapanel_refresh() {
   if (pop_open && pop_dictate) {
     bool mine = askpanel_dictate_target()[0] == '\0';  // 세션에 넣는 받아쓰기가 아니다
     int step = askpanel_dictate_step();
-    lv_label_set_text(lv_obj_get_child(pop_dictate, 0), !mine || step == DICTATE_IDLE ? "녹음"
+    const PopItem *item = (const PopItem *)lv_obj_get_user_data(pop_dictate);  // 고친 표시명
+    lv_label_set_text(lv_obj_get_child(pop_dictate, 0), !mine || step == DICTATE_IDLE ? item->name
                                                         : !askpanel_dictating()     ? "넣는 중..."
                                                         : step == DICTATE_PREPARING ? "준비 중..."
                                                                                     : "입력");
@@ -914,7 +915,10 @@ void orcapanel_set_pop(JsonArrayConst rows) {
 
 // 사용자가 고친 표시명, 입력 글, 위치의 원본은 보드다 (NVS "orca_pop"): 어느 PC 에 꽂아도 같다.
 // PC 는 연결할 때 {"pop_sync"} 로 읽어 가서 그 글을 입력하고, 합친 표를 {"pop"} 로 돌려준다 (companion/popbuttons.py)
-static void send_saved_item(const char *id, bool ack) {
+// 입력 글은 saved_item 의 "text" 로 한 번에 보낸다. 블루투스는 이벤트 하나가 약 210바이트라 그보다 길면
+// 조각 {"orca":"saved_text","id","t"} 로 먼저 보내고 saved_item 에 전체 바이트 수 "tl" 을 적는다 (PC 는 길이가 다르면 다시 읽는다).
+// 짧은 글을 예전처럼 보내야 조각을 모르는 도우미도 그 글을 입력한다. 보냈으면 true
+static bool send_saved_item(const char *id, bool ack) {
   String name, text;
   char key[16];
   Preferences prefs;
@@ -925,7 +929,7 @@ static void send_saved_item(const char *id, bool ack) {
     if (prefs.isKey(key)) text = prefs.getString(key);
     prefs.end();
   }
-  if (!ack && name.isEmpty() && text.isEmpty()) return;
+  if (!ack && name.isEmpty() && text.isEmpty()) return false;
   JsonDocument doc(PSRAM_JSON);
   doc["orca"] = "saved_item";
   doc["id"] = id;
@@ -934,10 +938,30 @@ static void send_saved_item(const char *id, bool ack) {
   if (ack) doc["ack"] = true;
   String json;
   serializeJson(doc, json);
+  if (json.length() <= POP_EVENT_MAX) {
+    link_send_event(json.c_str());
+    return true;
+  }
+  doc.remove("text");
+  doc["tl"] = text.length();
+  for (size_t at = 0, n; at < text.length(); at += n) {
+    n = pop_text_part(text.c_str(), text.length(), at, POP_TEXT_PART);
+    JsonDocument part(PSRAM_JSON);
+    part["orca"] = "saved_text";
+    part["id"] = id;
+    part["t"] = text.substring(at, at + n);
+    json = "";
+    serializeJson(part, json);
+    link_send_event(json.c_str());
+  }
+  json = "";
+  serializeJson(doc, json);
   link_send_event(json.c_str());
+  return true;
 }
 
-static void send_saved_layout() {
+// items: 연결할 때 읽기라면 보낸 saved_item 수 ("n"). PC 는 받은 수와 다르면 다시 읽는다 (Wi-Fi 는 UDP 라 잃을 수 있다)
+static void send_saved_layout(int items = -1) {
   char layout[POP_LAYOUT_MAX] = "";
   Preferences prefs;
   if (prefs.begin("orca_pop", true)) {
@@ -954,7 +978,9 @@ static void send_saved_layout() {
     if (!end) break;
     rest = end + 1;
   }
-  link_send_event("{\"orca\":\"saved_end\"}");
+  char end[48] = "{\"orca\":\"saved_end\"}";
+  if (items >= 0) snprintf(end, sizeof(end), "{\"orca\":\"saved_end\",\"n\":%d}", items);
+  link_send_event(end);
 }
 
 void orcapanel_send_saved() {
@@ -965,9 +991,9 @@ void orcapanel_send_saved() {
     default_pop(&fallback);
     t = &fallback;
   }
-  int n = 0;
+  int n = 0, sent = 0;
   for (uint8_t r : t->rows) n += r;
-  for (int i = 0; i < n; i++) send_saved_item(t->item[i].id, false);
+  for (int i = 0; i < n; i++) sent += send_saved_item(t->item[i].id, false);
   // 새로 만든 버튼: 아직 표에 없을 수 있어 따로 적어 둔 것도 보낸다 (PC 는 이 글을 보고 버튼이 있는 줄 안다)
   char custom[POP_LAYOUT_MAX] = "";
   Preferences prefs;
@@ -975,8 +1001,8 @@ void orcapanel_send_saved() {
     if (prefs.isKey("custom")) prefs.getString("custom", custom, sizeof(custom));
     prefs.end();
   }
-  for (char *id = strtok(custom, ","); id; id = strtok(nullptr, ",")) send_saved_item(id, false);
-  send_saved_layout();
+  for (char *id = strtok(custom, ","); id; id = strtok(nullptr, ",")) sent += send_saved_item(id, false);
+  send_saved_layout(sent);
 }
 
 // PC 미러 창에서 고친 것 [{"id", "name", "text"}] (null 이면 기본값으로) 이나 {"rows": 위치 글} 을 저장하고 저장한 것을 돌려준다

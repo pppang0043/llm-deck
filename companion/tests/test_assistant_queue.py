@@ -193,3 +193,17 @@ def test_pending_survives_receiver_clearing_sent(monkeypatch):
     Racing.reads = 0
     a.sent_at = time.monotonic()
     a.pending()
+
+
+def test_cursor_dictation_pending(a):
+    """세션을 고르지 않은 받아쓰기가 녹음 중·대기·처리 중이면 True (그동안 ORCA 를 앞으로 띄우지 않는다)."""
+    assert not a.cursor_dictation_pending()
+    a.take = assistant._Take(True, False, True)  # ORCA 세션으로 가는 받아쓰기
+    assert not a.cursor_dictation_pending()
+    a.take = assistant._Take(False)  # 질문
+    assert not a.cursor_dictation_pending()
+    a.take = assistant._Take(True)
+    assert a.cursor_dictation_pending()
+    a.take = None
+    a.working = assistant._Take(True)
+    assert a.cursor_dictation_pending()

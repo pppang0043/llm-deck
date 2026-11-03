@@ -485,6 +485,7 @@ class DeviceLoop:
         # ORCA 세션 상태 (10초마다), 기기에서 고른 세션에 받아쓰기
         self.sessions = orca.Orca(cfg.get("orca", {}))
         self.ask.orca = self.sessions
+        self.sessions.keep_focus = self.ask.cursor_dictation_pending
         # 기기 펌웨어와 버전이 맞는지 (기기가 {"fw_proto"} 로 알려 준다)
         self.peer = version.Peer()
         print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
@@ -515,7 +516,7 @@ class DeviceLoop:
             print("[device] 다른 PC 가 기기를 사용 중이라 제어 명령을 거절했습니다.")
         # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
         for handler in (self.speaker, self.receiver, self.movies, self.apps, self.keys, self.pc, self.ask,
-                        self.sessions, self.peer, self.crash):
+                        self.sessions, self.peer, self.crash, self.view):
             try:
                 handler.on_event(event)
             except Exception:

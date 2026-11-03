@@ -1,23 +1,23 @@
 // LLM Deck.app 의 실행 파일. install.sh 가 swiftc 로 컴파일한다.
 // 블루투스·마이크 권한은 "앱" 단위로만 받을 수 있어서, 파이썬 도우미(main.py)를 이 앱의 자식 프로세스로 띄워 둔다.
-// 메뉴 막대 아이콘에서 기기별 미러링 창을 연다 (S3 미러링, S31 미러링). 앱이 이미 떠 있을 때 한 번 더 열어도 (Finder, Spotlight, `uv run main.py --mirror`) S3 창만 연다.
-// 미러링 창은 기기마다 따로 도우미가 띄운 http://127.0.0.1:4013/ (S3), :4015/ (S31) (mirror.py) 에서 화면을 받아 오고 누르기를 보낸다. 서버 쪽 규칙은 mirror.py 의 PAGE 와 같다.
-// 창이 열려 있는 동안(화면을 받아 가는 동안)만 기기가 화면을 보낸다. 도우미(파이썬 자식 프로세스)는 S3 것만 이 앱이 띄운다. pppang31 은 launchd 서비스라 건드리지 않는다.
+// 미러링 창은 하나고 그 안에 기기 칸을 하나만 보인다. 제목 줄의 전환 단추(S31, S3)나 메뉴 막대 아이콘(S31 미러링, S3 미러링)으로 기기를 바꾼다. 앱을 다시 열면 지금 칸을 앞으로 가져오고, 창이 닫혀 있으면 S31 을 먼저 연다 (S31 이 연결되어 있지 않으면 S3).
+// 칸은 기기마다 따로 도우미가 띄운 http://127.0.0.1:4013/ (S3), :4015/ (S31) (mirror.py) 에서 화면을 받아 오고 누르기를 보낸다. 서버 쪽 규칙은 mirror.py 의 PAGE 와 같다.
+// 칸이 열려 있는 동안(화면을 받아 가는 동안)만 기기가 화면을 보낸다. 도우미(파이썬 자식 프로세스)는 S3 것만 이 앱이 띄운다. pppang31 은 launchd 서비스라 건드리지 않는다.
 import AppKit
 
-// 미러링 창을 여는 기기. 도우미(미러 서버)마다 포트가 다르다 (mirror.py 의 [mirror] port)
+// 미러링 창의 칸 하나가 보여 주는 기기. 도우미(미러 서버)마다 포트가 다르다 (mirror.py 의 [mirror] port)
 struct Device {
   let name: String
   let base: URL
-  let suffix: String  // 저장 설정(UserDefaults) 키 뒤에 붙인다. S3 는 예전 키를 그대로 써서 쓰던 설정이 남는다
   let width: Int  // 첫 장이 오기 전에 잡는 화면 크기
   let height: Int
-  let right: Double  // 처음 창 위치: 메인 화면 오른쪽 아래 모서리에서 떨어진 거리
-  let bottom: Double
+  let inches: Double  // 실물 화면의 대각선
 
-  static let s3 = Device(name: "S3", base: URL(string: "http://127.0.0.1:4013/")!, suffix: "", width: 320, height: 240, right: 12, bottom: 12)
-  // S3 창(오른쪽 아래, 320 폭)의 왼쪽 옆에 둔다
-  static let s31 = Device(name: "S31", base: URL(string: "http://127.0.0.1:4015/")!, suffix: "s31", width: 480, height: 480, right: 12 + 320 + 12, bottom: 12)
+  static let s3 = Device(name: "S3", base: URL(string: "http://127.0.0.1:4013/")!, width: 320, height: 240, inches: 2)
+  static let s31 = Device(name: "S31", base: URL(string: "http://127.0.0.1:4015/")!, width: 480, height: 480, inches: 2.16)
+
+  // 기기 화면 한 점이 창에서 차지하는 크기. 칸이 픽셀 수가 아니라 실물 크기 비율을 따른다 (배율 1 에서 1인치 = 200pt, S3 는 320x240 그대로)
+  var pointsPerPixel: Double { 200 * inches / hypot(Double(width), Double(height)) }
 }
 
 let LOG = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".llm-deck/companion.log")
@@ -100,6 +100,18 @@ final class ScreenView: NSView {
     layer.contents = image
   }
   override var acceptsFirstResponder: Bool { true }
+
+  // 키보드(화살표, Esc)는 마지막에 누른 칸의 기기로 간다
+  override func becomeFirstResponder() -> Bool {
+    app?.focused(true)
+    return true
+  }
+
+  override func resignFirstResponder() -> Bool {
+    app?.focused(false)
+    return true
+  }
+
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
   // 안내 글은 칸 가운데에 (빈 글이면 숨긴다)
@@ -299,116 +311,68 @@ final class EditPanel: NSObject, NSWindowDelegate {
   }
 }
 
+// 미러링 창의 기기 칸. 기기마다 하나씩 만든다. 세션, 화면 받기, 보내기가 서로 섞이지 않는다
 @MainActor
-final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
-  // 기기마다 하나씩 만든다. 세션, 화면 받기, 보내기, 저장 설정이 서로 섞이지 않는다
+final class Mirror: NSObject, NSMenuItemValidation {
   let device: Device
-  let defaults = UserDefaults.standard
   let session: URLSession
   let editor: EditPanel
-  var window: NSWindow?
   let view: ScreenView
+  let caption: NSTextField
+  weak var shell: MirrorWindow?
   // 첫 장이 오기 전에는 기기의 기본 크기로 둔다
   var w: Int, h: Int, seq = 0
   var got = false
+  // 기기의 나눠 쓰기 (도우미의 X-Split). nil 이면 모르거나 없는 기기라 합치기 단추를 숨긴다 (S31 은 늘 같은 화면)
+  var split: Bool?
   var sending: Task<Void, Never>?
   var polling: Task<Void, Never>?
   var editPolling: Task<Void, Never>?
-  // 창이 열려 있는 동안은 다른 앱을 쓰고 있어도(항상 위) macOS 가 이 앱을 쉬게 하거나(App Nap) 화면 받기를 늦추지 않게 한다
+  // 칸이 열려 있는 동안은 다른 앱을 쓰고 있어도(항상 위) macOS 가 이 앱을 쉬게 하거나(App Nap) 화면 받기를 늦추지 않게 한다
   var awake: NSObjectProtocol?
 
   init(_ device: Device) {
     self.device = device
     (w, h) = (device.width, device.height)
     view = ScreenView(frame: NSRect(x: 0, y: 0, width: device.width, height: device.height))
+    caption = NSTextField(labelWithString: device.name)
+    caption.alignment = .center
+    caption.font = .boldSystemFont(ofSize: 12)
+    caption.textColor = .secondaryLabelColor
     let config = URLSessionConfiguration.ephemeral
     config.requestCachePolicy = .reloadIgnoringLocalCacheData
     config.timeoutIntervalForRequest = 10  // 서버는 1.5초 안에 답한다
     session = URLSession(configuration: config)
     editor = EditPanel(session: session, device: device)
     super.init()
-    // 예전 미러링 앱(LLM Deck Mirror.app)에 저장해 둔 배율·항상 위를 한 번 옮겨 온다 (S3 만 쓰던 앱이다)
-    if device.suffix.isEmpty, defaults.object(forKey: "zoom") == nil, let old = UserDefaults(suiteName: "com.llmdeck.mirror") {
-      for key in ["zoom", "onTop"] {
-        if let v = old.object(forKey: key) { defaults.set(v, forKey: key) }
-      }
-    }
-    defaults.register(defaults: [key("onTop"): true, key("zoom"): 1, key("mirrorRight"): device.right, key("mirrorBottom"): device.bottom])
-  }
-
-  // 저장 설정 키. S3 는 예전 이름 그대로, 다른 기기는 뒤에 기기 이름을 붙인다
-  func key(_ name: String) -> String { device.suffix.isEmpty ? name : "\(name).\(device.suffix)" }
-
-  // 배율. 메뉴의 1·2·3배, 또는 창 가장자리를 끌어 맞춘 크기 (0.5~4배). 화면보다 크면 fit() 이 줄여서 보여 준다
-  var zoom: Double { min(max(defaults.double(forKey: key("zoom")), 0.5), 4) }
-  var onTop: Bool { defaults.bool(forKey: key("onTop")) }
-
-  // 창을 연다 (열려 있으면 앞으로). 창이 떠 있는 동안만 Dock 아이콘과 메뉴 막대 메뉴를 보인다
-  @objc func open() {
-    let window = self.window ?? makeWindow()
-    NSApp.setActivationPolicy(.regular)
-    NSApp.mainMenu = makeMainMenu()
-    fit()
-    applyOnTop()
-    window.makeKeyAndOrderFront(nil)
-    window.makeFirstResponder(view)
-    if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
-    if polling == nil {
-      awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "기기 화면 미러링")
-      polling = Task { await poll() }
-      editPolling = Task { await pollEdit() }
-    }
-  }
-
-  func makeWindow() -> NSWindow {
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: device.width, height: device.height), styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                          backing: .buffered, defer: false)
-    window.title = "\(device.name) 미러링"
-    window.isReleasedWhenClosed = false
-    window.contentView = view
-    window.delegate = self
     view.app = self
-    place(window)
-    self.window = window
-    return window
   }
 
-  // 메인 화면(메뉴 막대가 있는 화면)의 Dock·메뉴 막대를 뺀 영역. 모니터를 붙였다 떼도 이것을 기준으로 위치를 잡는다
-  var mainArea: NSRect? { NSScreen.screens.first?.visibleFrame }
+  var isOpen: Bool { polling != nil }
 
-  // 지난번 닫은 위치에 창을 둔다 (창 오른쪽 아래 모서리 기준). 그 모니터가 지금 없으면 메인 화면 오른쪽 아래에서
-  // 지난번만큼 떨어진 곳에 둔다 (처음에는 12pt). 화면 밖으로는 안 나가게
-  func place(_ window: NSWindow) {
-    let size = window.frame.size
-    var corner: NSPoint
-    var area: NSRect
-    let last = defaults.string(forKey: key("mirrorFrame")).map(NSRectFromString)
-    if let last, let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(NSPoint(x: last.midX, y: last.midY)) }) {
-      corner = NSPoint(x: last.maxX, y: last.minY)
-      area = screen.visibleFrame
-    } else if let main = mainArea {
-      corner = NSPoint(x: main.maxX - defaults.double(forKey: key("mirrorRight")), y: main.minY + defaults.double(forKey: key("mirrorBottom")))
-      area = main
-    } else { return }
-    var origin = NSPoint(x: corner.x - size.width, y: corner.y)
-    origin.x = min(max(origin.x, area.minX), area.maxX - size.width)
-    origin.y = min(max(origin.y, area.minY), area.maxY - size.height)
-    window.setFrameOrigin(origin)
+  // 이 기기 칸으로 바꾼다 (창이 닫혀 있으면 창도). 메뉴 막대, 도우미의 자동 열기, 다시 열기가 부른다
+  @objc func open() { shell?.show(self) }
+
+  // 메뉴 막대: 다른 기기를 고르면 그 칸으로 바꾸고, 지금 칸을 고르면 창을 닫는다. 닫힌 칸의 기기는 화면을 보내지 않는다
+  @objc func toggle() {
+    if isOpen { shell?.hide(self) } else { shell?.show(self) }
   }
 
-  // 창을 옮기면 위치를 기억한다 (닫을 때나 앱이 꺼질 때의 위치가 남는다). 메인 화면에 있으면 메인 화면 기준 위치도 기억한다
-  func windowDidMove(_ note: Notification) {
-    guard let window else { return }
-    let frame = window.frame
-    defaults.set(NSStringFromRect(frame), forKey: key("mirrorFrame"))
-    if let main = mainArea, main.contains(NSPoint(x: frame.midX, y: frame.midY)) {
-      defaults.set(main.maxX - frame.maxX, forKey: key("mirrorRight"))
-      defaults.set(frame.minY - main.minY, forKey: key("mirrorBottom"))
-    }
+  // 도우미가 기기와 연결되어 있는지 묻는다 (화면을 받아 볼 수 있는 상태)
+  func linked() async -> Bool {
+    guard let (_, res) = try? await session.data(from: URL(string: "frame?after=\(seq)", relativeTo: device.base)!) else { return false }
+    return [200, 204].contains((res as? HTTPURLResponse)?.statusCode)
   }
 
-  // 창을 닫으면 화면 받기를 멈춘다 (도우미가 기기에 미러링을 그만 보내게). 도우미는 계속 돈다
-  func windowWillClose(_ note: Notification) {
+  func start() {
+    guard polling == nil else { return }
+    awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "기기 화면 미러링")
+    polling = Task { await poll() }
+    editPolling = Task { await pollEdit() }
+  }
+
+  // 화면 받기를 멈춘다 (도우미가 기기에 미러링을 그만 보내게). 도우미는 계속 돈다
+  func stop() {
     polling?.cancel()
     polling = nil
     editPolling?.cancel()
@@ -416,52 +380,14 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
     editor.cancel()
     if let awake { ProcessInfo.processInfo.endActivity(awake) }
     awake = nil
-    // 다른 기기의 창이 남아 있으면 Dock 아이콘과 메뉴를 그대로 둔다
-    let closing = note.object as? NSWindow
-    let others = NSApp.windows.contains { $0 !== closing && $0.delegate is Mirror && ($0.isVisible || $0.isMiniaturized) }
-    if !others { NSApp.setActivationPolicy(.accessory) }
   }
 
-  // 창이 둘이면 메뉴 막대의 메뉴가 앞에 있는 창의 기기를 따라가게 한다
-  func windowDidBecomeKey(_ note: Notification) {
-    NSApp.mainMenu = makeMainMenu()
-  }
+  // 배율 1 일 때 칸의 크기
+  var size: NSSize { NSSize(width: Double(w) * device.pointsPerPixel, height: Double(h) * device.pointsPerPixel) }
 
-  // 창 가장자리를 끌어 크기를 바꾸면 그 배율을 기억한다
-  func windowDidEndLiveResize(_ note: Notification) {
-    guard let window else { return }
-    defaults.set(window.contentRect(forFrameRect: window.frame).width / CGFloat(w), forKey: key("zoom"))
-    fit()
-  }
-
-  // 창 내용 크기를 기기 화면 × 배율로 맞춘다 (창 오른쪽 아래 모서리는 그대로, 화면 밖으로는 안 나가게)
-  func fit() {
-    guard let window, !window.inLiveResize else { return }  // 끄는 동안 새 장이 와도 되돌리지 않는다
-    // 배율은 창(제목 줄 포함)이 화면에 들어오는 만큼까지만 (S31 은 480x480 이라 3배는 화면보다 크다). 저장한 배율은 그대로 둔다
-    let area = (window.screen ?? NSScreen.main)?.visibleFrame
-    let chrome = window.frameRect(forContentRect: .zero).size
-    var limit = 4.0
-    if let area { limit = min(limit, (area.width - chrome.width) / Double(w), (area.height - chrome.height) / Double(h)) }
-    limit = max(limit, 0.5)
-    // 끌어서 크기를 바꿀 때도 기기 화면 비율을 지킨다
-    window.contentAspectRatio = NSSize(width: w, height: h)
-    window.contentMinSize = NSSize(width: Double(w) * 0.5, height: Double(h) * 0.5)
-    window.contentMaxSize = NSSize(width: Double(w) * limit, height: Double(h) * limit)
-    let scale = min(zoom, limit)
-    let size = NSSize(width: (Double(w) * scale).rounded(), height: (Double(h) * scale).rounded())
-    let now = window.frame
-    if window.contentRect(forFrameRect: now).size == size { return }
-    var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
-    frame.origin = NSPoint(x: now.maxX - frame.width, y: now.minY)
-    if let area {
-      frame.origin.x = max(area.minX, frame.origin.x)
-      frame.origin.y = min(frame.origin.y, area.maxY - frame.height)
-    }
-    window.setFrame(frame, display: true)
-  }
-
-  func applyOnTop() {
-    window?.level = onTop ? .floating : .normal
+  func focused(_ on: Bool) {
+    caption.textColor = on ? .labelColor : .secondaryLabelColor
+    if on { shell?.focus = self }
   }
 
   // 새 장을 계속 받아 간다. 이 요청이 이어지는 동안만 도우미가 기기에 화면을 보내 달라고 한다
@@ -472,6 +398,11 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
       do {
         let (data, res) = try await session.data(for: req)
         let r = res as! HTTPURLResponse
+        let s = [200, 204].contains(r.statusCode) ? r.value(forHTTPHeaderField: "X-Split").map { $0 == "1" } : nil
+        if s != split {
+          split = s
+          if isOpen { shell?.syncSplit() }
+        }
         if r.statusCode == 200 {
           let fw = Int(r.value(forHTTPHeaderField: "X-Width") ?? "") ?? 0
           let fh = Int(r.value(forHTTPHeaderField: "X-Height") ?? "") ?? 0
@@ -479,7 +410,7 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
           if fw > 0 && fh > 0, let image = unpack(data, fw, fh) {
             (w, h, got) = (fw, fh, true)
             view.image = image
-            fit()
+            shell?.fit()
             view.say(nil)
           }
         } else if r.statusCode == 503 {
@@ -535,40 +466,282 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
   @objc func home() { post("home", [:]) }
 
+  // 합치기: 기기 LCD 와 미러링 창을 같은 화면으로. 분리: 기기 LCD 에는 사용량을 따로 (기기의 구독제 화면 단추와 같다)
+  func toggleSplit() {
+    guard let split else { return }
+    post("split", ["on": !split])
+  }
+
+  // 눌린 칸의 오른쪽 메뉴
+  func makeMenu() -> NSMenu { shell?.makeMenu(for: self) ?? NSMenu() }
+
+  // 메뉴를 열 때마다 체크 표시를 지금 상태에 맞춘다
+  func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    // 수정 창이 떠 있으면 Esc 는 그 창의 취소다 (어느 기기도 홈으로 가지 않게)
+    if item.action == #selector(home) { return shell?.editing != true }
+    if item.action == #selector(toggle) { item.state = isOpen ? .on : .off }
+    return true
+  }
+}
+
+// 기기 칸을 하나씩 보여 주는 미러링 창. 위치, 배율, 항상 위는 창 전체에 하나씩 둔다 (S3 만 쓰던 때의 저장 키를 그대로 쓴다)
+@MainActor
+final class MirrorWindow: NSObject, NSWindowDelegate, NSMenuItemValidation {
+  static let captionHeight = 22.0
+  static let minWidth = 160.0  // 제목 줄의 창 단추와 전환 단추가 들어가는 폭 (합치기 단추가 보이면 그만큼 더)
+  let panes: [Mirror]
+  let defaults = UserDefaults.standard
+  var window: NSWindow?
+  lazy var switcher = NSSegmentedControl(labels: panes.map(\.device.name), trackingMode: .selectOne, target: self, action: #selector(switchPanes(_:)))
+  lazy var splitButton: NSButton = {
+    let b = NSButton(title: "합치기", target: self, action: #selector(toggleSplit))
+    b.controlSize = .small
+    b.bezelStyle = .rounded
+    b.isHidden = true
+    return b
+  }()
+  // 제목 줄 오른쪽: [합치기] [S31 | S3]
+  lazy var bar = NSStackView(views: [splitButton, switcher])
+  var focus: Mirror? { didSet { if focus !== oldValue { NSApp.mainMenu = makeMainMenu() } } }
+
+  init(_ panes: [Mirror]) {
+    self.panes = panes
+    // 예전 미러링 앱(LLM Deck Mirror.app)에 저장해 둔 배율·항상 위를 한 번 옮겨 온다
+    if defaults.object(forKey: "zoom") == nil, let old = UserDefaults(suiteName: "com.llmdeck.mirror") {
+      for key in ["zoom", "onTop"] {
+        if let v = old.object(forKey: key) { defaults.set(v, forKey: key) }
+      }
+    }
+    defaults.register(defaults: ["onTop": true, "zoom": 1, "mirrorRight": 12, "mirrorBottom": 12])
+    super.init()
+    for pane in panes { pane.shell = self }
+  }
+
+  // 배율. 메뉴의 1·2·3배, 또는 창 가장자리를 끌어 맞춘 크기 (0.5~4배). 화면보다 크면 fit() 이 줄여서 보여 준다
+  var zoom: Double { min(max(defaults.double(forKey: "zoom"), 0.5), 4) }
+  var onTop: Bool { defaults.bool(forKey: "onTop") }
+  var open: [Mirror] { panes.filter(\.isOpen) }
+  var editing: Bool { panes.contains { $0.editor.panel.isVisible } }
+
+  // 이 칸으로 바꾼다 (다른 칸은 닫는다. 이미 이 칸이면 창을 앞으로). 창이 떠 있는 동안만 Dock 아이콘과 메뉴 막대 메뉴를 보인다
+  func show(_ pane: Mirror) {
+    let window = self.window ?? makeWindow()
+    guard let content = window.contentView else { return }
+    for other in open where other !== pane { remove(other) }
+    pane.start()
+    if pane.view.superview == nil {
+      content.addSubview(pane.caption)
+      content.addSubview(pane.view)
+    }
+    NSApp.setActivationPolicy(.regular)
+    NSApp.mainMenu = makeMainMenu()
+    syncSwitcher()
+    syncSplit()
+    applyOnTop()
+    window.makeKeyAndOrderFront(nil)
+    window.makeFirstResponder(pane.view)
+    if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
+  }
+
+  // 보이는 칸은 하나뿐이라 칸을 닫으면 창을 닫는다 (windowWillClose 가 칸을 정리한다)
+  func hide(_ pane: Mirror) {
+    if pane.isOpen { window?.performClose(nil) }
+  }
+
+  // 전환 단추: 고른 기기로 바꾼다. 다른 기기는 화면을 보내지 않는다
+  @objc func switchPanes(_ control: NSSegmentedControl) {
+    show(panes[control.selectedSegment])
+  }
+
+  func syncSwitcher() {
+    switcher.selectedSegment = panes.firstIndex { $0.isOpen } ?? -1
+  }
+
+  // 합치기 단추: 지금 칸의 기기가 나눠 쓰기를 알려 줄 때만 보인다. 나눠 쓰는 중이면 "합치기", 같은 화면이면 "분리"
+  func syncSplit() {
+    let split = open.first?.split
+    splitButton.isHidden = split == nil
+    splitButton.title = split == false ? "분리" : "합치기"
+    splitButton.toolTip = split == false ? "기기 화면에는 사용량을 따로 보여 줍니다" : "기기 화면과 미러링 창을 같은 화면으로 합칩니다"
+    bar.setFrameSize(bar.fittingSize)
+    fit()
+  }
+
+  @objc func toggleSplit() { open.first?.toggleSplit() }
+
+  var minWidth: Double { MirrorWindow.minWidth + (splitButton.isHidden ? 0 : splitButton.fittingSize.width + bar.spacing) }
+
+  func remove(_ pane: Mirror) {
+    pane.stop()
+    pane.view.removeFromSuperview()
+    pane.caption.removeFromSuperview()
+    pane.focused(false)
+    if focus === pane { focus = nil }
+  }
+
+  func makeWindow() -> NSWindow {
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                          backing: .buffered, defer: false)
+    window.title = "LLM Deck 미러링"
+    window.titleVisibility = .hidden  // 좁은 창에서 글자가 전환 단추와 겹치지 않게. 기기 이름은 칸 위에 있다
+    window.isReleasedWhenClosed = false
+    window.backgroundColor = NSColor(red: 0.04, green: 0.05, blue: 0.07, alpha: 1)
+    window.delegate = self
+    switcher.controlSize = .small
+    switcher.sizeToFit()
+    bar.spacing = 6
+    bar.setFrameSize(bar.fittingSize)
+    let accessory = NSTitlebarAccessoryViewController()
+    accessory.view = bar
+    accessory.layoutAttribute = .trailing
+    window.addTitlebarAccessoryViewController(accessory)
+    place(window)
+    self.window = window
+    return window
+  }
+
+  // 메인 화면(메뉴 막대가 있는 화면)의 Dock·메뉴 막대를 뺀 영역. 모니터를 붙였다 떼도 이것을 기준으로 위치를 잡는다
+  var mainArea: NSRect? { NSScreen.screens.first?.visibleFrame }
+
+  // 지난번 닫은 위치에 창을 둔다 (창 오른쪽 아래 모서리 기준). 그 모니터가 지금 없으면 메인 화면 오른쪽 아래에서
+  // 지난번만큼 떨어진 곳에 둔다 (처음에는 12pt). 화면 밖으로는 안 나가게
+  func place(_ window: NSWindow) {
+    let size = window.frame.size
+    var corner: NSPoint
+    var area: NSRect
+    let last = defaults.string(forKey: "mirrorFrame").map(NSRectFromString)
+    if let last, let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(NSPoint(x: last.midX, y: last.midY)) }) {
+      corner = NSPoint(x: last.maxX, y: last.minY)
+      area = screen.visibleFrame
+    } else if let main = mainArea {
+      corner = NSPoint(x: main.maxX - defaults.double(forKey: "mirrorRight"), y: main.minY + defaults.double(forKey: "mirrorBottom"))
+      area = main
+    } else { return }
+    var origin = NSPoint(x: corner.x - size.width, y: corner.y)
+    origin.x = min(max(origin.x, area.minX), area.maxX - size.width)
+    origin.y = min(max(origin.y, area.minY), area.maxY - size.height)
+    window.setFrameOrigin(origin)
+  }
+
+  // 창을 옮기면 위치를 기억한다 (닫을 때나 앱이 꺼질 때의 위치가 남는다). 메인 화면에 있으면 메인 화면 기준 위치도 기억한다
+  func windowDidMove(_ note: Notification) {
+    guard let window else { return }
+    let frame = window.frame
+    defaults.set(NSStringFromRect(frame), forKey: "mirrorFrame")
+    if let main = mainArea, main.contains(NSPoint(x: frame.midX, y: frame.midY)) {
+      defaults.set(main.maxX - frame.maxX, forKey: "mirrorRight")
+      defaults.set(frame.minY - main.minY, forKey: "mirrorBottom")
+    }
+  }
+
+  // 창을 닫으면 모든 칸의 화면 받기를 멈춘다. 도우미는 계속 돈다
+  func windowWillClose(_ note: Notification) {
+    for pane in open { remove(pane) }
+    NSApp.setActivationPolicy(.accessory)
+  }
+
+  // 배율 1 일 때 칸의 크기
+  var natural: NSSize { open.first?.size ?? .zero }
+
+  // 배율에 맞는 창 내용 크기
+  func contentSize(_ scale: Double) -> NSSize {
+    NSSize(width: (natural.width * scale).rounded(), height: (natural.height * scale + MirrorWindow.captionHeight).rounded())
+  }
+
+  // 지금 창 내용 크기에 들어가는 가장 큰 배율
+  func scale(in size: NSSize) -> Double {
+    guard natural.width > 0, natural.height > 0 else { return 1 }
+    return min(size.width / natural.width, (size.height - MirrorWindow.captionHeight) / natural.height)
+  }
+
+  // 칸을 창 가운데 놓는다. 창 내용의 좌표는 아래에서 위로 잰다
+  func layoutPanes() {
+    guard let content = window?.contentView, let pane = open.first else { return }
+    let size = contentSize(scale(in: content.bounds.size))
+    let width = size.width, height = size.height - MirrorWindow.captionHeight
+    let x = ((content.bounds.width - width) / 2).rounded()
+    let top = content.bounds.height - MirrorWindow.captionHeight
+    pane.caption.frame = NSRect(x: x, y: top + 2, width: width, height: MirrorWindow.captionHeight - 4)
+    pane.view.frame = NSRect(x: x, y: top - height, width: width, height: height)
+  }
+
+  func windowDidResize(_ note: Notification) { layoutPanes() }
+
+  // 창 가장자리를 끌어 크기를 바꾸면 그 배율을 기억한다
+  func windowDidEndLiveResize(_ note: Notification) {
+    guard let window else { return }
+    defaults.set(scale(in: window.contentRect(forFrameRect: window.frame).size), forKey: "zoom")
+    fit()
+  }
+
+  // 창 내용 크기를 칸의 크기 × 배율로 맞춘다 (창 오른쪽 아래 모서리는 그대로, 화면 밖으로는 안 나가게)
+  func fit() {
+    guard let window, !window.inLiveResize else { return }  // 끄는 동안 새 장이 와도 되돌리지 않는다
+    // 배율은 창(제목 줄 포함)이 화면에 들어오는 만큼까지만. 저장한 배율은 그대로 둔다
+    let area = (window.screen ?? NSScreen.main)?.visibleFrame
+    let chrome = window.frameRect(forContentRect: .zero).size
+    var limit = 4.0
+    if let area { limit = min(limit, scale(in: NSSize(width: area.width - chrome.width, height: area.height - chrome.height))) }
+    limit = max(limit, 0.5)
+    func wide(_ size: NSSize) -> NSSize { NSSize(width: max(size.width, minWidth), height: size.height) }
+    window.contentMinSize = wide(contentSize(0.5))
+    window.contentMaxSize = wide(contentSize(limit))
+    let size = wide(contentSize(min(zoom, limit)))
+    let now = window.frame
+    if window.contentRect(forFrameRect: now).size == size {
+      layoutPanes()  // 창 크기는 그대로인데 기기 화면 크기가 바뀌었을 수 있다
+      return
+    }
+    var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+    frame.origin = NSPoint(x: now.maxX - frame.width, y: now.minY)
+    if let area {
+      frame.origin.x = max(area.minX, frame.origin.x)
+      frame.origin.y = min(frame.origin.y, area.maxY - frame.height)
+    }
+    window.setFrame(frame, display: true)
+  }
+
+  func applyOnTop() {
+    window?.level = onTop ? .floating : .normal
+  }
+
   @objc func toggleOnTop() {
-    defaults.set(!onTop, forKey: key("onTop"))
+    defaults.set(!onTop, forKey: "onTop")
     applyOnTop()
   }
 
   @objc func setZoom(_ item: NSMenuItem) {
-    defaults.set(item.tag, forKey: key("zoom"))
+    defaults.set(item.tag, forKey: "zoom")
     fit()
   }
 
-  // 메뉴 막대와 오른쪽 메뉴에 같이 넣는 항목들
-  func items() -> [NSMenuItem] {
+  // 메뉴 막대와 오른쪽 메뉴에 같이 넣는 항목들. 홈은 그 기기로 간다
+  func items(for pane: Mirror?) -> [NSMenuItem] {
     func item(_ title: String, _ action: Selector, _ key: String, tag: Int = 0) -> NSMenuItem {
       let it = NSMenuItem(title: title, action: action, keyEquivalent: key)
       it.target = self
       it.tag = tag
       return it
     }
-    let esc = item("홈 (Esc)", #selector(home), "\u{1b}")
-    esc.keyEquivalentModifierMask = []
-    return [
+    var list = [
       item("항상 위", #selector(toggleOnTop), "t"),
       .separator(),
       item("1배", #selector(setZoom(_:)), "1", tag: 1),
       item("2배", #selector(setZoom(_:)), "2", tag: 2),
       item("3배", #selector(setZoom(_:)), "3", tag: 3),
-      .separator(),
-      esc,
     ]
+    if let pane {
+      let esc = NSMenuItem(title: "\(pane.device.name) 홈 (Esc)", action: #selector(Mirror.home), keyEquivalent: "\u{1b}")
+      esc.target = pane
+      esc.keyEquivalentModifierMask = []
+      list += [.separator(), esc]
+    }
+    return list
   }
 
-  func makeMenu() -> NSMenu {
+  func makeMenu(for pane: Mirror?) -> NSMenu {
     let menu = NSMenu()
-    for it in items() { menu.addItem(it) }
+    for it in items(for: pane) { menu.addItem(it) }
     menu.addItem(.separator())
     // 종료는 두지 않는다 (도우미까지 꺼진다). 창을 닫아도 도우미는 메뉴 막대에 남는다
     menu.addItem(withTitle: "미러링 닫기", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -578,7 +751,7 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
   func makeMainMenu() -> NSMenu {
     let bar = NSMenu()
     let top = NSMenuItem()
-    top.submenu = makeMenu()
+    top.submenu = makeMenu(for: focus)
     bar.addItem(top)
     // 수정 창의 입력칸에서 붙여넣기 등을 쓰려면 메뉴에 있어야 한다
     let edit = NSMenu(title: "편집")
@@ -594,8 +767,6 @@ final class Mirror: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
   // 메뉴를 열 때마다 체크 표시를 지금 설정에 맞춘다
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
-    // 수정 창이 떠 있으면 Esc 는 그 창의 취소다 (기기가 홈으로 가지 않게)
-    if item.action == #selector(home) { return !editor.panel.isVisible }
     if item.action == #selector(toggleOnTop) {
       item.state = onTop ? .on : .off
     } else if item.action == #selector(setZoom(_:)) {
@@ -724,8 +895,9 @@ final class Helper {
 @MainActor
 final class App: NSObject, NSApplicationDelegate {
   let helper = Helper()
-  let mirror = Mirror(.s3)  // 다시 열기, SIGUSR1 (S3 도우미의 자동 열기)는 S3 창만 연다
-  let mirror31 = Mirror(.s31)
+  let mirror = Mirror(.s3)
+  let mirror31 = Mirror(.s31)  // SIGUSR2 (S31 도우미의 자동 열기)
+  lazy var shell = MirrorWindow([mirror31, mirror])
   var status: NSStatusItem?
   var errorItem: NSMenuItem?
   var signals: [DispatchSourceSignal] = []
@@ -744,12 +916,18 @@ final class App: NSObject, NSApplicationDelegate {
       source.resume()
       signals.append(source)
     }
-    // 도우미가 기기와 새로 연결되면 SIGUSR1 로 미러링 창을 열게 한다 (mirror.py 의 open_window)
-    signal(SIGUSR1, SIG_IGN)
-    let open = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
-    open.setEventHandler { MainActor.assumeIsolated { self.mirror.open() } }
-    open.resume()
-    signals.append(open)
+    // 도우미가 기기와 새로 연결되면 신호로 창을 열게 한다. S31 이 우선이라 S31 이 연결되면 그 칸으로 바꾸고, S3 는 창이 닫혀 있을 때만 연다
+    let handlers: [(Int32, @MainActor () -> Void)] = [
+      (SIGUSR1, { [unowned self] in if self.shell.open.isEmpty { self.openDefault() } }),
+      (SIGUSR2, { [unowned self] in self.mirror31.open() }),
+    ]
+    for (sig, handler) in handlers {
+      signal(sig, SIG_IGN)
+      let open = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+      open.setEventHandler { MainActor.assumeIsolated { handler() } }
+      open.resume()
+      signals.append(open)
+    }
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     item.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "LLM Deck")
     item.button?.toolTip = "LLM Deck"
@@ -758,11 +936,10 @@ final class App: NSObject, NSApplicationDelegate {
       let it = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
       it.target = target
     }
-    add("S3 미러링", mirror, #selector(Mirror.open))
-    add("S31 미러링", mirror31, #selector(Mirror.open))
+    add("S31 미러링", mirror31, #selector(Mirror.toggle))
+    add("S3 미러링", mirror, #selector(Mirror.toggle))
     menu.addItem(.separator())
-    add("S3 항상 위", mirror, #selector(Mirror.toggleOnTop))
-    add("S31 항상 위", mirror31, #selector(Mirror.toggleOnTop))
+    add("항상 위", shell, #selector(MirrorWindow.toggleOnTop))
     menu.addItem(.separator())
     add("도우미 다시 시작", helper, #selector(Helper.restart))
     add("기록 보기", self, #selector(showLog))
@@ -792,9 +969,22 @@ final class App: NSObject, NSApplicationDelegate {
     }
   }
 
+  // 지금 칸을 앞으로 가져온다. 창이 닫혀 있으면 S31 을 먼저 열고, S31 이 연결되어 있지 않고 S3 는 연결되어 있으면 S3 를 연다
+  func openDefault() {
+    if let pane = shell.open.first {
+      pane.open()
+      return
+    }
+    Task {
+      let s31 = await mirror31.linked()
+      let s3 = s31 ? false : await mirror.linked()
+      if shell.open.isEmpty { (s3 ? mirror : mirror31).open() }
+    }
+  }
+
   // 이미 떠 있는 앱을 한 번 더 열면 미러링 창을 연다
   func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows: Bool) -> Bool {
-    mirror.open()
+    openDefault()
     return false
   }
 
@@ -804,6 +994,7 @@ final class App: NSObject, NSApplicationDelegate {
 }
 
 MainActor.assumeIsolated {
+  signal(SIGUSR2, SIG_IGN)  // S31 도우미는 이 앱의 자식이 아니라 앱이 막 켜진 참에도 보낼 수 있다. 받을 준비 전에 앱이 꺼지지 않게
   let app = NSApplication.shared
   let delegate = App()
   app.delegate = delegate

@@ -45,6 +45,7 @@ static uint32_t until_ms = 0;
 // 미러링이 시작될 때마다 켜진 채로 시작하고, 구독제 화면의 작은 "합치기"/"분리" 버튼으로 켜고 끈다.
 static bool split_on = true;
 static bool select_start_view = false;
+static uint32_t split_sent_ms = 0;  // 나눠 쓰기 상태를 PC 에 알린 시각 (0 = 바로 알린다)
 static bool show_orca = false;  // 합치기에서 분리로 바꾸면 PC 창은 ORCA 로 (버튼 이벤트 안에서 화면을 바꾸지 않게 loop 에서)
 static uint32_t last_ms = 0;
 static uint32_t frame_no = 0;
@@ -304,6 +305,7 @@ void mirror_keep(bool on) {
   // 새로 연결되면 기본은 나눠 쓰기 (기기 LCD 에는 사용량)
   if (changed && on) {
     split_on = true;
+    split_sent_ms = 0;
     select_start_view = true;
   }
   until_ms = on ? millis() + KEEP_MS : 0;
@@ -327,6 +329,7 @@ bool mirror_split() {
 void mirror_set_split(bool on) {
   if (on == split_on) return;
   split_on = on;
+  split_sent_ms = 0;
   Serial.printf("[mirror] split %s\n", on ? "on" : "off");
   if (on && mirror_active()) show_orca = true;
   ui_mirror_changed();
@@ -347,6 +350,11 @@ void mirror_loop() {
   if (show_orca) {
     show_orca = false;
     if (split_on) ui_show("orca");
+  }
+  // 미러링 앱의 합치기·분리 단추가 쓰게 바뀌면 바로, 아니면 10초마다 (도우미를 다시 켜도 알게) 알린다
+  if (!split_sent_ms || millis() - split_sent_ms >= 10000) {
+    link_send_event(split_on ? "{\"mirror_split\":true}" : "{\"mirror_split\":false}");
+    split_sent_ms = millis() | 1;
   }
   if (split_on) {
     device_refresh();

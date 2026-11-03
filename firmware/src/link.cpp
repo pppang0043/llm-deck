@@ -488,6 +488,7 @@ static void apply_owner_state(JsonObjectConst doc, Link from) {
 // 미러링 창 (USB, Wi-Fi)
 static void apply_mirror(JsonObjectConst doc) {
   if (doc["mirror"].is<bool>()) mirror_keep(doc["mirror"]);
+  if (doc["split"].is<bool>()) mirror_set_split(doc["split"]);  // 미러링 앱의 합치기·분리 단추
   if (doc["touch"].is<JsonObjectConst>()) {
     display_remote_touch(doc["touch"]["x"] | 0, doc["touch"]["y"] | 0, doc["touch"]["down"] | false);
   }

@@ -322,6 +322,27 @@ def _bundle(asn: str) -> str:
     return match.group(1) if match else ""
 
 
+def mirror_in_front() -> bool:
+    """지금 맨 앞이 미러링 창인지 (미러링 창을 눌러 기기 버튼을 눌렀다). 모르면 False."""
+    try:
+        if sys.platform == "darwin":
+            front = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=3).stdout.strip()
+            return bool(front) and _bundle(front.rstrip(":")) == OWN_BUNDLE
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            user32.GetForegroundWindow.restype = wintypes.HWND  # 64비트 창 번호
+            user32.GetWindowTextW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+            title = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(user32.GetForegroundWindow(), title, 256)
+            return title.value == MIRROR_TITLE
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return False
+
+
 def _leave_own_window() -> None:
     """앞 앱이 LLM Deck 이면 (미러링 창을 눌러 받아쓰기·키워드를 시작했다) 바로 뒤에 있던 앱을 앞으로 되돌린다.
     그러지 않으면 글이 원래 쓰던 창이 아니라 미러링 창으로 간다. 앞 앱 순서는 lsappinfo 가 앞에서부터 알려 준다."""

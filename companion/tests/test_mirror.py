@@ -67,3 +67,49 @@ def test_silent_device_reported(monkeypatch):
     usb.last_rx = 0.0
     view.alive_at = now[0]  # 화면이 왔다
     assert not view.silent()
+
+
+def test_split_state_and_button(monkeypatch):
+    # 미러링 앱의 합치기·분리 단추: 기기가 알린 상태를 X-Split 으로 넘기고, 누르면 {"split": bool} 을 보낸다
+    import http.client
+    import json
+    import threading
+
+    class Usb:
+        name = "USB"
+        last_rx = 0.0
+        sent = []
+
+        def send(self, message):
+            self.sent.append(message)
+
+    usb = Usb()
+    view = mirror.Mirror({"enabled": False}, lambda: usb)
+    server = mirror.ThreadingHTTPServer(("127.0.0.1", 0), view._handler())
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def call(method, path, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        headers = {"Host": f"127.0.0.1:{mirror.PORT}", "Content-Type": "application/json"}
+        conn.request(method, path, json.dumps(body) if body is not None else None, headers)
+        res = conn.getresponse()
+        res.read()
+        return res.status, res.getheader("X-Split")
+
+    try:
+        monkeypatch.setattr(view.cond, "wait_for", lambda *a, **k: None)
+        assert call("GET", "/frame?after=0") == (204, None)  # 옛 펌웨어: 단추를 숨긴다
+        view.on_event({"mirror_split": True})
+        view.on_event({"mirror_split": "x"})  # 잘못된 값은 무시
+        assert call("GET", "/frame?after=0") == (204, "1")
+        assert call("POST", "/split", {"on": False})[0] == 204
+        assert usb.sent == [{"split": False}]
+        assert call("POST", "/split", {"on": 1})[0] == 400
+        assert call("POST", "/split", {})[0] == 400
+        assert len(usb.sent) == 1
+        view.on_event({"mirror_split": False})
+        assert call("GET", "/frame?after=0") == (204, "0")
+        view.link_lost()  # 끊기면 모른다
+        assert call("GET", "/frame?after=0") == (204, None)
+    finally:
+        server.shutdown()
