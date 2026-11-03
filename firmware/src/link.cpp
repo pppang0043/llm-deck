@@ -92,9 +92,17 @@ static uint32_t saved_ms = 0;
 static void save_if_due() {
   if (shown == saved || shown.size() > SAVE_MAX_BYTES) return;
   if (!saved.empty() && millis() - saved_ms < SAVE_INTERVAL_MS) return;
-  prefs.putString("usage", shown.c_str());
-  saved = shown;
   saved_ms = millis();
+  // NVS 는 새 값을 다 쓴 뒤에 옛 값을 지운다. 빈 칸이 모자라면 옛 값을 먼저 지우고 다시 쓴다 (꺼지면 옛 값도 없다)
+  if (!prefs.putString("usage", shown.c_str())) {
+    prefs.remove("usage");
+    if (!prefs.putString("usage", shown.c_str())) {
+      saved.clear();
+      Serial.printf("[link] usage not saved (%u bytes, NVS full)\n", (unsigned)shown.size());
+      return;
+    }
+  }
+  saved = shown;
   Serial.printf("[link] usage saved (%u bytes)\n", (unsigned)saved.size());
 }
 

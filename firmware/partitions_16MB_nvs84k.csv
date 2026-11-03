@@ -1,0 +1,10 @@
+# default_16MB.csv 에서 NVS 만 20KB -> 84KB 로 키웠다 (2026-11-03, NVS 가 차서 설정 저장이 실패했다).
+# NVS 시작(0x9000)은 그대로라 기존 설정이 남는다. 그만큼 otadata/app 을 0x10000 뒤로 밀고 쓰지 않는 spiffs 를 줄였다.
+# 파티션 표는 OTA 로 바뀌지 않는다. 처음 바꿀 때는 USB 로, 0xE000~0x1E000 을 비운 뒤 써야 한다 (옛 otadata·앱 조각이 NVS 로 읽히지 않게).
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x15000,
+otadata,  data, ota,     0x1e000, 0x2000,
+app0,     app,  ota_0,   0x20000, 0x640000,
+app1,     app,  ota_1,   0x660000,0x640000,
+spiffs,   data, spiffs,  0xca0000,0x350000,
+coredump, data, coredump,0xff0000,0x10000,

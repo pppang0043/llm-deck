@@ -451,6 +451,20 @@ void net_init() {
   if (!have_key) Serial.println("[net] no wifi key yet: connect the PC by USB once to use Wi-Fi");
   if (!saved.is<JsonArray>()) saved.to<JsonArray>();
 
+  // 접속 정보는 "wifi" 에 따로 두고 연결할 때마다 넘기므로, Wi-Fi 드라이버가 NVS 에 또 저장하지 않게 한다.
+  // 예전에 저장된 것(약 100칸)도 지운다. 이것 때문에 NVS 가 차서 사용량을 저장하지 못했다 (NOT_ENOUGH_SPACE).
+  WiFi.persistent(false);
+  Preferences old;
+  if (old.begin("nvs.net80211", true)) {
+    bool any = old.isKey("sta.ssid");  // 드라이버가 기본값을 다시 써도 매번 지우지 않게 접속 정보가 있을 때만
+    old.end();
+    if (any && old.begin("nvs.net80211")) {
+      old.clear();
+      old.end();
+      Serial.println("[net] cleared Wi-Fi driver copy in NVS");
+    }
+  }
+
   WiFi.mode(WIFI_STA);
   if (strlen(WIFI_SSID) > 0) {
     multi.addAP(WIFI_SSID, WIFI_PASSWORD);

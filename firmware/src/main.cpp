@@ -243,10 +243,11 @@ static void power_save() {
 }
 
 // 화면이 쉬는 동안 들어 올리면 터치처럼 깨운다 (BOOT 버튼과 같지만 마이크는 건드리지 않는다)
+// 수동 절전은 사용자가 일부러 끈 것이라 움직임으로는 깨우지 않는다 (터치·BOOT 로만)
 static void wake_on_pickup() {
   if (!lifted) return;
   lifted = false;
-  if (!screen_resting || !settings_pickup_wake()) return;
+  if (!screen_resting || standby.active() || !settings_pickup_wake()) return;
   Serial.println("[power] picked up, screen on");
   standby.wake();
   display_poke();
