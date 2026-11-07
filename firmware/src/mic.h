@@ -9,6 +9,8 @@
 #define MIC_UDP_PORT 4010
 
 void mic_init();
+// 카메라를 켜기 전 true (마이크가 SCK=카메라 D0 핀을 놓을 때까지 기다린다), 끈 뒤 false
+void mic_pause(bool value);
 void mic_set_on(bool on);
 bool mic_is_on();
 

@@ -5,6 +5,7 @@
 #include <WiFiUdp.h>
 #include <driver/gpio.h>
 
+#include "battery.h"
 #include "ble_link.h"
 #include "link.h"
 #include "net.h"
@@ -12,6 +13,8 @@
 #include "usb_link.h"
 
 static I2SClass i2s;
+static volatile bool i2s_open = false;  // 이 작업이 I2S 를 열어 둔 동안 (mic_pause 가 기다린다)
+static volatile bool paused = false;    // 카메라가 SCK 핀(GPIO12 = 카메라 D0)을 쓰는 동안 (mic_pause)
 static WiFiUDP udp;
 
 static volatile bool on = false;
@@ -34,6 +37,7 @@ static bool open_i2s() {
     Serial.println("[mic] i2s begin failed");
     return false;
   }
+  i2s_open = true;
   return true;
 }
 
@@ -69,6 +73,7 @@ static void probe(int32_t *raw) {
     moved = hi - lo > MIC_FLAT_SPAN;
   }
   i2s.end();
+  i2s_open = false;
   set_present(moved);
   if (!moved) Serial.println("[mic] device mic missing");
 }
@@ -80,6 +85,7 @@ static char diag_text[300];
 static bool diag_open(i2s_std_slot_mask_t slot) {
   i2s.setPins(MIC_SCK, MIC_WS, -1, MIC_SD);
   if (!i2s.begin(I2S_MODE_STD, MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, slot)) return false;
+  i2s_open = true;
   vTaskDelay(pdMS_TO_TICKS(500));  // 마이크는 클럭을 받고 수백 ms 뒤부터 소리를 낸다
   return true;
 }
@@ -109,6 +115,59 @@ static const char *diag_clock(int pin) {
   return edges > 20 ? "정상" : highs > 10000 ? "3V3에 붙어 있음" : "GND에 붙어 있음";
 }
 
+// I2S 를 닫은 채 핀을 일반 출력으로 HIGH 로 내보내고 되읽는다. 설정이 아니라 핀 자체가 움직이는지 본다.
+static bool pin_stuck_low(int pin) {
+  gpio_reset_pin((gpio_num_t)pin);
+  gpio_config_t c = {};
+  c.pin_bit_mask = 1ULL << pin;
+  c.mode = GPIO_MODE_INPUT_OUTPUT;
+  gpio_config(&c);
+  gpio_set_level((gpio_num_t)pin, 1);
+  delayMicroseconds(1000);
+  bool stuck = gpio_get_level((gpio_num_t)pin) == 0;
+  gpio_set_level((gpio_num_t)pin, 0);
+  gpio_reset_pin((gpio_num_t)pin);
+  return stuck;
+}
+
+// 2026-11-08: 예전 SCK 핀 GPIO18 이 배터리 연결·USB 분리 같은 전원 변화 뒤 GND 에 붙어(HIGH 를 내보내도 0V)
+// 마이크가 멈췄다. SCK 를 GPIO12 로 옮기고, 아무것도 달리지 않은 GPIO18 과 새 SCK 를 쉬는 동안 1초마다 본다.
+// 바뀔 때마다 그때의 USB·전원 상태와 함께 남긴다 (USB 가 빠져 있던 동안의 변화는 다시 붙으면 알린다).
+struct PinWatch {
+  int pin;
+  const char *name;
+  bool stuck;
+  uint32_t at;
+  bool usb, power;
+  bool unsent;
+};
+static PinWatch watched[] = {{MIC_SCK, "sck", false, 0, false, false, false},
+                             {MIC_OLD_SCK, "gpio18", false, 0, false, false, false}};
+
+static void watch_pins() {
+  static uint32_t checked = 0;
+  uint32_t now = millis();
+  if (now - checked < 1000) return;
+  checked = now;
+  bool usb = usb_host_present(), power = battery_external_power();
+  for (PinWatch &w : watched) {
+    if (w.pin == MIC_SCK && paused) continue;
+    bool stuck = pin_stuck_low(w.pin);
+    if (stuck != w.stuck) {
+      w.stuck = stuck;
+      w.at = now;
+      w.usb = usb;
+      w.power = power;
+      w.unsent = true;
+    }
+    if (w.unsent && usb) {
+      w.unsent = false;
+      Serial.printf("[mic] %s %s at %lu ms (usb %d, ext power %d); now %lu\n", w.name, w.stuck ? "stuck" : "free",
+                    (unsigned long)w.at, w.usb, w.power, (unsigned long)now);
+    }
+  }
+}
+
 static void diag_run(int32_t *raw) {
   if (!diag_open(I2S_STD_SLOT_LEFT)) {
     snprintf(diag_text, sizeof(diag_text), "I2S를 열지 못했습니다");
@@ -126,11 +185,15 @@ static void diag_run(int32_t *raw) {
   diag_read(raw, down_lo, down_hi);
   gpio_pulldown_dis((gpio_num_t)MIC_SD);
   i2s.end();
+  i2s_open = false;
+  bool stuck = pin_stuck_low(MIC_SCK);
+  if (stuck) sck = "핀이 GND에 고착\nHIGH를 내보내도 0으로 읽힘";
   bool right = false;
   if (!left && diag_open(I2S_STD_SLOT_RIGHT)) {
     diag_read(raw, lo, hi);
     right = hi - lo > MIC_FLAT_SPAN;
     i2s.end();
+    i2s_open = false;
   }
 
   const char *sd;
@@ -149,8 +212,8 @@ static void diag_run(int32_t *raw) {
   }
   snprintf(diag_text, sizeof(diag_text), "SCK: %s\nWS: %s\nSD: %s", sck, ws, sd);
   set_present(left);
-  Serial.printf("[mic] diag sck=%d ws=%d left=%d right=%d up=%d..%d down=%d..%d\n", sck[0] != 'G' && sck[0] != '3',
-                ws[0] != 'G' && ws[0] != '3', left, right, (int)up_lo, (int)up_hi, (int)down_lo, (int)down_hi);
+  Serial.printf("[mic] diag sck=%d ws=%d stuck=%d left=%d right=%d up=%d..%d down=%d..%d\n",
+                sck[0] != 'G' && sck[0] != '3' && !stuck, ws[0] != 'G' && ws[0] != '3', stuck, left, right, (int)up_lo, (int)up_hi, (int)down_lo, (int)down_hi);
 }
 
 static void mic_task(void *) {
@@ -162,9 +225,15 @@ static void mic_task(void *) {
   int flat = 0;  // 이어서 값이 그대로였던 묶음 수
 
   probe(raw);
+  bool was_paused = false;
   for (;;) {
+    // 카메라를 끄면 마이크를 다시 확인한다 (켜는 동안이나 켤 때 막혀 없다고 판단했을 수 있다)
+    if (was_paused && !paused && !opened) probe(raw);
+    was_paused = paused;
     if (diag_want) {
-      if (opened || on || ask) {
+      if (paused) {
+        snprintf(diag_text, sizeof(diag_text), "카메라를 쓰는 중입니다\n카메라를 끈 뒤 다시 눌러 주세요");
+      } else if (opened || on || ask) {
         snprintf(diag_text, sizeof(diag_text), "마이크를 쓰는 중입니다\n끝난 뒤 다시 눌러 주세요");
       } else {
         diag_run(raw);
@@ -172,7 +241,7 @@ static void mic_task(void *) {
       diag_want = false;
       diag_done = true;
     }
-    bool want = on || ask;
+    bool want = (on || ask) && !paused;
     if (want != opened) {
       if (want) {
         opened = open_i2s();
@@ -182,12 +251,14 @@ static void mic_task(void *) {
         }
       } else {
         i2s.end();
+        i2s_open = false;
         opened = false;
         level = 0;
         flat = 0;
       }
     }
     if (!opened) {
+      watch_pins();
       vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
@@ -235,6 +306,15 @@ static void mic_task(void *) {
         break;
     }
   }
+}
+
+// 카메라를 켜기 전에 부른다. 마이크 SCK(GPIO12)가 카메라 D0 와 같은 핀이라, 이 작업이 I2S 를 닫을 때까지 기다린다.
+// 카메라는 끈 뒤 false 로 다시 부른다. 그동안 녹음은 멈춘다.
+void mic_pause(bool value) {
+  paused = value;
+  if (!value) return;
+  for (int i = 0; i < 300 && i2s_open; i++) vTaskDelay(pdMS_TO_TICKS(10));
+  if (i2s_open) Serial.println("[mic] pause: i2s still open");
 }
 
 void mic_init() {

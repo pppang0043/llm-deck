@@ -35,7 +35,10 @@
 
 // 외장 I2S 마이크 (INMP441). 카메라가 쓰지 않는 헤더 핀만 사용한다.
 // GPIO43/44 는 헤더에 TXD/RXD 로 표기된 핀 (USB 로 로그를 보내므로 비어 있음).
-#define MIC_SCK 18
+// SCK 는 GPIO12(카메라 D0, 헤더 오른쪽 10번)를 카메라가 꺼져 있을 때만 빌려 쓴다 (mic_pause).
+// 원래 쓰던 GPIO18 은 전원 변화 뒤 GND 에 붙는 일이 반복되어 2026-11-08 에 옮겼다.
+#define MIC_SCK 12
+#define MIC_OLD_SCK 18
 #define MIC_WS 43
 #define MIC_SD 44
 

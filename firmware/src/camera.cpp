@@ -1,4 +1,5 @@
 #include "camera.h"
+#include "mic.h"
 
 #include <Preferences.h>
 #include <ESP32_OV5640_cfg.h>  // OV5640AF 초점 펌웨어 (OV5640_AF_Config) 와 명령 레지스터
@@ -238,9 +239,11 @@ bool camera_start() {
   config.jpeg_quality = 12;
   config.fb_count = 2;
   release_reserve();
+  mic_pause(true);  // 마이크 SCK 가 카메라 D0(GPIO12)와 같은 핀이다
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     sensor_power_down();
+    mic_pause(false);
     hold_reserve();
     last_error = err;
     Serial.printf("[camera] start failed (0x%x), internal largest block %u\n", err,
@@ -275,8 +278,16 @@ void camera_stop() {
   if (!running) return;
   camera_set_video(false, nullptr);
   af_stop();
+  // OV5640 은 PWDN 중에도 레지스터를 지녀서, 켤 때 켠 데이터 출력이 꺼진 뒤에도 핀을 붙잡는다.
+  // D0(GPIO12)는 마이크 SCK 와 같은 핀이라 놓아 주어야 한다 (0x3017/0x3018: 출력 켜기 비트, 0 = 끊김)
+  sensor_t *s = esp_camera_sensor_get();
+  if (s && s->id.PID == OV5640_PID) {
+    s->set_reg(s, 0x3017, 0xff, 0x00);
+    s->set_reg(s, 0x3018, 0xff, 0x00);
+  }
   esp_camera_deinit();
   sensor_power_down();
+  mic_pause(false);
   running = false;
   hold_reserve();
   Serial.printf("[camera] off, internal free %u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
