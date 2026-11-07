@@ -120,21 +120,26 @@ def collect_limits(cfg: dict) -> list:
             _errors[section] = _error_text(e)
     # 공유 저장소에는 여러 PC 의 값을 합친 것을 올린다 (화면에 무엇을 보여주는지와는 별개)
     shared = _sync.merge(local)
+    # 본 페이지는 이 PC 의 ORCA 가 지금 고른 계정 값이다. ORCA 를 못 읽으면 기존 값을 보인다
+    global _orca_accounts
+    orca_main, _orca_accounts = {}, []
+    if cfg.get("orca", {}).get("enabled", True) and cfg.get("orca", {}).get("usage", True):
+        data = orca_usage.read()
+        if data:
+            orca_main, _orca_accounts = orca_usage.pages(data, cfg)
     pages = []
     for section, module in enabled:
         snapshot = local.get(section) or shared.get(section)
-        if snapshot:
+        if section in orca_main:
+            pages.append(orca_main[section])
+        elif snapshot:
             pages.append(limits_page(module.NAME, snapshot))
         elif hasattr(module, "hint") and module.hint():
             pages.append(module.hint())
-    # 기존 CLI/공유 페이지는 유지하고, 현재 PC의 ORCA Codex를 별도 페이지로 추가한다.
-    if cfg.get("orca", {}).get("usage", True) and cfg.get("codex", {}).get("enabled", True):
-        orca_data = orca_usage.read()
-        if orca_data:
-            page = orca_usage.pages(orca_data, {**cfg, "claude_code": {"enabled": False}}).get("codex")
-            if page:
-                pages.append(page)
     return pages
+
+
+_orca_accounts: list = []  # 계정별 페이지. 다른 페이지 뒤에 붙인다 (기존 usage_N 번호가 바뀌지 않게)
 
 
 def collect_all(cfg: dict) -> dict:
@@ -152,6 +157,7 @@ def collect_all(cfg: dict) -> dict:
             _last[section] = (time.time(), result)
         if result:
             services.append(result)
+    services += _orca_accounts
     # 기기에는 시계가 없어서(Wi-Fi 가 없으면 시각을 모른다) 보낼 때마다 현재 시각을 알려준다
     clock = {"now": int(time.time()), "utc_offset": time.localtime().tm_gmtoff}
     # 기기의 블루투스 설정 화면에 여러 PC 를 이름으로 보여주려고 이 PC 이름을 함께 보낸다.
