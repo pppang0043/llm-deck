@@ -348,7 +348,8 @@ final class Mirror: NSObject, NSMenuItemValidation {
     view.app = self
   }
 
-  var isOpen: Bool { polling != nil }
+  // 창에 보이는 칸이다. 화면 받기(polling)는 숨긴 칸에서도 이어질 수 있다 (나눠 쓰는 기기, MirrorWindow.show)
+  var isOpen: Bool { view.superview != nil }
 
   // 이 기기 칸으로 바꾼다 (창이 닫혀 있으면 창도). 메뉴 막대, 도우미의 자동 열기, 다시 열기가 부른다
   @objc func open() { shell?.show(self) }
@@ -403,6 +404,11 @@ final class Mirror: NSObject, NSMenuItemValidation {
           split = s
           if isOpen { shell?.syncSplit() }
         }
+        // 숨긴 칸은 나눠 쓰기를 지키려고만 받는다. 기기에서 합쳤거나 연결이 끊겼으면 그만 받는다
+        if !isOpen && split != true {
+          stop()
+          break
+        }
         if r.statusCode == 200 {
           let fw = Int(r.value(forHTTPHeaderField: "X-Width") ?? "") ?? 0
           let fh = Int(r.value(forHTTPHeaderField: "X-Height") ?? "") ?? 0
@@ -410,7 +416,7 @@ final class Mirror: NSObject, NSMenuItemValidation {
           if fw > 0 && fh > 0, let image = unpack(data, fw, fh) {
             (w, h, got) = (fw, fh, true)
             view.image = image
-            shell?.fit()
+            if isOpen { shell?.fit() }
             view.say(nil)
           }
         } else if r.statusCode == 503 {
@@ -527,7 +533,8 @@ final class MirrorWindow: NSObject, NSWindowDelegate, NSMenuItemValidation {
   func show(_ pane: Mirror) {
     let window = self.window ?? makeWindow()
     guard let content = window.contentView else { return }
-    for other in open where other !== pane { remove(other) }
+    // 나눠 쓰는 기기(S3 의 분리)는 숨겨도 화면 받기를 이어 간다: 멈추면 기기의 미러링이 꺼져 분리가 풀린다
+    for other in open where other !== pane { remove(other, keep: other.split == true) }
     pane.start()
     if pane.view.superview == nil {
       content.addSubview(pane.caption)
@@ -571,8 +578,9 @@ final class MirrorWindow: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
   var minWidth: Double { MirrorWindow.minWidth + (splitButton.isHidden ? 0 : splitButton.fittingSize.width + bar.spacing) }
 
-  func remove(_ pane: Mirror) {
-    pane.stop()
+  // keep: 칸만 빼고 화면 받기는 이어 간다
+  func remove(_ pane: Mirror, keep: Bool = false) {
+    if !keep { pane.stop() }
     pane.view.removeFromSuperview()
     pane.caption.removeFromSuperview()
     pane.focused(false)
@@ -636,7 +644,7 @@ final class MirrorWindow: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
   // 창을 닫으면 모든 칸의 화면 받기를 멈춘다. 도우미는 계속 돈다
   func windowWillClose(_ note: Notification) {
-    for pane in open { remove(pane) }
+    for pane in panes { remove(pane) }  // 숨긴 채 받던 칸도
     NSApp.setActivationPolicy(.accessory)
   }
 

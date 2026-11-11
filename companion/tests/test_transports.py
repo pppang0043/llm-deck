@@ -192,3 +192,33 @@ def test_usb_tries_any_board_before_one_is_registered(tmp_path, monkeypatch):
     monkeypatch.setattr(usb, "KNOWN_FILE", tmp_path / "usb_serial")
     monkeypatch.setattr(usb.list_ports, "comports", lambda: [_board("NEW")])
     assert usb.find_port() == ("/dev/NEW", "NEW")
+
+
+def test_usb_read_loop_does_not_wait_for_a_full_block():
+    """read(4096) 은 4096 바이트가 찰 때까지 timeout 을 기다려 미러링 장 끝이 0.5초 늦었다. 와 있는 만큼만 읽는다"""
+    import struct
+
+    from transports import usb
+
+    frame = b"\xa5\x5a\x02" + struct.pack("<H", 2) + b"{}"
+
+    class Ser:
+        is_open = True
+        pending = frame
+
+        @property
+        def in_waiting(self):
+            return len(self.pending)
+
+        def read(self, size):
+            if not self.pending:
+                self.is_open = False
+                return b""
+            assert size <= len(self.pending), "와 있는 것보다 많이 달라고 하면 timeout 까지 기다린다"
+            data, self.pending = self.pending[:size], self.pending[size:]
+            return data
+
+    events = []
+    t = usb.UsbTransport({}, lambda seq, pcm: None, on_event=events.append)
+    t._read_loop(Ser())
+    assert events == [{}]

@@ -10,7 +10,7 @@ import wave
 
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 320
-DEFAULT_OUTPUTS = ("BlackHole", "CABLE Input")
+DEFAULT_OUTPUTS = ("S3 마이크", "BlackHole", "CABLE Input")  # S3 마이크: BlackHole 을 이름만 바꿔 빌드한 Mac 가상 장치
 # 쌓아 둘 수 있는 최대 묶음 수. 넘치면 오래된 소리를 버려 지연이 늘어나지 않게 한다.
 MAX_QUEUED = 8
 

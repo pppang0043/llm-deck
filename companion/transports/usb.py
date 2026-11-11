@@ -209,7 +209,9 @@ class UsbTransport:
         buf = b""
         while ser.is_open:
             try:
-                data = ser.read(4096)
+                # 와 있는 만큼만 읽는다. read(4096) 은 4096바이트가 찰 때까지 timeout(0.5초) 을 기다려
+                # 화면 장의 마지막 조각과 이벤트가 다음 데이터가 올 때까지 늦었다. 없으면 1바이트를 timeout 까지 기다린다
+                data = ser.read(max(1, ser.in_waiting))
             except (serial.SerialException, OSError, TypeError):
                 return
             if data:
