@@ -129,3 +129,45 @@ inline int pop_drop_row(const PopRect *rows, int n, int y) {
   }
   return best;
 }
+
+// 버튼마다 누른 횟수 (설정의 ORCA 버튼, S31 deck pop_logic.h 와 같다). id 로 센다. 가득 차면 가장 적게 누른 것을 밀어낸다.
+// NVS "orca_pop" 의 "hits" 에 그대로 저장한다
+#define POP_HITS_MAX 40  // 표 20개 + 스킬, 지운 버튼
+#define POP_HITS_VERSION 1
+struct PopHit {
+  char id[24];
+  uint32_t count;
+};
+struct PopHits {
+  uint8_t version;
+  PopHit hit[POP_HITS_MAX];
+};
+
+inline void pop_hit_add(PopHits &h, const char *id) {
+  if (!pop_id_ok(id)) return;
+  PopHit *slot = nullptr;
+  for (PopHit &e : h.hit) {
+    if (strcmp(e.id, id) == 0) {
+      e.count++;
+      return;
+    }
+    if (!slot || (slot->id[0] && (!e.id[0] || e.count < slot->count))) slot = &e;
+  }
+  snprintf(slot->id, sizeof(slot->id), "%s", id);
+  slot->count = 1;
+}
+
+// 많이 누른 순서로 hit 의 번호를 out 에 넣고 수를 돌려준다 (0 회는 뺀다)
+inline int pop_hits_sorted(const PopHits &h, int *out) {
+  int n = 0;
+  for (int i = 0; i < POP_HITS_MAX; i++) {
+    if (!h.hit[i].id[0] || !h.hit[i].count) continue;
+    int at = n++;
+    while (at > 0 && h.hit[out[at - 1]].count < h.hit[i].count) {
+      out[at] = out[at - 1];
+      at--;
+    }
+    out[at] = i;
+  }
+  return n;
+}

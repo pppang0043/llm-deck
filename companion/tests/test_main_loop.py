@@ -4,6 +4,7 @@
 """
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -50,9 +51,21 @@ class FakeAssistant(Part):
         self.audio.append((seq, pcm))
 
 
+class TabMoved:
+    """orca.Orca.tab_moved 대신. 기다리는 시간을 time.sleep 으로 넘겨 바퀴 세기에 들어가게 한다."""
+
+    def wait(self, seconds):
+        main.time.sleep(seconds)
+        return False
+
+    def clear(self):
+        pass
+
+
 class FakeOrca(Part):
     def __init__(self, *a, **k):
         super().__init__()
+        self.tab_moved = TabMoved()
         self.resends = 0
         self.state = None
         self.pop = None
@@ -224,6 +237,7 @@ class Rig:
         monkeypatch.setattr(main, "load_config", lambda: {})
         monkeypatch.setattr(main, "_private_files", lambda: None)
         monkeypatch.setattr(main, "_host_name", lambda: "pc")
+        monkeypatch.setattr(main.sdpkg, "STAGE", Path("/nonexistent"))  # 이 저장소의 dist/ 준비물을 보내지 않게
         monkeypatch.setattr(main.faulthandler, "register", lambda *a, **k: None, raising=False)
         monkeypatch.setattr(main, "connect", self._connect)
         monkeypatch.setattr(main, "usb_plugged", lambda cfg: self.plugged)

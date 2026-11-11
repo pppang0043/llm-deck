@@ -62,6 +62,7 @@ static char shown_id[12] = "", pc_shown_id[12] = "";
 static bool panel_visible = false, selection_held = false;
 static uint32_t selected_at = 0;
 static void sync_pc_selection(bool reveal = false);
+static void count_hit(const char *id);
 static bool orca_ok = false;     // PC 에서 ORCA 를 읽었는지
 static bool received = false;    // PC 가 한 번이라도 보냈는지
 static uint32_t touched_at = 0;
@@ -88,6 +89,8 @@ static int area_w, area_h;  // 마지막 배치 (팝업 자리를 정한다)
 static void set_pop(bool open);
 // 팝업 버튼 표 (내부 RAM 을 아끼려고 PSRAM 에 둔다). 버튼의 user_data 가 pop_tab 안을 가리키므로 버튼을 먼저 지우고 바꾼다
 static PopTable *pop_tab, *pop_next;
+static PopHits *hits;  // 버튼마다 누른 횟수 (설정의 ORCA 버튼). PSRAM
+static bool hits_dirty;
 static bool pop_from_pc = false;     // pop_tab 이 PC 가 보낸 표다 (아니면 기본 배치)
 static bool pop_next_ready = false;  // pop_next 를 아직 적용하지 않았다 (꾹 누른 창, 위치 조정이 끝난 뒤에)
 static bool pop_kw_dirty = false;    // 위 동안 키워드가 바뀌었다
@@ -563,6 +566,7 @@ static void pop_event(lv_event_t *e) {
   if (dragged) return;  // 끌어서 닫는 중이었다
   const PopItem *item = (const PopItem *)lv_obj_get_user_data(lv_event_get_current_target(e));
   const char *key = item->id;
+  count_hit(key);
   if (strcmp(key, "skills") == 0) {  // 스킬 고르기를 열고 닫는다 (PC 로는 보내지 않는다)
     sk_open = !sk_open;
     place_pop();
@@ -574,12 +578,12 @@ static void pop_event(lv_event_t *e) {
   }
   touched_at = lv_tick_get();
   if (strcmp(key, "dictate") == 0) {
-    // 녹음 버튼은 세션과 상관없는 그냥 받아쓰기: PC 에서 커서가 있는 곳(미러링 창에서 눌렀으면 그 직전 창)에 넣는다.
-    // 팝업은 그대로: 받아 적은 글이 들어가면 이어서 Enter 를 누른다
+    // 녹음 버튼은 세션과 상관없는 받아쓰기: PC 에서 직전에 쓰던 브라우저 입력칸에 넣는다 (S31 과 같다, companion/typer.py
+    // type_to_browser). 세션에 넣으려면 띄운 세션 버튼을 다시 누른다. 팝업은 그대로: 받아 적은 글이 들어가면 이어서 Enter 를 누른다
     if (askpanel_dictating()) {
       askpanel_release();
     } else {
-      askpanel_press(true);
+      askpanel_press_browser();
     }
     orcapanel_refresh();
     return;
@@ -775,6 +779,8 @@ static void sk_event(lv_event_t *e) {
   }
   touched_at = lv_tick_get();
   char json[96];
+  snprintf(json, sizeof(json), "skill:%s", skill);
+  count_hit(json);
   snprintf(json, sizeof(json), "{\"orca\":\"send\",\"id\":\"%s\",\"key\":\"skill:%s\"}", active_id, skill);
   link_send_event(json);
   sk_open = false;
@@ -838,12 +844,71 @@ static void pop_save() {
 static void pop_load() {
   pop_tab = (PopTable *)ps_calloc(1, sizeof(PopTable));
   pop_next = (PopTable *)ps_calloc(1, sizeof(PopTable));
+  hits = (PopHits *)ps_calloc(1, sizeof(PopHits));
   Preferences prefs;
   if (prefs.begin("orca_pop", true)) {
     pop_from_pc = prefs.getBytes("table", pop_tab, sizeof(PopTable)) == sizeof(PopTable) &&
                   pop_tab->version == POP_TABLE_VERSION && pop_table_ok(*pop_tab);
+    if (prefs.getBytes("hits", hits, sizeof(PopHits)) != sizeof(PopHits) || hits->version != POP_HITS_VERSION) {
+      memset(hits, 0, sizeof(PopHits));
+    }
     prefs.end();
   }
+  hits->version = POP_HITS_VERSION;
+}
+
+static void hits_save() {
+  Preferences prefs;
+  if (prefs.begin("orca_pop")) {
+    prefs.putBytes("hits", hits, sizeof(PopHits));
+    prefs.end();
+  }
+}
+
+// 누른 횟수는 모아 두었다가 10초마다 저장한다 (누를 때마다 플래시에 쓰지 않는다). 끄기 직전 10초 것은 잃을 수 있다
+static void count_hit(const char *id) {
+  if (!hits) return;
+  pop_hit_add(*hits, id);
+  hits_dirty = true;
+}
+
+// 설정의 ORCA 버튼: 많이 누른 순으로 "표시명  N회" 줄들. 표에 없는 버튼(스킬 창, 지운 버튼)은 id 로
+void orcapanel_hits_text(char *out, size_t size) {
+  out[0] = '\0';
+  if (!hits || !size) return;
+  static PopTable *names;  // 기본 배치의 표시명 (PC 가 표를 보낸 적이 없을 때)
+  const PopTable *t = pop_tab;
+  if (!pop_from_pc) {
+    if (!names) names = (PopTable *)ps_calloc(1, sizeof(PopTable));
+    if (!names) return;
+    default_pop(names);
+    t = names;
+  }
+  int order[POP_HITS_MAX];
+  int n = pop_hits_sorted(*hits, order), items = 0;
+  for (uint8_t r : t->rows) items += r;
+  size_t used = 0;
+  for (int i = 0; i < n && used + 1 < size; i++) {
+    const PopHit &h = hits->hit[order[i]];
+    const char *shown = h.id;
+    for (int k = 0; k < items; k++) {
+      if (strcmp(t->item[k].id, h.id) == 0) shown = t->item[k].name;
+    }
+    bool skill = shown == h.id && strncmp(h.id, "skill:", 6) == 0;
+    int w = snprintf(out + used, size - used, "%s%s%s  %lu회", i ? "\n" : "", skill ? "/" : "", skill ? h.id + 6 : shown,
+                     (unsigned long)h.count);
+    if (w < 0) break;
+    used += (size_t)w;
+  }
+  if (used >= size) out[size - 1] = '\0';
+}
+
+void orcapanel_hits_clear() {
+  if (!hits) return;
+  memset(hits, 0, sizeof(PopHits));
+  hits->version = POP_HITS_VERSION;
+  hits_save();
+  hits_dirty = false;
 }
 
 static void pop_clear() {
@@ -1704,6 +1769,11 @@ void orcapanel_build(lv_obj_t *parent) {
   }
   build_pop();
   build_qr();
+  lv_timer_create([](lv_timer_t *) {
+    if (!hits_dirty) return;
+    hits_dirty = false;
+    hits_save();
+  }, 10000, nullptr);
   lv_timer_create([](lv_timer_t *) {
     sync_pc_selection();
     update_ask_strip();

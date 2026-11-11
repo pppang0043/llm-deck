@@ -94,5 +94,27 @@ int main() {
     strncat(joined, ko + at, n);
   }
   assert(strcmp(joined, ko) == 0);
+
+  // 버튼 누른 횟수: 많은 순, 잘못된 id 는 세지 않고, 가득 차면 가장 적은 것을 밀어낸다
+  static PopHits hits = {};
+  for (int i = 0; i < 3; i++) pop_hit_add(hits, "enter");
+  pop_hit_add(hits, "tab");
+  for (int i = 0; i < 5; i++) pop_hit_add(hits, "skill:minipc");
+  pop_hit_add(hits, "bad id!");
+  int order[POP_HITS_MAX];
+  assert(pop_hits_sorted(hits, order) == 3);
+  assert(strcmp(hits.hit[order[0]].id, "skill:minipc") == 0 && hits.hit[order[0]].count == 5);
+  assert(strcmp(hits.hit[order[1]].id, "enter") == 0 && strcmp(hits.hit[order[2]].id, "tab") == 0);
+  char hit_id[24];
+  for (int i = 0; i < POP_HITS_MAX; i++) {
+    snprintf(hit_id, sizeof(hit_id), "k%d", i);
+    pop_hit_add(hits, hit_id);
+    pop_hit_add(hits, hit_id);
+  }
+  int kept = pop_hits_sorted(hits, order);
+  assert(kept == POP_HITS_MAX);
+  bool most = false;
+  for (int i = 0; i < kept; i++) most |= strcmp(hits.hit[order[i]].id, "skill:minipc") == 0;
+  assert(most);
   return 0;
 }

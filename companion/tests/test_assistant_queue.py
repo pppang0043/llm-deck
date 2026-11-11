@@ -152,6 +152,22 @@ def test_successful_dictation_leaves_clipboard_alone(a, monkeypatch):
     assert clipboard == [] and a.pending_toast == "입력했습니다: 말한 글"
 
 
+def test_popup_record_goes_to_previous_browser(a, monkeypatch):
+    """ORCA 팝업의 녹음 버튼은 세션이 아니라 직전에 쓰던 브라우저 입력칸에 넣는다 (ORCA 화면은 건드리지 않는다)."""
+    activated, typed = [], []
+    a.orca = type("Fake", (), {"commands": lambda self: [], "aliases": {},
+                               "activate": lambda self, target: activated.append(target),
+                               "send_text": lambda self, target, text: 1 / 0})()
+    a.on_event({"ask": "start", "mode": "dictate", "browser": True, "orca": "abc"})
+    take = a.take
+    assert take.browser and not take.orca_pick and activated == []
+    assert not a.cursor_dictation_pending()  # 브라우저를 스스로 앞으로 띄우므로 ORCA 띄우기를 막지 않는다
+    a.on_event({"ask": "cancel"})
+    monkeypatch.setattr(assistant.typer, "type_to_browser", lambda text: typed.append(text))
+    a._finish_dictation(take, "말한 글")
+    assert typed == ["말한 글"] and a.pending_toast == "브라우저에 입력했습니다: 말한 글"
+
+
 def test_dictation_waits_for_the_session_lookup(a, monkeypatch):
     """ORCA CLI 가 느려 세션 찾기가 아직 끝나지 않았어도 고른 세션에 넣는다 (예전: 찾지 못했다며 클립보드로)."""
     sent = []

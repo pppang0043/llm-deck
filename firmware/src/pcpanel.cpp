@@ -14,6 +14,7 @@
 
 LV_FONT_DECLARE(font_ko_14);
 LV_FONT_DECLARE(font_ko_20);
+LV_FONT_DECLARE(font_ko_28);
 
 #define COLOR_BG lv_color_hex(0x101418)
 #define COLOR_DIM lv_color_hex(0x8A939E)
@@ -594,7 +595,7 @@ void pcpanel_build(lv_obj_t *parent) {
 static void layout_status(StatusView &v, int w, int h) {
   v.width = w;
   v.height = h;
-  const PcStatusLayout l = PcStatusLayout::fit(w, h);
+  const PcStatusLayout l = PcStatusLayout::fit(w, h, v.disk_count);
   v.disk_slots = l.disk_slots;
   lv_obj_set_size(v.panel, w, h);
   lv_obj_set_pos(v.panel, 0, 0);
@@ -603,6 +604,9 @@ static void layout_status(StatusView &v, int w, int h) {
   lv_label_set_long_mode(v.host, LV_LABEL_LONG_DOT);
   lv_obj_set_style_text_align(v.host, LV_TEXT_ALIGN_RIGHT, 0);
   lv_obj_set_pos(v.host, 90, 4);
+  // 칸이 크면 큰 글자. 글 묶음(작게 62, 크게 76)은 칸 안에서 위아래 가운데
+  bool big = l.card_height >= PcStatusLayout::BIG_CARD;
+  int top = (l.card_height - (big ? 76 : 62)) / 2;
   int col = 0;
   for (Meter *m : {&v.cpu, &v.gpu, &v.ram}) {
     lv_obj_set_size(m->row, l.card_width, l.card_height);
@@ -613,17 +617,19 @@ static void layout_status(StatusView &v, int w, int h) {
     lv_obj_set_align(m->name, LV_ALIGN_TOP_LEFT);
     lv_obj_set_align(m->value, LV_ALIGN_TOP_LEFT);
     lv_obj_set_align(m->bar, LV_ALIGN_TOP_LEFT);
-    lv_obj_set_pos(m->name, 6, 2);
-    lv_obj_set_style_text_font(m->value, &font_ko_20, 0);
+    lv_obj_set_style_text_font(m->name, big ? &font_ko_20 : &font_ko_14, 0);
+    lv_obj_set_pos(m->name, 6, top + 2);
+    // "100%" 처럼 칸보다 넓으면 한 단계 작게
+    lv_obj_set_style_text_font(m->value, big && text_width(m->value, &font_ko_28) <= l.card_width - 12 ? &font_ko_28 : &font_ko_20, 0);
     lv_obj_set_style_text_align(m->value, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_width(m->value, l.card_width - 12);
-    lv_obj_set_pos(m->value, 6, 19);
-    lv_obj_set_size(m->bar, l.card_width - 12, 3);
-    lv_obj_set_pos(m->bar, 6, 45);
+    lv_obj_set_pos(m->value, 6, top + (big ? 24 : 19));
+    lv_obj_set_size(m->bar, l.card_width - 12, big ? 4 : 3);
+    lv_obj_set_pos(m->bar, 6, top + (big ? 56 : 45));
   }
   lv_obj_set_width(v.ram_used, l.card_width - 12);
   lv_label_set_long_mode(v.ram_used, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(v.ram_used, 6, 47);
+  lv_obj_set_pos(v.ram_used, 6, top + (big ? 61 : 47));
   lv_obj_set_pos(v.disk_heading, 0, l.disk_heading_y + 4);
   lv_obj_set_width(v.disk_heading, l.width - 98);
   lv_label_set_long_mode(v.disk_heading, LV_LABEL_LONG_DOT);
@@ -634,17 +640,21 @@ static void layout_status(StatusView &v, int w, int h) {
   lv_obj_set_pos(v.disk_index, l.width - 64, l.disk_heading_y + 4);
   lv_obj_set_size(v.disk_next, 28, 24);
   lv_obj_set_pos(v.disk_next, l.width - 28, l.disk_heading_y);
+  bool big_disk = l.disk_height >= PcStatusLayout::BIG_DISK;
+  int name_w = big_disk ? 60 : 44;
   for (int i = 0; i < v.disk_count; i++) {
     Meter &m = v.disks[i];
     lv_obj_set_size(m.row, l.width, l.disk_height);
-    lv_obj_set_width(m.name, 44);
+    lv_obj_set_style_text_font(m.name, big_disk ? &font_ko_20 : &font_ko_14, 0);
+    lv_obj_set_width(m.name, name_w);
     lv_label_set_long_mode(m.name, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(m.value, l.width - 48);
+    lv_obj_set_style_text_font(m.value, big_disk && text_width(m.value, &font_ko_20) <= l.width - name_w - 4 ? &font_ko_20 : &font_ko_14, 0);
+    lv_obj_set_width(m.value, l.width - name_w - 4);
     lv_label_set_long_mode(m.value, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(m.value, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_align(m.bar, LV_ALIGN_TOP_LEFT);
     lv_obj_set_size(m.bar, l.width, 4);
-    lv_obj_set_pos(m.bar, 0, 18);
+    lv_obj_set_pos(m.bar, 0, l.disk_height - 4);
     lv_obj_set_pos(m.row, 0, l.disk_y + (i % l.disk_slots) * l.disk_stride);
   }
   lv_obj_set_width(v.age, 60);

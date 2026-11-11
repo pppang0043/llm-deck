@@ -398,3 +398,48 @@ def test_cursor_dictation_keeps_focus(o, monkeypatch):
     o.keep_focus = lambda: True
     o.send_key("abc", "push")
     assert len(o.sent_cmds) == 2 and not any(c[:2] == ("terminal", "switch") for c in o.sent_cmds)
+
+
+def test_idle_sessions_hidden_after_a_day(o, monkeypatch):
+    # 터미널 출력이 하루 넘게 없으면 뺀다. 출력 시각이 없으면 작업 폴더의 활동 시각, 둘 다 없으면 남긴다 (S31 과 같다)
+    now = 2_000_000_000
+    old, new = (now - orca.IDLE_HIDE_S - 60) * 1000, (now - 60) * 1000
+    monkeypatch.setattr(orca.time, "time", lambda: now)
+    monkeypatch.setattr(orca, "active_tab", lambda: "shown")
+
+    def term(n, out=None, wt="w1"):
+        return {"handle": f"term_{n}", "tabId": n, "leafId": "l", "worktreeId": wt, "worktreePath": "/w/a",
+                "title": n, "connected": True, "agentIdentity": "claude", "lastOutputAt": out}
+
+    terminals = [term("fresh1", new), term("stale1", old), term("shown", old), term("perm1", old),
+                 term("work1", old), term("wtold1", wt="w_old"), term("wtnew1", wt="w1"), term("unknown1", wt="w_none")]
+    states = {"fresh1": "done", "stale1": "done", "shown": "idle", "perm1": "permission", "work1": "working",
+              "wtold1": "done", "wtnew1": "done", "unknown1": "done"}
+    ps = {"worktrees": [
+        {"worktreeId": "w1", "lastActivityAt": new,
+         "agents": [{"paneKey": f"{n}:l", "mainAgent": {"state": st}} for n, st in states.items()]},
+        {"worktreeId": "w_old", "lastActivityAt": old, "agents": []},
+        {"worktreeId": "w_none", "agents": []}]}
+    o._run = lambda *a, **k: ps if a[:2] == ("worktree", "ps") else {"terminals": terminals}
+    state = o._read()
+    assert [r["id"] for r in state["list"]] == ["fresh1", "shown", "perm1", "work1", "wtnew1", "unknown1"]
+    assert state["a"] == "shown"
+
+
+def test_watch_tab_wakes_send_loop_only_on_change(monkeypatch):
+    """ORCA 에서 탭을 바꾸면 전송 루프를 깨운다 (0.5초 기다리지 않게)"""
+    inst = orca.Orca({"enabled": False})
+    tabs = iter(["t1", "t1", "t2"])
+    monkeypatch.setattr(orca, "active_tab", lambda: next(tabs))
+    woke = []
+
+    def sleep(_):
+        woke.append(inst.tab_moved.is_set())
+        inst.tab_moved.clear()
+        if len(woke) == 3:
+            raise StopIteration
+
+    monkeypatch.setattr(orca.time, "sleep", sleep)
+    with pytest.raises(StopIteration):
+        inst._watch_tab()
+    assert woke == [False, False, True]

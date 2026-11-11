@@ -8,6 +8,7 @@
 받아쓰기: {"ask": "start", "mode": "dictate"} ... {"ask": "stop"} -> 받아 적은 글을 이 PC 의 커서 자리에 입력한다
       (Claude 에 묻지 않는다, Enter 는 누르지 않는다). 기기 사용량 화면의 버튼이 쓴다.
       "orca": 세션 id 가 있으면 그 ORCA 세션을 앞으로 띄우고 그 세션 터미널에 넣는다 (orca.py, 기기의 ORCA 화면).
+      "browser": true 면 직전에 쓰던 브라우저를 앞으로 되돌려 그 입력칸에 넣는다 (ORCA 팝업의 녹음 버튼, typer.py).
       "슬래시 커밋" 처럼 말하면 "/commit" 으로 바꿔 넣는다.
 
 받아 적기: CLI 는 소리를 받지 못하므로 음성은 먼저 글자로 바꾼다. 말소리가 없는 녹음은 어느 쪽으로도 넘기지 않는다 (VAD).
@@ -167,7 +168,7 @@ _NO_AUDIO_REASON = (
 _LID_CLOSED_REASON = "맥북 덮개가 닫혀\n내장 마이크가 꺼져 있습니다\n덮개를 열거나 다른 마이크를 쓰세요"
 _PRIVACY_REASON = "Windows 가 마이크를 막았습니다\n설정 > 개인 정보 > 마이크에서\n데스크톱 앱 허용을 켜 주세요"
 # 소리가 늘 0 인 가상 장치. 마이크를 돌아가며 잡을 때 건너뛴다
-_VIRTUAL = ("blackhole", "cable output", "zoomaudio", "teams audio", "soundflower")
+_VIRTUAL = ("s3 마이크", "s31 마이크", "blackhole", "cable output", "zoomaudio", "teams audio", "soundflower")
 # Windows 의 "기본 마이크" 별칭 장치 (MME 사운드 매퍼, DirectSound 주 캡처 드라이버). 진짜 기본 마이크를 알면 건너뛴다
 _ALIASES = ("sound mapper", "사운드 매퍼", "primary sound capture", "주 사운드 캡처")
 # Mac 은 블루투스 이어폰 마이크를 쓰지 않는다. 쓰는 순간 음악용(AAC) 연결이 통화용(HFP)으로 바뀌어 듣는 소리가 나빠지고,
@@ -727,6 +728,7 @@ class _Take:
         self.failed = False  # 녹음이 실패해 _record 가 이미 알렸다
         self.mic = ""  # 녹음한 마이크 이름
         self.dev_mic = False  # 기기가 녹음 동안 자기 마이크 소리를 보낸다 (기기가 "dev_mic" 로 알린다)
+        self.browser = False  # ORCA 팝업의 녹음 버튼: 세션이 아니라 직전에 쓰던 브라우저 입력칸에 넣는다
 
     @property
     def mode(self) -> str:
@@ -812,10 +814,12 @@ class Assistant:
                 self.sent = None
                 return
             dictate = event.get("mode") == "dictate"
-            target = event.get("orca") if dictate else None
+            browser = dictate and event.get("browser") is True
+            target = event.get("orca") if dictate and not browser else None
             # voice: 60초가 넘어 스스로 끝낼 때 쓴다 (끝낼 때 다시 받는다)
             take = _Take(dictate, bool(event.get("voice")), isinstance(target, str) and self.orca is not None)
             take.dev_mic = bool(event.get("dev_mic"))
+            take.browser = browser
             if take.orca_pick:
                 # 말하는 동안 그 세션 탭으로 바꿔 둔다 (끝나면 그 세션에 넣는다)
                 def activate() -> None:
@@ -1370,7 +1374,7 @@ class Assistant:
     def cursor_dictation_pending(self) -> bool:
         """세션을 고르지 않은 받아쓰기(커서 자리에 넣는다)가 녹음 중이거나 넣기를 기다리는지."""
         takes = [self.take, self.working, *list(self.takes.queue)]
-        return any(t is not None and t.dictate and not t.orca_pick for t in takes)
+        return any(t is not None and t.dictate and not t.orca_pick and not t.browser for t in takes)
 
     def _warm(self, take: _Take) -> None:
         try:
@@ -1564,6 +1568,8 @@ class Assistant:
             elif take.orca_pick:
                 # 고른 세션이 그사이 닫혔으면 엉뚱한 창에 치지 않는다
                 error, where = "ORCA 세션을 찾지 못했습니다", ""
+            elif take.browser:
+                error, where = typer.type_to_browser(text), "브라우저에 "
             else:
                 error = typer._type(text, enter=False)
                 where = ""

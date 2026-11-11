@@ -11,6 +11,7 @@
   - 빠른 답 창의 숨기기: {"orca": "hide", "id": id}. 그 터미널을 목록에서 뺀다 (HIDDEN_FILE 에 적어 도우미를 다시 켜도 빠진다).
   - 세션 팝업 버튼을 꾹 누른 수정·위치 조정: {"orca": "edit", "key": id}, 보드에 저장된 내용 {"orca": "saved_*"}. popbuttons.py 참고.
   - 받아쓰기에서 "슬래시 커밋" 처럼 말하면 "/commit" 으로 바꾼다 (Claude Code 의 / 명령·스킬). slash_words 참고.
+  - 터미널 출력이 IDLE_HIDE_S 동안 없던 세션은 보내지 않는다 (지금 보이는 세션, 권한 요청·작업 중인 세션은 남긴다. S31 과 같다).
 ORCA 가 꺼져 있거나 orca 명령을 못 찾으면 {"ok": false} 를 보낸다.
 """
 
@@ -33,9 +34,11 @@ import typer
 
 POLL_SECONDS = 2  # 직접 묻기는 수십 ms 라 자주 읽어도 된다
 OFF_POLL_SECONDS = 10  # ORCA 를 못 읽는 동안 (꺼져 있으면 CLI 를 띄워 묻기만 하다 실패한다)
+TAB_POLL_SECONDS = 0.1  # 선택 탭 읽기는 1ms 쯤이다. 바뀌면 전송 루프를 깨워 0.5초를 기다리지 않게 한다
 # ORCA 는 탭을 바꾸면 이만큼 뒤에 화면 상태를 저장한다 (재 보니 1~1.5초)
 ACTIVE_TAB_LAG_SECONDS = 2.0
 MAX_SESSIONS = 24  # 기기 orcapanel.cpp 의 MAX_ROWS
+IDLE_HIDE_S = 24 * 3600  # 터미널 출력이 이만큼 없던 세션은 목록에서 뺀다
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 BUNDLE_ID = "com.stablyai.orca"  # Mac 의 ORCA 앱
 HIDDEN_FILE = Path.home() / ".llm-deck" / "orca_hidden.json"  # 기기에서 숨긴 터미널 handle 들
@@ -522,8 +525,10 @@ class Orca:
         self.aliases = {**SLASH_ALIASES, **words}
         self._commands: list[str] | None = None
         self._wake = threading.Event()
+        self.tab_moved = threading.Event()  # ORCA 에서 고른 탭이 바뀌었다 (main.py 전송 루프가 기다린다)
         if self.enabled:
             threading.Thread(target=self._poll, daemon=True).start()
+            threading.Thread(target=self._watch_tab, daemon=True).start()
 
     def _run(self, *args: str, timeout: float = 30) -> dict | None:
         # 보낸 입력은 응답을 잃어도 다시 보내지 않는다 (중복 입력 방지).
@@ -559,18 +564,30 @@ class Orca:
             self._wake.wait(POLL_SECONDS if self.state and self.state.get("ok") else OFF_POLL_SECONDS)
             self._wake.clear()
 
+    def _watch_tab(self) -> None:
+        last = active_tab()
+        while True:
+            time.sleep(TAB_POLL_SECONDS)
+            tab = active_tab()
+            if tab != last:
+                last = tab
+                self.tab_moved.set()
+
     def _read(self) -> dict:
         ps = self._run("worktree", "ps")
         terms = self._run("terminal", "list")
         if ps is None or terms is None:
             return {"ok": False, "list": []}
-        agents = {}
+        agents, wt_active = {}, {}
         for wt in ps.get("worktrees", []):
+            wt_active[wt.get("worktreeId")] = wt.get("lastActivityAt")
             for agent in wt.get("agents", []):
                 agents[agent.get("paneKey")] = agent
         rows, handles, tabs = [], {}, {}
         order_keys = []  # (작업 폴더 id, 탭 id, 짧은 id). terminal list 순서
         custom = _custom_titles()
+        active = active_tab()
+        idle_before = (time.time() - IDLE_HIDE_S) * 1000  # ORCA 의 시각은 epoch ms
         for term in terms.get("terminals", []):
             if term.get("orphaned") or not term.get("connected"):
                 continue
@@ -590,6 +607,11 @@ class Orca:
                     state = "permission"
             else:
                 state = "working" if term.get("agentIdentity") else "shell"
+            # 오래 조용한 세션은 뺀다. 터미널 출력 시각이 없으면 작업 폴더의 활동 시각, 둘 다 없으면 남긴다
+            last = term.get("lastOutputAt") or wt_active.get(term.get("worktreeId"))
+            if (isinstance(last, (int, float)) and last < idle_before and state not in ("permission", "working")
+                    and not (active and term.get("tabId") == active)):
+                continue
             path = term.get("worktreePath") or ""
             # 사용자가 탭에 붙인 이름이 있으면 그것, 없으면 Claude 가 붙인 자동 제목
             title = custom.get(term.get("tabId")) or _short_title(term.get("title"))
@@ -624,7 +646,6 @@ class Orca:
         self.tabs = tabs
         self.workdirs = sorted({t.get("worktreePath") for t in terms.get("terminals", []) if t.get("worktreePath")})
         rows = rows[:MAX_SESSIONS]
-        active = active_tab()
         shown = next((r["id"] for r in rows if active and tabs.get(handles[r["id"]]) == active), "")
         return {"ok": True, "list": rows, "a": shown}
 

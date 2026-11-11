@@ -58,6 +58,7 @@ import typer
 import sync
 import version
 import crash_watch
+import sdpkg
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
 from collectors import orca_usage
@@ -399,7 +400,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--view", metavar="화면",
                         help="기기 화면 바꾸기: home / usage / usage_N(사용량 N 번째 페이지, 0 부터) / info / settings, 설정 분류는 settings_wifi / settings_bluetooth / settings_speaker / "
                              "settings_notify / settings_display / settings_battery / settings_camera / settings_sd / "
-                             "settings_general (settings_end 는 지금 화면의 맨 아래)")
+                             "settings_general / settings_orca_buttons (settings_end 는 지금 화면의 맨 아래)")
     parser.add_argument("--sd-pull", action="store_true", help="기기 SD 카드의 마지막 동영상을 받아 온다 (USB, 진단용)")
     parser.add_argument("--sd-clear", action="store_true", help="기기 SD 카드의 사진을 모두 지운다 (USB)")
     parser.add_argument("--rotate", action="store_true", help="기기 화면을 90도 돌린다 (돌리기 버튼과 같다)")
@@ -496,6 +497,8 @@ class DeviceLoop:
         self.peer = version.Peer()
         print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
         self.crash = crash_watch.CrashWatch()
+        # sd_package.py 가 준비한 설치 파일을 USB 로 이어진 기기 SD 카드에 넣는다
+        self.sd_pkg = sdpkg.SdPackage()
         frames.log_sink = self.crash.on_log_line
         self.transport = None
         # 기기 화면 미러링 (브라우저 창). 화면 조각은 연결 쪽에서 바로 넘긴다
@@ -522,7 +525,7 @@ class DeviceLoop:
             print("[device] 다른 PC 가 기기를 사용 중이라 제어 명령을 거절했습니다.")
         # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
         for handler in (self.speaker, self.receiver, self.movies, self.apps, self.keys, self.pc, self.ask,
-                        self.sessions, self.peer, self.crash, self.view):
+                        self.sessions, self.peer, self.crash, self.view, self.sd_pkg):
             try:
                 handler.on_event(event)
             except Exception:
@@ -702,10 +705,13 @@ class DeviceLoop:
                 print(f"[device] {self.transport.name} 연결이 끊겼습니다. 다시 연결합니다.")
                 self._disconnect()
                 return
+            self.sd_pkg.poll(self.transport)
             extra = self._small_updates()
             if extra and not self._send({**extra, "host": _host_name()}):
                 return
-            time.sleep(0.5)
+            # ORCA 에서 탭을 바꾸면 바로 다음 차례로 넘어가 기기가 빨리 따라간다 (S31 과 같다)
+            if self.sessions.tab_moved.wait(0.5):
+                self.sessions.tab_moved.clear()
 
     def _tick(self) -> bool:
         """한 바퀴. 한 번짜리 명령을 마쳐 끝낼 때만 True."""

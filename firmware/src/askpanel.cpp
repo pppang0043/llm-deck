@@ -34,6 +34,13 @@ static bool mic_ok = true;    // PC 마이크를 쓸 수 있는지 (PC 가 알�
 // 준비·듣기·답 받는 중이 된 마지막 시각. PC 가 이만큼 아무 말이 없으면 (도우미가 다시 켜졌거나 멈춤) 표시를 지운다
 #define BUSY_TIMEOUT_MS 70000
 static uint32_t busy_ms = 0;
+// 끝 신호는 약한 Wi-Fi 에서 빠질 수 있다 (2026-11-08: 보내지 못해 PC 가 60초를 기다렸다).
+// PC 가 녹음 중이 아닌 상태를 알려 올 때까지 1초마다 다시 보낸다. PC 는 녹음 중이 아니면 끝 신호를 무시한다
+#define STOP_RESENDS 8
+#define STOP_RESEND_MS 1000
+static int stop_resends = 0;
+static uint32_t stop_ms = 0;
+static const char *stop_json = "";
 
 static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
   lv_obj_t *lbl = lv_label_create(parent);
@@ -71,7 +78,7 @@ void askpanel_refresh() {
   ui_refresh_talk();
 }
 
-static bool press(bool dictate, const char *orca_id) {
+static bool press(bool dictate, const char *orca_id, bool browser = false) {
   int st = askpanel_talk_state();
   if (st == ASK_NO_PC) ui_toast("연결된 PC가 없습니다\nPC 도우미를 켜 주세요", 2500);
   if (st == ASK_NO_MIC) ui_toast(pcmic_why()[0] ? pcmic_why() : "PC에 쓸 수 있는 마이크가 없습니다", 2500);
@@ -84,10 +91,12 @@ static bool press(bool dictate, const char *orca_id) {
              dev ? ",\"dev_mic\":true" : "");
   } else {
     // 음소거를 풀어 두었으면 시작할 때도 알린다 (PC 가 60초에 스스로 녹음을 끝내도 읽어 주도록)
-    snprintf(json, sizeof(json), "{\"ask\":\"start\"%s%s}",
-             dictate ? ",\"mode\":\"dictate\"" : voice ? ",\"voice\":true" : "", dev ? ",\"dev_mic\":true" : "");
+    snprintf(json, sizeof(json), "{\"ask\":\"start\"%s%s%s}",
+             dictate ? ",\"mode\":\"dictate\"" : voice ? ",\"voice\":true" : "", dictate && browser ? ",\"browser\":true" : "",
+             dev ? ",\"dev_mic\":true" : "");
   }
   mic_set_ask(dev);
+  stop_resends = 0;  // 새 녹음을 끝내면 안 된다
   link_send_event(json);
   snprintf(dictate_target, sizeof(dictate_target), "%s", orca_id ? orca_id : "");
   talking = true;
@@ -111,13 +120,20 @@ bool askpanel_press_orca(const char *id) {
   return press(true, id);
 }
 
+bool askpanel_press_browser() {
+  return press(true, nullptr, true);
+}
+
 const char *askpanel_dictate_target() {
   return dictate_target;
 }
 
 bool askpanel_release() {
   if (!talking) return false;
-  link_send_event(voice && !dictating ? "{\"ask\":\"stop\",\"voice\":true}" : "{\"ask\":\"stop\"}");
+  stop_json = voice && !dictating ? "{\"ask\":\"stop\",\"voice\":true}" : "{\"ask\":\"stop\"}";
+  link_send_event(stop_json);
+  stop_resends = STOP_RESENDS;
+  stop_ms = millis();
   talking = false;
   mic_set_ask(false);
   if (dictating) {
@@ -279,6 +295,7 @@ void askpanel_set(JsonObjectConst ask) {
   // 받아쓰기는 질문 화면을 건드리지 않고 사용량 화면 버튼에만 보여 준다 (결과는 PC 가 알림으로 보낸다)
   // PC 가 녹음을 스스로 끝냈으면 (60초 넘음, 마이크 오류) 버튼도 듣는 중을 푼다
   bool recording = strcmp(state, "preparing") == 0 || strcmp(state, "listening") == 0;
+  if (!recording) stop_resends = 0;  // PC 가 끝 신호를 받았다
   if (talking && !recording) {
     talking = false;
     mic_set_ask(false);
@@ -330,6 +347,11 @@ void askpanel_set(JsonObjectConst ask) {
 }
 
 void askpanel_loop() {
+  if (stop_resends > 0 && millis() - stop_ms >= STOP_RESEND_MS) {
+    stop_ms = millis();
+    stop_resends--;
+    link_send_event(stop_json);
+  }
   if (!busy_ms || millis() - busy_ms < BUSY_TIMEOUT_MS) return;
   // PC 가 70초 동안 아무것도 안 보냈다. 듣는 중이었으면 (PC 는 60초에 스스로 끝낸다) 끝을 보내 본다
   if (talking) askpanel_release();

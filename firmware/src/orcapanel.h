@@ -11,6 +11,7 @@
 //   기기 -> PC: 버튼을 누르면 {"orca": "activate", "id": id}
 //              띄운 뒤 아래 팝업(키워드 단축키, Tab, Tab + Enter, Enter)을 누르면 {"orca": "send", "id": id, "key": 이름}
 //              띄운 버튼을 또 누르면 {"ask": "start", "mode": "dictate", "orca": id} ... {"ask": "stop"} (askpanel.cpp)
+//              팝업의 녹음 버튼은 {"ask": "start", "mode": "dictate", "browser": true}: 직전에 쓰던 브라우저 입력칸에 넣는다
 //              길게 누르면 빠른 답 창: 권한 요청은 허용 / 거부, 입력 기다림·완료는 계속 -> {"orca": "reply", "id": id, "reply": "allow" | "deny" | "continue"}
 // 상태가 바뀌면 (새 권한 요청, 작업 중 -> 완료·입력 기다림) 어느 화면에서나 알림과 소리 (처음 받은 목록은 알리지 않는다).
 // 팝업 버튼을 꾹 누르면 수정 / 위치 조정 / 취소. 배치와 이름의 원본은 PC 이고, 기기는 받은 것을 NVS 에 둔다.
@@ -36,3 +37,6 @@ void orcapanel_set_pop(JsonArrayConst rows);
 // PC 가 고친 내용을 보드에 저장한다 {"pop_set"}, 저장된 것을 PC 로 보낸다 {"pop_sync"}
 void orcapanel_save_edits(JsonArrayConst list);
 void orcapanel_send_saved();
+// 설정의 ORCA 버튼: 팝업 버튼을 많이 누른 순으로 "표시명  N회" 줄들 (없으면 빈 글). 지우기는 NVS 에서도 지운다
+void orcapanel_hits_text(char *out, size_t size);
+void orcapanel_hits_clear();

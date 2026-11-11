@@ -1637,8 +1637,15 @@ void ui_send_screenshot() {
   free(px);
 }
 
-static lv_obj_t *toast;
+static lv_obj_t *toast, *toast_lbl;
 static lv_timer_t *toast_timer;
+// 알림은 밝은 회백색 바탕에 검은 글자, 왼쪽에 종 아이콘, 검은 바깥 테두리 (S31 과 같다, 2026-11-08 "시인성 개선").
+// 전에는 어두운 회색이라 ORCA 팝업 같은 어두운 화면 위에서 묻혔다
+#define TOAST_BG 0xE8EEF5
+#define TOAST_PAD 12
+#define TOAST_BORDER 2
+#define TOAST_ICON 34
+#define TOAST_GAP 10
 
 // 지나간 알림 (설정 > 알림 기록). PSRAM 에 돌려 쓴다.
 #define TOAST_LOG 30
@@ -1721,19 +1728,41 @@ void ui_toast(const char *text, uint32_t ms) {
   log_toast(text);
   if (!toast) {
     // 모든 화면(카메라 포함) 위에 뜨는 알림
-    toast = lv_label_create(lv_layer_sys());
-    lv_obj_set_style_text_color(toast, lv_color_white(), 0);
-    lv_obj_set_style_text_align(toast, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_bg_color(toast, lv_color_hex(0x2A3038), 0);
+    toast = lv_obj_create(lv_layer_sys());
+    lv_obj_remove_style_all(toast);
+    lv_obj_set_size(toast, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(toast, lv_color_hex(TOAST_BG), 0);
     lv_obj_set_style_bg_opa(toast, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(toast, COLOR_ACCENT, 0);
-    lv_obj_set_style_border_width(toast, 2, 0);
     lv_obj_set_style_radius(toast, 10, 0);
-    lv_obj_set_style_pad_all(toast, 12, 0);
+    lv_obj_set_style_pad_all(toast, TOAST_PAD, 0);
+    lv_obj_set_style_pad_column(toast, TOAST_GAP, 0);
+    // 아래 화면과 구분: 검은 바깥 테두리와 안쪽 선
+    lv_obj_set_style_outline_width(toast, 4, 0);
+    lv_obj_set_style_outline_color(toast, lv_color_black(), 0);
+    lv_obj_set_style_border_width(toast, TOAST_BORDER, 0);
+    lv_obj_set_style_border_color(toast, lv_color_black(), 0);
+    lv_obj_set_style_border_opa(toast, LV_OPA_60, 0);
+    lv_obj_set_flex_flow(toast, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(toast, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(toast, LV_OBJ_FLAG_CLICKABLE);  // 예전 글자 알림처럼 아래 화면 누르기를 막지 않는다
+    lv_obj_clear_flag(toast, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *icon = lv_label_create(toast);
+    lv_obj_set_size(icon, TOAST_ICON, TOAST_ICON);
+    lv_obj_set_style_radius(icon, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(icon, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(icon, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(icon, lv_color_hex(TOAST_BG), 0);
+    lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_top(icon, (TOAST_ICON - 20) / 2, 0);
+    lv_label_set_text(icon, LV_SYMBOL_BELL);
+    toast_lbl = lv_label_create(toast);
+    lv_obj_set_style_text_color(toast_lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_align(toast_lbl, LV_TEXT_ALIGN_LEFT, 0);
     toast_timer = lv_timer_create(toast_hide, ms, NULL);
   }
   // 화면 폭에 맞춘다: 큰 글자로 한 줄이 넘치면 작은 글자로, 그래도 넘치면 줄을 바꾼다
-  int max_w = lv_disp_get_hor_res(NULL) - 16 - 2 * (12 + 2);
+  int max_w = lv_disp_get_hor_res(NULL) - 16 - 2 * (TOAST_PAD + TOAST_BORDER) - TOAST_ICON - TOAST_GAP;
   const lv_font_t *font = &font_ko_20;
   lv_point_t size;
   lv_txt_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -1741,10 +1770,10 @@ void ui_toast(const char *text, uint32_t ms) {
     font = &font_ko_14;
     lv_txt_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
   }
-  lv_obj_set_style_text_font(toast, font, 0);
-  lv_label_set_long_mode(toast, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(toast, size.x > max_w ? max_w + 2 * (12 + 2) : LV_SIZE_CONTENT);
-  lv_label_set_text(toast, text);
+  lv_obj_set_style_text_font(toast_lbl, font, 0);
+  lv_label_set_long_mode(toast_lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(toast_lbl, size.x > max_w ? max_w : LV_SIZE_CONTENT);
+  lv_label_set_text(toast_lbl, text);
   lv_obj_clear_flag(toast, LV_OBJ_FLAG_HIDDEN);
   lv_obj_align(toast, LV_ALIGN_CENTER, 0, 0);
   lv_timer_set_period(toast_timer, ms);

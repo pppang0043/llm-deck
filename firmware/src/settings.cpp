@@ -11,6 +11,7 @@
 #include "link.h"
 #include "health.h"
 #include "mic.h"
+#include "orcapanel.h"
 #include "net.h"
 #include "speaker.h"
 #include "speaker_proto.h"
@@ -69,8 +70,9 @@ static LinkOption link_options[] = {
 // 아이폰 설정처럼 첫 화면은 분류 목록이고, 누르면 그 분류의 화면으로 들어간다.
 // 들어간 화면에서 오른쪽으로 밀거나 "< 설정" 을 누르면 목록으로 돌아온다.
 enum Page { PAGE_LIST, PAGE_WIFI, PAGE_BLE, PAGE_SPEAKER, PAGE_NOTIFY, PAGE_DISPLAY, PAGE_BATTERY, PAGE_CAMERA, PAGE_SD,
-            PAGE_GENERAL, PAGE_INFO, PAGE_ALERTS, PAGE_COUNT };
-static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "speaker", "notify", "display", "battery", "camera", "sd", "general", "info", "alerts"};
+            PAGE_GENERAL, PAGE_INFO, PAGE_ALERTS, PAGE_ORCA_HITS, PAGE_COUNT };
+static const char *PAGE_KEYS[] = {"list", "wifi", "bluetooth", "speaker", "notify", "display", "battery", "camera", "sd", "general", "info", "alerts", "orca_buttons"};
+static_assert(sizeof(PAGE_KEYS) / sizeof(PAGE_KEYS[0]) == PAGE_COUNT, "PAGE_KEYS");
 static lv_obj_t *pages[PAGE_COUNT];
 static Page current = PAGE_LIST;
 
@@ -89,7 +91,7 @@ static lv_obj_t *ble_status, *ble_none;
 static lv_obj_t *ble_rows[BLE_MAX_PEERS], *ble_names[BLE_MAX_PEERS], *ble_states[BLE_MAX_PEERS];
 static lv_obj_t *bat_level, *bat_state, *bat_left;
 static lv_obj_t *sd_status, *sd_space, *sd_count, *sd_vcount;
-static lv_obj_t *uptime_value, *boot_value, *crash_value, *info_text, *alerts_text;
+static lv_obj_t *uptime_value, *boot_value, *crash_value, *info_text, *alerts_text, *hits_text;
 static lv_obj_t *spk_status, *spk_target, *spk_on_sw, *spk_keep_sw, *spk_vol_lbl, *spk_none, *spk_find_lbl;
 static lv_obj_t *spk_rows[SPK_MAX_FOUND], *spk_names[SPK_MAX_FOUND], *spk_signals[SPK_MAX_FOUND];
 
@@ -104,6 +106,7 @@ static Confirm wifi_clear_btn = {nullptr, "지우기", 0};
 static Confirm sd_clear_btn = {nullptr, "지우기", 0};
 static Confirm sd_format_btn = {nullptr, "포맷", 0};
 static Confirm spk_forget_btn = {nullptr, "잊기", 0};
+static Confirm hits_clear_btn = {nullptr, "지우기", 0};
 static lv_obj_t *sd_format_row;
 
 static bool confirmed(Confirm &c) {
@@ -377,6 +380,7 @@ static void show_page(Page page) {
   disarm(sd_clear_btn);
   disarm(sd_format_btn);
   disarm(spk_forget_btn);
+  disarm(hits_clear_btn);
   refresh_page();
 }
 
@@ -705,6 +709,7 @@ static void build_list(lv_obj_t *parent) {
   g = add_group(p);
   add_menu(g, LV_SYMBOL_BELL, 0xE0483C, "알림 및 사운드", PAGE_NOTIFY, nullptr);
   add_menu(g, LV_SYMBOL_LIST, 0xE0A030, "알림 기록", PAGE_ALERTS, nullptr);
+  add_menu(g, LV_SYMBOL_KEYBOARD, 0x6A4FB0, "ORCA 버튼", PAGE_ORCA_HITS, nullptr);
   add_menu(g, LV_SYMBOL_EYE_OPEN, 0x2F7DE1, "디스플레이", PAGE_DISPLAY, nullptr);
   add_menu(g, LV_SYMBOL_BATTERY_FULL, 0x4CAF50, "배터리", PAGE_BATTERY, &battery_value);
   add_menu(g, LV_SYMBOL_IMAGE, 0x6B7280, "카메라", PAGE_CAMERA, nullptr);
@@ -919,6 +924,29 @@ static void build_alerts(lv_obj_t *parent) {
   add_note(p, "기기를 다시 켜면 지워집니다.");
 }
 
+// ORCA 버튼: 세션 팝업 버튼을 누른 횟수 (많은 순). 배치를 정할 때 본다
+static void show_hits() {
+  static char *buf = (char *)ps_malloc(2048);
+  if (!buf) return;
+  orcapanel_hits_text(buf, 2048);
+  lv_label_set_text(hits_text, buf[0] ? buf : "아직 누른 버튼이 없습니다");
+}
+
+static void hits_clear_clicked(lv_event_t *e) {
+  if (!confirmed(hits_clear_btn)) return;
+  orcapanel_hits_clear();
+  show_hits();
+}
+
+static void build_hits(lv_obj_t *parent) {
+  lv_obj_t *p = add_sub_page(parent, PAGE_ORCA_HITS, "ORCA 버튼");
+  hits_text = add_note_label(p, "");
+  lv_obj_set_style_text_color(hits_text, lv_color_white(), 0);
+  lv_obj_set_style_text_line_space(hits_text, 6, 0);
+  add_button(add_row(p, "기록 지우기", nullptr), "지우기", hits_clear_clicked, &hits_clear_btn.label, true);
+  add_note(p, "ORCA 세션 팝업의 버튼과 스킬을 누른 횟수입니다. 10초마다 기기에 저장해서 끄기 직전 것은 빠질 수 있습니다.");
+}
+
 static void show_alerts() {
   static char *buf = (char *)ps_malloc(TOAST_HISTORY_SIZE);
   ui_toast_history(buf, TOAST_HISTORY_SIZE);
@@ -947,6 +975,7 @@ void settings_build(lv_obj_t *parent) {
   build_general(parent);
   build_info(parent);
   build_alerts(parent);
+  build_hits(parent);
   // 켤 때는 값만 숨기고 보이기만 한다 (SD 카드 등은 설정을 열 때 읽는다)
   lv_obj_clear_flag(pages[PAGE_LIST], LV_OBJ_FLAG_HIDDEN);
 }
@@ -1198,6 +1227,9 @@ static void refresh_page() {
       break;
     case PAGE_ALERTS:
       show_alerts();
+      break;
+    case PAGE_ORCA_HITS:
+      show_hits();
       break;
     default:
       break;
