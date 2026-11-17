@@ -36,15 +36,24 @@ void usb_reconnect(const char *why) {
 }
 
 void usb_link_loop() {
-  // PC 에서 받은 뒤로 아직 다시 붙이지 않았다. 다시 붙인 뒤에도 안 오면 되풀이하지 않는다 (도우미를 끈 PC, 충전기)
+  // PC 에서 받은 뒤로 아직 다시 붙이지 않았다
   static bool armed = false;
+  // 이번 부팅에서 PC 도우미가 보낸 적이 있다. 다시 붙여도 PC 가 계속 아무것도 보내지 않는데 USB 신호(SOF)는 오가면
+  // 간격을 두 배씩 (최대 30분) 늘려 다시 해 본다. 한 번만 하던 때는 도우미가 쓰기 timeout 만 14시간 넘게 되풀이했다
+  // (2026-11-14 Mac). 충전기·잠든 PC 는 USB 신호가 없어 하지 않는다. 도우미를 끈 PC 에서는 30분마다 다시 붙는다
+  static bool seen_pc = false;
+  static uint32_t retry_gap = RX_GAP_MS, retry_ms = 0;
   if (Serial.available()) {
     rx_ms = millis() ? millis() : 1;
-    armed = true;
+    armed = seen_pc = true;
+    retry_gap = RX_GAP_MS;
   }
+  const char *why = nullptr;
   if (armed && millis() - rx_ms > RX_GAP_MS) {
-    armed = false;
-    usb_reconnect("nothing from the PC for 2 minutes");
+    why = "nothing from the PC for 2 minutes";
+  } else if (!armed && seen_pc && Serial.isPlugged() && millis() - retry_ms > retry_gap) {
+    why = "still nothing from the PC";
+    retry_gap = min<uint32_t>(retry_gap * 2, 30 * 60000);
   }
   // 보내기 버퍼의 빈자리가 늘었으면 PC 가 가져간 것이다. 0 은 잠금 대기일 수도 있어 보지 않는다
   static int most_free = 0, last_free = 0;
@@ -53,10 +62,11 @@ void usb_link_loop() {
   if (room > most_free) most_free = room;
   if (room == most_free || (room > 0 && room > last_free) || !armed || !Serial.isPlugged()) moved_ms = millis();
   if (room > 0) last_free = room;
-  if (millis() - moved_ms > TX_STALL_MS) {
+  if (millis() - moved_ms > TX_STALL_MS) why = "the PC stopped taking data for 30 s";
+  if (why) {
     armed = false;
-    moved_ms = millis();
-    usb_reconnect("the PC stopped taking data for 30 s");
+    moved_ms = retry_ms = millis();
+    usb_reconnect(why);
   }
   // 입력이 계속 쌓여도 link_loop/UI 가 돌아가야 큐가 비워지고 명령이 실행된다.
   // 긴 JSON 은 다음 loop 에 이어 받는다. 사진/터치 부하 중에도 입력만 읽으며 굶지 않는다.
