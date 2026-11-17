@@ -29,6 +29,9 @@ bool settings_limit_alerts();
 // 연결 방식을 쓸지 (link.h 의 Link 값: USB / 블루투스 / Wi-Fi / 클라우드). 끈 방식으로 오는 데이터는 받지 않는다.
 bool settings_link_allowed(int link);
 void settings_set_link_allowed(int link, bool allowed);
+// 빠른 설정 "PC 연결 끊기": 켜 두면 USB·블루투스·Wi-Fi 연결이 모두 꺼진 것처럼 된다 (각 스위치 값은 그대로, 재부팅해도 유지)
+bool settings_pc_off();
+void settings_set_pc_off(bool off);
 
 // 찍은 사진을 SD 카드에도 저장할지
 bool settings_sd_photos();

@@ -88,3 +88,14 @@ def test_collect_gpu_multi_disk_and_legacy_fields(monkeypatch):
     stats.gpu.percent = lambda now: None
     data = stats.collect()
     assert data["disks"] == [] and data["gpu"] is None and data["disk_text"] == "-"
+
+
+def test_windows_cpu_matches_task_manager_and_falls_back(monkeypatch):
+    # Windows 는 작업 관리자 값(% Processor Utility), 못 읽거나 다른 OS 면 psutil
+    monkeypatch.setattr(pcstats.psutil, "cpu_percent", lambda interval: 26)
+    reading = [None]
+    monkeypatch.setattr(pcstats, "WindowsCpu", lambda: NS(percent=lambda now: reading[0]))
+    stats = pcstats.PcStats()
+    assert stats._cpu() == 26
+    reading[0] = 62
+    assert stats._cpu() == 62

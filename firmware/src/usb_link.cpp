@@ -9,6 +9,9 @@
 #define MAX_LINE 16384
 // PC 에서 받던 것이 이만큼 끊기면 USB 를 다시 붙인다 (도우미는 USB 로 30초마다 보낸다)
 #define RX_GAP_MS 120000
+// 보낼 것이 쌓였는데 PC 가 이만큼 하나도 가져가지 않으면 USB 를 다시 붙인다.
+// Windows 에서 PC→기기는 되는데 기기→PC 가 멈추거나, 둘 다 멈춰 케이블을 다시 꽂아야만 풀린 적이 있다
+#define TX_STALL_MS 30000
 
 static std::string line;
 static uint32_t rx_ms = 0;
@@ -42,6 +45,18 @@ void usb_link_loop() {
   if (armed && millis() - rx_ms > RX_GAP_MS) {
     armed = false;
     usb_reconnect("nothing from the PC for 2 minutes");
+  }
+  // 보내기 버퍼의 빈자리가 늘었으면 PC 가 가져간 것이다. 0 은 잠금 대기일 수도 있어 보지 않는다
+  static int most_free = 0, last_free = 0;
+  static uint32_t moved_ms = 0;
+  int room = Serial.availableForWrite();
+  if (room > most_free) most_free = room;
+  if (room == most_free || (room > 0 && room > last_free) || !armed || !Serial.isPlugged()) moved_ms = millis();
+  if (room > 0) last_free = room;
+  if (millis() - moved_ms > TX_STALL_MS) {
+    armed = false;
+    moved_ms = millis();
+    usb_reconnect("the PC stopped taking data for 30 s");
   }
   // 입력이 계속 쌓여도 link_loop/UI 가 돌아가야 큐가 비워지고 명령이 실행된다.
   // 긴 JSON 은 다음 loop 에 이어 받는다. 사진/터치 부하 중에도 입력만 읽으며 굶지 않는다.

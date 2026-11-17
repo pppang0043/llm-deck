@@ -4,6 +4,7 @@
 #include "display.h"
 #include "completion_inbox.h"
 #include "ui.h"
+#include "settings.h"
 #include <new>
 
 LV_FONT_DECLARE(font_ko_14);
@@ -12,8 +13,9 @@ LV_FONT_DECLARE(font_ko_20);
 struct QuickPanel {
   lv_disp_t *display = nullptr;
   lv_obj_t *overlay = nullptr, *sheet = nullptr, *handle = nullptr;
-  lv_obj_t *title = nullptr, *close = nullptr, *sleep = nullptr, *drive = nullptr, *hint = nullptr;
+  lv_obj_t *title = nullptr, *close = nullptr, *sleep = nullptr, *drive = nullptr, *pc = nullptr, *hint = nullptr;
   lv_obj_t *sleep_name = nullptr, *sleep_detail = nullptr, *drive_name = nullptr, *drive_detail = nullptr;
+  lv_obj_t *pc_name = nullptr, *pc_detail = nullptr;
   lv_obj_t *notices = nullptr, *notice_text = nullptr, *banner = nullptr, *banner_text = nullptr;
   lv_obj_t *status = nullptr, *status_text = nullptr, *status_anchor = nullptr;
   bool tracking = false, header_touch = false;
@@ -53,6 +55,19 @@ static void drive_clicked(lv_event_t *) {
   if (on_drive) on_drive();
 }
 
+static void show_pc(QuickPanel &p) {
+  if (!p.pc) return;
+  bool off = settings_pc_off();
+  lv_label_set_text(p.pc_name, off ? "PC 다시 연결" : "PC 연결 끊기");
+  lv_label_set_text(p.pc_detail, off ? "지금 PC 와 끊겨 있음" : "USB/Wi-Fi/블루투스");
+  lv_obj_set_style_bg_color(p.pc, lv_color_hex(off ? 0x4A2A2A : 0x2E2A40), 0);
+}
+
+static void pc_clicked(lv_event_t *) {
+  settings_set_pc_off(!settings_pc_off());
+  for (QuickPanel &p : panels) show_pc(p);
+}
+
 static void layout(QuickPanel &p) {
   int w = lv_disp_get_hor_res(p.display), h = lv_disp_get_ver_res(p.display);
   if (p.banner) {
@@ -63,10 +78,10 @@ static void layout(QuickPanel &p) {
   if (!p.overlay) return;
   lv_obj_set_size(p.overlay, w, h);
   lv_obj_set_pos(p.overlay, 0, 0);
-  // 왼쪽은 알림, 오른쪽은 버튼 2개. 세로 화면은 폭이 좁아 버튼 이름을 줄이고 설명을 두 줄로 나눈다
+  // 왼쪽은 알림, 오른쪽은 버튼 3개. 세로 화면은 폭이 좁아 버튼 이름을 줄이고 설명을 두 줄로 나눈다
   bool narrow = w < 300;
-  int button_w = narrow ? 110 : 150, button_h = narrow ? 64 : 56;
-  int column_h = button_h * 2 + 8, button_x = 12 + (w - 40) - button_w;
+  int button_w = narrow ? 110 : 150, button_h = narrow ? 64 : 48;
+  int column_h = button_h * 3 + 16, button_x = 12 + (w - 40) - button_w;
   lv_obj_set_size(p.sheet, w - 16, LV_MIN(h - 8, 56 + column_h + 52));
   lv_obj_set_pos(p.sheet, 8, 4);
   lv_obj_set_size(p.handle, 30, 3);
@@ -81,13 +96,15 @@ static void layout(QuickPanel &p) {
   lv_obj_set_pos(p.sleep, button_x, 56);
   lv_obj_set_size(p.drive, button_w, button_h);
   lv_obj_set_pos(p.drive, button_x, 56 + button_h + 8);
-  for (lv_obj_t *name : {p.sleep_name, p.drive_name}) {
+  lv_obj_set_size(p.pc, button_w, button_h);
+  lv_obj_set_pos(p.pc, button_x, 56 + (button_h + 8) * 2);
+  for (lv_obj_t *name : {p.sleep_name, p.drive_name, p.pc_name}) {
     lv_obj_set_style_text_font(name, narrow ? &font_ko_14 : &font_ko_20, 0);
-    lv_obj_set_pos(name, 8, narrow ? 5 : 6);
+    lv_obj_set_pos(name, 8, narrow ? 5 : 3);
   }
-  for (lv_obj_t *detail : {p.sleep_detail, p.drive_detail}) {
+  for (lv_obj_t *detail : {p.sleep_detail, p.drive_detail, p.pc_detail}) {
     lv_obj_set_width(detail, button_w - 16);
-    lv_obj_set_pos(detail, 8, narrow ? 24 : 32);
+    lv_obj_set_pos(detail, 8, narrow ? 24 : 27);
   }
   lv_obj_set_pos(p.hint, 12, 56 + column_h + 8);
   lv_obj_set_width(p.hint, w - 40);
@@ -154,6 +171,18 @@ static void build(QuickPanel &p) {
   p.drive_detail = label(p.drive, "PC 에서 SD 카드 열기", &font_ko_14, 0xA9B8C8);
   lv_label_set_long_mode(p.drive_detail, LV_LABEL_LONG_WRAP);
   lv_obj_add_event_cb(p.drive, drive_clicked, LV_EVENT_CLICKED, nullptr);
+
+  p.pc = lv_btn_create(p.sheet);
+  lv_obj_remove_style_all(p.pc);
+  lv_obj_clear_flag(p.pc, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(p.pc, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(p.pc, lv_color_hex(0x5A4A70), LV_STATE_PRESSED);
+  lv_obj_set_style_radius(p.pc, 8, 0);
+  p.pc_name = label(p.pc, "", &font_ko_20, 0xE0D4F0);
+  p.pc_detail = label(p.pc, "", &font_ko_14, 0xC0B8C8);
+  lv_label_set_long_mode(p.pc_detail, LV_LABEL_LONG_WRAP);
+  lv_obj_add_event_cb(p.pc, pc_clicked, LV_EVENT_CLICKED, nullptr);
+  show_pc(p);
   p.hint = label(p.sheet, "터치 / BOOT 버튼으로 깨우기\n상단을 위로 쓸어 닫기", &font_ko_14, 0x8A939E);
   layout(p);
   lv_obj_add_flag(p.overlay, LV_OBJ_FLAG_HIDDEN);
@@ -191,6 +220,7 @@ static void open_panel(QuickPanel &p) {
     hide_banners(nullptr);
     refresh_counts();
   }
+  show_pc(p);
   layout(p);
   lv_obj_scroll_to_y(p.sheet, 0, LV_ANIM_OFF);
   lv_obj_scroll_to_y(p.notices, 0, LV_ANIM_OFF);

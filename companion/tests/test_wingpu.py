@@ -35,6 +35,7 @@ class FakePdh:
         self.api = NS(PdhOpenQueryW=self.function(self.open), PdhAddEnglishCounterW=self.function(self.add),
                       PdhCollectQueryData=self.function(self.collect),
                       PdhGetFormattedCounterArrayW=self.function(self.array),
+                      PdhGetFormattedCounterValue=self.function(self.value),
                       PdhCloseQuery=self.function(lambda query: self.closed.append(query.value)))
 
     @staticmethod
@@ -49,7 +50,7 @@ class FakePdh:
         return 0
 
     def add(self, query, path, user, counter):
-        assert path == r"\GPU Engine(*)\Utilization Percentage"
+        self.path = path
         counter._obj.value = 200
         return int(self.fail_add)
 
@@ -68,6 +69,10 @@ class FakePdh:
             items[i].value.data.doubleValue = value
         return 0
 
+    def value(self, counter, format, kind, value):
+        value._obj.status, value._obj.data.doubleValue = 0, self.cpu
+        return 0
+
 
 def make(monkeypatch, **kwargs):
     fake = FakePdh(**kwargs)
@@ -82,6 +87,7 @@ def test_pdh_warmup_valid_statuses_and_cleanup(monkeypatch):
     assert gpu.percent(100) is None  # first rate sample
     assert gpu.percent(103) == 70  # invalid third item is ignored
     assert api.opens == 1 and api.collects == 2
+    assert api.path == r"\GPU Engine(*)\Utilization Percentage"
     gpu.close()
     gpu.close()
     assert api.closed == [100]
@@ -109,3 +115,14 @@ def test_collect_failure_closes_query(monkeypatch):
 def test_other_platform_no_windows_api(monkeypatch):
     monkeypatch.setattr(wingpu.sys, "platform", "darwin")
     assert wingpu.WindowsGpu().percent(100) is None
+
+
+def test_cpu_utility_counter_capped_at_100(monkeypatch):
+    _, api = make(monkeypatch)
+    cpu = wingpu.WindowsCpu()
+    assert cpu.percent(100) is None  # first rate sample
+    assert api.path == r"\Processor Information(_Total)\% Processor Utility"
+    api.cpu = 61.6
+    assert cpu.percent(103) == 62
+    api.cpu = 137.0  # 터보 클럭
+    assert cpu.percent(106) == 100

@@ -823,3 +823,17 @@ def test_second_helper_explains_and_stops(rig, monkeypatch, capsys):
     assert rig.run() == "finished"
     assert "이미 다른 도우미" in capsys.readouterr().out
     assert rig.connects == []
+
+
+def test_stuck_usb_reconnects_slowly(rig, monkeypatch):
+    # 기기에서 아무것도 받지 못한 채 보내기가 연달아 실패하면 (Windows 의 Write timeout) 다시 붙는 간격을 늘린다
+    monkeypatch.setattr(main, "_usb_stuck", 0)
+    stuck = []
+    for _ in range(4):
+        usb = FakeTransport(fail_sends=1)
+        usb.last_rx = usb.opened_at
+        stuck.append(usb)
+    rig.transports = stuck + [FakeTransport()]
+    rig.run(ticks=5)
+    assert rig.sleeps[:4] == [2, 2, main.USB_STUCK_WAIT, main.USB_STUCK_WAIT]
+    assert main._usb_stuck == 0  # 다시 받으면 처음 간격으로

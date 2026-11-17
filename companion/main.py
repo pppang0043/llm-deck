@@ -316,6 +316,7 @@ def usb_plugged(cfg: dict) -> bool:
     return TRANSPORTS["usb"](cfg.get("device", {}), lambda seq, pcm: None)._find_port() is not None
 
 
+USB_STUCK_WAIT = 30
 _usb_stuck = 0  # 기기에서 아무것도 받지 못한 채 USB 로 보내기가 연달아 실패한 횟수
 
 
@@ -729,7 +730,8 @@ class DeviceLoop:
         if self.transport:
             self._serve_until_next_usage()
         else:
-            time.sleep(2)
+            # USB 가 응답 없이 연달아 실패하면 천천히 붙는다. 붙을 때마다 기기가 연결 상태를 바꿔 화면을 다시 그린다
+            time.sleep(USB_STUCK_WAIT if _usb_stuck >= 3 else 2)
         return False
 
     def run(self) -> None:

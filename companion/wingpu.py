@@ -40,6 +40,8 @@ def _busiest_engine(samples: list[tuple[str, float]]) -> int | None:
 
 
 class WindowsGpu:
+    COUNTER = r"\GPU Engine(*)\Utilization Percentage"
+
     def __init__(self) -> None:
         self.query = _HANDLE()
         self.counter = _HANDLE()
@@ -54,6 +56,7 @@ class WindowsGpu:
                     "PdhCollectQueryData": ([_HANDLE], _DWORD),
                     "PdhGetFormattedCounterArrayW": ([_HANDLE, _DWORD, ct.POINTER(_DWORD),
                                                        ct.POINTER(_DWORD), ct.POINTER(_Item)], _DWORD),
+                    "PdhGetFormattedCounterValue": ([_HANDLE, _DWORD, ct.POINTER(_DWORD), ct.POINTER(_Value)], _DWORD),
                     "PdhCloseQuery": ([_HANDLE], _DWORD),
                 }
                 for name, (args, result) in signatures.items():
@@ -78,8 +81,7 @@ class WindowsGpu:
             if self.pdh.PdhOpenQueryW(None, 0, ct.byref(self.query)):
                 self.close()
                 return None
-            if self.pdh.PdhAddEnglishCounterW(self.query, r"\GPU Engine(*)\Utilization Percentage",
-                                             0, ct.byref(self.counter)):
+            if self.pdh.PdhAddEnglishCounterW(self.query, self.COUNTER, 0, ct.byref(self.counter)):
                 self.close()
                 return None
             self.pdh.PdhCollectQueryData(self.query)  # 비율은 두 번의 표본이 있어야 한다
@@ -89,6 +91,9 @@ class WindowsGpu:
             self.close()
             self.retry_at = now + 60
             return None
+        return self._read()
+
+    def _read(self) -> int | None:
         # 인스턴스 수가 바뀌면 길이를 다시 물어본다.
         for _ in range(3):
             size, count = _DWORD(), _DWORD()
@@ -107,3 +112,14 @@ class WindowsGpu:
             return _busiest_engine([(items[i].name or "", items[i].value.data.doubleValue)
                                     for i in range(count.value) if items[i].value.status in (0, 1)])
         return None
+
+
+class WindowsCpu(WindowsGpu):
+    """작업 관리자와 같은 CPU 사용률. psutil 은 "프로세서 시간"이라 터보 클럭에서 작업 관리자보다 1.25~1.6배 낮게 나온다."""
+    COUNTER = r"\Processor Information(_Total)\% Processor Utility"
+
+    def _read(self) -> int | None:
+        value = _Value()
+        if self.pdh.PdhGetFormattedCounterValue(self.counter, _FMT_DOUBLE, None, ct.byref(value)) or value.status not in (0, 1):
+            return None
+        return min(100, max(0, round(value.data.doubleValue)))  # 터보 클럭이면 100 을 넘는다

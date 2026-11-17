@@ -15,7 +15,7 @@ import time
 
 import psutil
 
-from wingpu import WindowsGpu
+from wingpu import WindowsCpu, WindowsGpu
 
 WATCH_SECONDS = 15
 SEND_EVERY = 3
@@ -103,6 +103,8 @@ class PcStats:
         self.sent_at = 0.0
         psutil.cpu_percent(interval=None)  # 첫 호출은 0 이 나오므로 미리 한 번
         self.gpu = MacGpu() if sys.platform == "darwin" else WindowsGpu()
+        self.cpu = WindowsCpu()  # Windows 가 아니면 늘 None 이라 psutil 값을 쓴다
+        self.cpu.percent(time.monotonic())
         self._net = psutil.net_io_counters()
         self._net_at = time.time()
 
@@ -113,6 +115,11 @@ class PcStats:
     def due(self) -> bool:
         now = time.time()
         return now < self.watch_until and now - self.sent_at >= SEND_EVERY
+
+    def _cpu(self) -> int:
+        fallback = round(psutil.cpu_percent(interval=None))  # 비율 기준점을 늘 새로 잡는다
+        cpu = self.cpu.percent(time.monotonic())
+        return fallback if cpu is None else cpu
 
     def collect(self) -> dict:
         self.sent_at = time.time()
@@ -125,7 +132,7 @@ class PcStats:
         up = (net.bytes_sent - self._net.bytes_sent) / span
         self._net, self._net_at = net, now
         stats = {
-            "cpu": round(psutil.cpu_percent(interval=None)),
+            "cpu": self._cpu(),
             "ram": round(mem.percent),
             "ram_text": f"{_size(mem.used)} / {_size(mem.total)}",
             # 예전 펌웨어도 시스템 디스크 한 개는 계속 표시한다.

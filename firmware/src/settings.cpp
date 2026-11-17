@@ -65,6 +65,8 @@ static LinkOption link_options[] = {
     {LINK_WIFI, "lk_wifi", true, nullptr},
     {LINK_CLOUD, "lk_cloud", true, nullptr},
 };
+// 빠른 설정 "PC 연결 끊기": 위 스위치는 그대로 두고 USB·블루투스·Wi-Fi 로 PC 와 주고받기를 모두 멈춘다 (클라우드는 PC 가 아니다)
+static bool pc_off = false;
 
 // ---- 화면 구성 ----
 // 아이폰 설정처럼 첫 화면은 분류 목록이고, 누르면 그 분류의 화면으로 들어간다.
@@ -153,12 +155,13 @@ void settings_init() {
   spk_keep = prefs.getBool("spk_keep", false);
   spk_vol = prefs.getUChar("spk_vol", 60);
   for (LinkOption &o : link_options) o.allowed = prefs.getBool(o.key, true);
+  pc_off = prefs.getBool("pc_off", false);
   display_set_brightness(brightness);
 }
 
 bool settings_link_allowed(int link) {
   for (const LinkOption &o : link_options) {
-    if (o.link == link) return o.allowed;
+    if (o.link == link) return o.allowed && !(pc_off && link != LINK_CLOUD);
   }
   return true;
 }
@@ -178,6 +181,15 @@ void settings_set_link_allowed(int link, bool allowed) {
   }
   apply_links();
   Serial.printf("[settings] link %d %s\n", link, allowed ? "on" : "off");
+}
+
+bool settings_pc_off() { return pc_off; }
+
+void settings_set_pc_off(bool off) {
+  pc_off = off;
+  prefs.putBool("pc_off", off);
+  apply_links();
+  Serial.printf("[settings] pc link %s\n", off ? "off" : "on");
 }
 
 static void link_changed(lv_event_t *e) {

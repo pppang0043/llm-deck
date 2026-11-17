@@ -306,6 +306,46 @@ static void check_trend(int raw) {
   trend_n = 0;
 }
 
+// ---- 배터리로 쓴 기록 ----
+// 배터리로 쓰는 동안은 기기 기록이 PC 에 닿지 않아, 잔량 표(battery_level.cpp CURVE)를 실제 방전에 맞출 자료가 없었다.
+// 뽑은 뒤 5분마다 보정 전 전압·보인 잔량·부하를 NVS 에 적어 두고 (다 써서 꺼져도 남는다), USB 로 PC 에 이어지면 한 번 출력한다.
+// 꺼지기 직전 값까지 남으므로, 다 쓸 때까지 걸린 시간으로 전압별 실제 잔량을 구할 수 있다.
+#define LOG_EVERY_MIN 5
+#define LOG_MAX 240  // 최근 20시간
+struct __attribute__((packed)) BatSample {
+  uint16_t minute;   // 이번 부팅에서 배터리로 쓴 분
+  uint16_t raw_mv;   // 보정 전 전압
+  uint8_t pct;       // 화면에 보인 잔량
+  uint8_t backlight; // 화면 밝기 %
+  uint8_t cpu_mhz10; // CPU MHz / 10
+  uint8_t flags;     // 1: 이번 부팅의 첫 기록 (깊은 잠·재시작 뒤), 2: 카메라·녹화 중
+};
+static BatSample bat_log[LOG_MAX];
+static int bat_log_n = 0;
+static uint16_t battery_minutes = 0;
+
+static void log_discharge() {
+  static bool first = true;
+  ++battery_minutes;
+  if (battery_minutes % LOG_EVERY_MIN) return;
+  if (bat_log_n == LOG_MAX) memmove(bat_log, bat_log + 1, sizeof(BatSample) * --bat_log_n);
+  bat_log[bat_log_n++] = {battery_minutes, (uint16_t)raw_mv, (uint8_t)battery_pct(),
+                          (uint8_t)(ledcRead(LCD_BL) * 100 / 1023), (uint8_t)(getCpuFrequencyMhz() / 10),
+                          (uint8_t)((first ? 1 : 0) | (camera_ui_open() || video_recording() ? 2 : 0))};
+  first = false;
+  prefs.putBytes("bat_log", bat_log, sizeof(BatSample) * bat_log_n);
+}
+
+static void print_discharge_log() {
+  Serial.printf("[battery-log] %d samples every %d min, scale %.4f, full raw %d\n", bat_log_n, LOG_EVERY_MIN, scale,
+                full_raw);
+  for (int i = 0; i < bat_log_n; i++) {
+    const BatSample &s = bat_log[i];
+    Serial.printf("[battery-log] %u min, raw %u mV, %u%%, backlight %u%%, cpu %u MHz%s%s\n", s.minute, s.raw_mv, s.pct,
+                  s.backlight, s.cpu_mhz10 * 10, s.flags & 1 ? ", boot" : "", s.flags & 2 ? ", camera" : "");
+  }
+}
+
 static void update(int mv) {
   if (mv < NO_BATTERY_MV) {
     restart_readings();
@@ -323,6 +363,10 @@ static void update(int mv) {
   if (linked && !was_linked && millis() < USB_SETTLE_MS + 5000) level.skip_offset_measure();
   charging = charger_by_voltage || linked;
   if (charging != was_charging) {
+    if (!charging) {  // 뽑았다: 이번 방전을 새로 적는다
+      bat_log_n = 0;
+      battery_minutes = 0;
+    }
     restart_readings();
     full = false;
     minute_n = 0;
@@ -342,6 +386,7 @@ void battery_init() {
   scale = prefs.getFloat("bat_scale", 1.0f);
   scale_manual = prefs.getBool("bat_manual", false);
   full_raw = prefs.getShort("bat_full_raw", 0);
+  bat_log_n = prefs.getBytes("bat_log", bat_log, sizeof(bat_log)) / sizeof(BatSample);
   // 가장 높은 평탄 값을 쓰기 전에 저장한 자동 배율은 덜 찬 값에 맞춘 것일 수 있어 버린다
   // (ADC 자체 보정만 써도 그보다 가깝다: 충전 끝 4151~4158mV 로 4150 과 0.2% 차이)
   if (!full_raw && scale_saved && !scale_manual) {
@@ -439,6 +484,17 @@ void battery_loop() {
   int mv = read_mv();
   update(mv);
   save_level();
+  static uint32_t linked_ms = 0;
+  static bool log_printed = false;
+  if (!linked) {
+    linked_ms = 0;
+    log_printed = false;
+  } else if (!linked_ms) {
+    linked_ms = millis();
+  } else if (!log_printed && bat_log_n && millis() - linked_ms > 30000) {
+    log_printed = true;  // 도우미가 포트를 연 뒤에 보낸다
+    print_discharge_log();
+  }
   // 1분마다 기록을 남긴다 (충전/방전 추세 확인용)
   static uint32_t logged_ms = 0;
   if (millis() - logged_ms >= 60000) {
@@ -446,6 +502,7 @@ void battery_loop() {
     check_trend(raw_mv);
     check_full(raw_mv);
     track_drain();
+    if (!charging && raw_mv >= NO_BATTERY_MV) log_discharge();
     Serial.printf("[battery] %d mV (now %d, raw %d), %d%% (voltage %d%%), %s%s\n", battery_mv(), mv, raw_mv,
                   battery_pct(), battery_mv_to_pct(battery_mv()),
                   linked ? "USB power" : charging ? "charger" : "on battery",

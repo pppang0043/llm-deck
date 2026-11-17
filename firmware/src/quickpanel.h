@@ -2,7 +2,7 @@
 #include <lvgl.h>
 
 // 상단에서 아래로 쓸면 빠른 설정, 위로 쓸거나 바깥/닫기를 누르면 닫는다.
-// sleep_handler: 절전 모드 버튼, drive_handler: USB 드라이브 버튼
+// sleep_handler: 절전 모드 버튼, drive_handler: USB 드라이브 버튼. 세 번째 "PC 연결 끊기" 버튼은 settings_set_pc_off 를 바로 부른다
 void quickpanel_init(void (*sleep_handler)(), void (*drive_handler)());
 void quickpanel_layout();
 // ORCA 완료 알림: 양쪽 화면 가운데 팝업. 팝업 노출은 읽음이 아니며 상단 목록을 열면 읽음 처리.
