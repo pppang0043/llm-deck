@@ -3,6 +3,7 @@
 #include <string>
 
 #include "link.h"
+#include "usb_drive.h"
 #include "soc/soc.h"
 #include "soc/usb_serial_jtag_reg.h"
 
@@ -49,7 +50,10 @@ void usb_link_loop() {
     retry_gap = RX_GAP_MS;
   }
   const char *why = nullptr;
-  if (armed && millis() - rx_ms > RX_GAP_MS) {
+  // USB 드라이브 중에는 USB 가 저장장치 쪽이라 시리얼로 오는 것이 없다. 여기서 다시 붙이면 복사 중인 카드가 끊긴다
+  if (usb_drive_active()) {
+    armed = seen_pc = false;
+  } else if (armed && millis() - rx_ms > RX_GAP_MS) {
     why = "nothing from the PC for 2 minutes";
   } else if (!armed && seen_pc && Serial.isPlugged() && millis() - retry_ms > retry_gap) {
     why = "still nothing from the PC";

@@ -336,13 +336,26 @@ static void log_discharge() {
   prefs.putBytes("bat_log", bat_log, sizeof(BatSample) * bat_log_n);
 }
 
+// 한 줄씩 보내다 PC 가 받아 가지 않으면 (USB 가 멈춤) 그만둔다. 줄마다 최대 0.4초씩 기다려 화면이 1분 넘게 멈출 수 있다
+static bool send_line(const char *fmt, ...) {
+  char buf[128];
+  va_list args;
+  va_start(args, fmt);
+  int n = vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  n = min(n, (int)sizeof(buf) - 1);
+  return Serial.write((const uint8_t *)buf, n) == (size_t)n;
+}
+
 static void print_discharge_log() {
-  Serial.printf("[battery-log] %d samples every %d min, scale %.4f, full raw %d\n", bat_log_n, LOG_EVERY_MIN, scale,
-                full_raw);
+  if (!send_line("[battery-log] %d samples every %d min, scale %.4f, full raw %d\n", bat_log_n, LOG_EVERY_MIN, scale,
+                 full_raw))
+    return;
   for (int i = 0; i < bat_log_n; i++) {
     const BatSample &s = bat_log[i];
-    Serial.printf("[battery-log] %u min, raw %u mV, %u%%, backlight %u%%, cpu %u MHz%s%s\n", s.minute, s.raw_mv, s.pct,
-                  s.backlight, s.cpu_mhz10 * 10, s.flags & 1 ? ", boot" : "", s.flags & 2 ? ", camera" : "");
+    if (!send_line("[battery-log] %u min, raw %u mV, %u%%, backlight %u%%, cpu %u MHz%s%s\n", s.minute, s.raw_mv, s.pct,
+                   s.backlight, s.cpu_mhz10 * 10, s.flags & 1 ? ", boot" : "", s.flags & 2 ? ", camera" : ""))
+      return;
   }
 }
 
