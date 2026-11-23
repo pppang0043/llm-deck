@@ -504,7 +504,7 @@ void battery_loop() {
     track_drain();
     if (!charging && raw_mv >= NO_BATTERY_MV) log_discharge();
     Serial.printf("[battery] %d mV (now %d, raw %d), %d%% (voltage %d%%), %s%s\n", battery_mv(), mv, raw_mv,
-                  battery_pct(), battery_mv_to_pct(battery_mv()),
+                  battery_pct(), charging ? battery_mv_to_pct(battery_mv()) : battery_discharge_pct(battery_mv()),
                   linked ? "USB power" : charging ? "charger" : "on battery",
                   full ? ", full" : "");
     if (charging) Serial.printf("[battery] charge offset %d mV\n", level.charge_offset_mv());

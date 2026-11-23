@@ -24,7 +24,14 @@ int main() {
     // 배터리로 켜졌으면 저장값을 쓰지 않는다 (꺼진 사이 줄었을 수 있다)
     BatteryLevel level;
     level.resume(93);
-    assert(level.update(3820, false, false, 0) == 50);
+    assert(level.update(3820, false, false, 0) == 88);
+  }
+  {
+    // 2026-11 실측: 화면을 끄고 3.70V 에서도 다 쓸 때까지 남은 시간의 70% 가 남아 있었다 (예전 표는 10%)
+    assert(battery_discharge_pct(3695) == 71);
+    assert(battery_discharge_pct(4100) == 100 && battery_discharge_pct(3000) == 0);
+    // 충전 중 표는 그대로 (충전 시간과 맞는다)
+    assert(battery_mv_to_pct(3820) == 50);
   }
   {
     // 전압으로 짐작한 값이 더 높으면 그것을 쓴다
