@@ -48,6 +48,11 @@ def config_text() -> tuple[str, str]:
     return example.replace('gist_id = ""', f'gist_id = "{gist}"', 1), gist
 
 
+def helper_version() -> str:
+    out = subprocess.run(["git", "describe", "--always", "--dirty", "--exclude", "*"], cwd=ROOT, capture_output=True, text=True)
+    return out.stdout.strip() or "unknown"
+
+
 def check_no_token(out: Path) -> None:
     """토큰이 섞여 들어가지 않았는지 확인한다. 있으면 압축 파일을 지우고 멈춘다"""
     with zipfile.ZipFile(out) as z:
@@ -80,6 +85,8 @@ def main() -> None:
                 arc = "llm-deck-companion/app/" + name
             z.write(ROOT / f, arc)
         z.writestr("llm-deck-companion/app/config.toml", config.replace("\n", "\r\n"))
+        # 설치한 PC 에는 git 이 없어 도우미 버전을 모른다. 기기 설정 > 정보 에 이 커밋이 보인다
+        z.writestr("llm-deck-companion/app/VERSION", helper_version())
 
     check_no_token(OUT)
     # 회사 보안 프로그램이 막는 exe 같은 실행 파일은 넣지 않는다 (누르는 .cmd 만. PowerShell 스크립트도 넣지 않는다)

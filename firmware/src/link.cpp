@@ -76,7 +76,9 @@ static volatile Link active = LINK_NONE;
 static HelperInfo helper = {};
 // 이번 연결에서 펌웨어 버전을 알렸는지, 버전이 달라 알림을 띄웠는지
 static bool told_proto = false;
-static bool warned_proto = false;
+// 버전이 다르다고 알린 PC 와 그 proto. 같은 PC 는 부팅마다 한 번만 알린다.
+// 연결이 USB↔블루투스로 오갈 때마다 다시 띄우면, 최신 도우미를 쓰는 PC 에서도 다른 PC 의 옛 도우미 알림이 되풀이된다
+static char warned_for[48] = "";
 // 버전을 알린 시각. 이상 재시작 기록은 이만큼 뒤에 알린다 (Wi-Fi 는 사용량을 처리한 뒤에야 UDP 서명과 목적지가 정해진다)
 static uint32_t told_ms = 0;
 #define CRASH_TELL_DELAY_MS 3000
@@ -178,7 +180,7 @@ static Link best_link() {
 static void set_active(Link link) {
   if (link == active) return;
   active = link;
-  told_proto = warned_proto = false;
+  told_proto = false;
   ui_set_status(link_name(link));
   Serial.printf("[link] active: %s\n", link_tag(link));
 }
@@ -187,7 +189,7 @@ static void set_active(Link link) {
 static void note_helper(JsonObjectConst doc) {
   JsonObjectConst h = doc["helper"];
   // 같은 연결 방식이라도 다른 PC 로 바뀌면 다시 맞춰 본다
-  if (strcmp(helper.host, doc["host"] | "") != 0) told_proto = warned_proto = false;
+  if (strcmp(helper.host, doc["host"] | "") != 0) told_proto = false;
   helper.known = true;
   helper.proto = h["proto"] | 0;
   strlcpy(helper.host, doc["host"] | "", sizeof(helper.host));
@@ -203,12 +205,19 @@ static void note_helper(JsonObjectConst doc) {
     snprintf(json, sizeof(json), "{\"fw_proto\":%d,\"fw\":\"%s\",\"build\":\"%s\"}", FW_PROTO, __DATE__ " " __TIME__, firmware_build_id());
     link_send_event(json);
   }
-  if (helper.proto != FW_PROTO && !warned_proto) {
-    warned_proto = true;
-    Serial.printf("[link] helper proto %d, firmware proto %d\n", helper.proto, FW_PROTO);
-    ui_toast(helper.proto < FW_PROTO ? "PC 도우미가 펌웨어보다 오래되었습니다. PC 도우미를 업데이트하세요"
-                                     : "펌웨어가 PC 도우미보다 오래되었습니다. 펌웨어를 올리세요",
-             8000);
+  char key[sizeof(warned_for)];
+  snprintf(key, sizeof(key), "%s/%d", helper.host, helper.proto);
+  if (helper.proto != FW_PROTO && strcmp(key, warned_for) != 0) {
+    strlcpy(warned_for, key, sizeof(warned_for));
+    Serial.printf("[link] helper proto %d on %s via %s, firmware proto %d\n", helper.proto, helper.host[0] ? helper.host : "?",
+                  link_tag(active), FW_PROTO);
+    // 어느 PC 인지 적는다. 블루투스로 붙은 다른 PC 의 옛 도우미를 지금 PC 의 것으로 오해한 적이 있다
+    char text[160];
+    snprintf(text, sizeof(text),
+             helper.proto < FW_PROTO ? "%s (%s) 의 PC 도우미가 오래되었습니다. 그 PC 의 도우미를 업데이트하세요"
+                                     : "%s (%s) 의 PC 도우미보다 펌웨어가 오래되었습니다. 펌웨어를 올리세요",
+             helper.host[0] ? helper.host : "PC", link_name(active));
+    ui_toast(text, 8000);
   }
 }
 

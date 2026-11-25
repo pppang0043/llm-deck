@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 
 PROTO = 7
-# git 이 없거나 저장소 밖에서 돌 때 보여줄 버전
-VERSION = "proto6"
+# git 이 없거나 저장소 밖에서 돌 때 보여줄 버전. 압축 파일에는 만든 커밋을 VERSION 파일로 넣는다 (make_zip.py)
+VERSION = f"proto{PROTO}"
 # 기기가 버전을 알려 주지 않은 채 사용량을 이만큼 보내면 오래된 펌웨어로 본다
 SILENT_SENDS = 3
 
@@ -34,6 +34,11 @@ def version() -> str:
             _version = out.stdout.strip()[:23] if out.returncode == 0 else ""
         except (OSError, subprocess.SubprocessError):
             _version = ""
+        if not _version:
+            try:
+                _version = Path(__file__).with_name("VERSION").read_text().strip()[:23]
+            except OSError:
+                pass
         _version = _version or VERSION
     return _version
 

@@ -51,3 +51,14 @@ def test_version_names_the_commit_not_a_long_tag(monkeypatch):
     monkeypatch.setattr(version.subprocess, "run", run)
     assert version.version() == "7ef83ab-dirty"
     assert "--tags" not in calls[0] and calls[0][-2:] == ["--exclude", "*"]
+
+
+def test_version_without_git_reads_version_file(monkeypatch, tmp_path):
+    """git 없이 설치한 Windows PC 는 압축 파일에 든 VERSION 을 쓰고, 그것도 없으면 지금 proto 로 적는다 (예전엔 늘 proto6)."""
+    monkeypatch.setattr(version, "_version", None)
+    monkeypatch.setattr(version.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(version, "__file__", str(tmp_path / "version.py"))
+    assert version.version() == f"proto{version.PROTO}"
+    (tmp_path / "VERSION").write_text("f122c10\n")
+    monkeypatch.setattr(version, "_version", None)
+    assert version.version() == "f122c10"

@@ -12,7 +12,6 @@ config.toml 은 예시 파일에 이 PC 의 gist_id 만 채우고 토큰 같은 
 """
 
 import hashlib
-import subprocess
 import sys
 import time
 import zipfile
@@ -67,14 +66,10 @@ def build_mac() -> Path:
         for f in files:
             z.write(ROOT / f, "llm-deck-companion/" + f[len("companion/") :])
         z.writestr("llm-deck-companion/config.toml", config)
+        z.writestr("llm-deck-companion/VERSION", make_zip.helper_version())
     make_zip.check_no_token(MAC_OUT)
     print(f"{MAC_OUT} ({len(files)}개 파일)")
     return MAC_OUT
-
-
-def helper_version() -> str:
-    out = subprocess.run(["git", "describe", "--always", "--dirty", "--exclude", "*"], cwd=ROOT, capture_output=True, text=True)
-    return out.stdout.strip() or "unknown"
 
 
 def stage(folder: Path, zips: list[Path], version: str) -> Path:
@@ -93,7 +88,7 @@ def stage(folder: Path, zips: list[Path], version: str) -> Path:
 
 def main() -> None:
     make_zip.main()
-    folder = stage(STAGE, [make_zip.OUT, build_mac()], helper_version())
+    folder = stage(STAGE, [make_zip.OUT, build_mac()], make_zip.helper_version())
     print(f"{folder} 에 준비했습니다. 도우미가 USB 로 이어진 기기 SD 카드에 넣습니다 (도우미 기록 [sd-pkg])")
 
 
