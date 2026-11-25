@@ -36,7 +36,6 @@
 #include "saver.h"
 #include "sd_video.h"
 #include "storage.h"
-#include "helper_pkg.h"
 #include "pcmic.h"
 #include "usb_link.h"
 #include "net.h"
@@ -435,8 +434,6 @@ static bool apply_usb_commands(JsonObjectConst doc) {
   // 진단용: SD 카드의 마지막 동영상을 PC 로 보낸다
   if (doc["sd_pull"] == true && !photo_send_last_video()) ok = false;
   if (doc["health_clear"] == true) health_clear();
-  // PC 도우미 설치 파일을 SD 카드에 받는다 (helper_pkg.h)
-  if (doc["pkg"].is<JsonObjectConst>()) helper_pkg_command(doc["pkg"]);
   // 진단용: 일부러 멈춰서 감시 장치가 다시 켜는지 본다
   if (doc["hang_test"] == true) {
     Serial.println("[health] hang test");

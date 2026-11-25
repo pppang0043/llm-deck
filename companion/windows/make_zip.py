@@ -20,8 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "dist" / "llm-deck-companion-windows.zip"
 TOP = ("install.cmd", "uninstall.cmd", "mirror.cmd", "config.cmd", "README.txt", "INSTALL.txt")
 # Windows 에서 쓰지 않는 것 (Mac 설치, 이 Mac 에서만 돌리는 도구, 테스트)
-SKIP = ("companion/macos/", "companion/windows/make_zip.py", "companion/windows/pack_model.py", "companion/tests/",
-        "companion/sd_package.py")
+SKIP = ("companion/macos/", "companion/windows/make_zip.py", "companion/windows/pack_model.py", "companion/tests/")
 
 
 def export_requirements() -> None:

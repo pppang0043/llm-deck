@@ -104,14 +104,6 @@ PC 에 깔린 64비트 Python 3.11~3.14 가 있어야 한다 (회사 보안이 �
 
 압축 파일 다시 만들기 (gist 주소만 넣고 토큰은 넣지 않는다. `requirements.txt` 도 uv.lock 으로 새로 만든다): 이 저장소에서 `companion/.venv/bin/python companion/windows/make_zip.py`.
 
-### SD 카드로 새 PC 에 설치
-
-도우미를 고칠 때마다 `companion/.venv/bin/python companion/sd_package.py` 를 실행한다. Windows·Mac 압축 파일, 설치 방법 `README.txt`, `version.txt` 를 `dist/LLM-Deck-Helper/` 에 만든다.
-도우미(`companion/sdpkg.py`)는 기기에 USB 로 이어져 있으면 1분마다 그 폴더의 `version.txt` 를 카드의 것과 비교해, 다르면 기기 SD 카드의 `/LLM-Deck-Helper/` 에 6KB 조각으로 보낸다 (`version.txt` 는 맨 마지막. 끊기면 다음에 다시. 기록 `[sd-pkg]`).
-기기는 USB 로 온 것만 받고(`firmware/src/helper_pkg.cpp`), 녹화가 카드에 쓰는 중에는 받지 않는다. `dist/LLM-Deck-Helper/` 가 없는 PC(설치한 도우미)는 보내지 않는다.
-새 PC 에 설치할 때는 기기를 USB 로 꽂고 USB 드라이브를 켠 뒤, 카드의 압축 파일을 PC 로 복사해 풀고 `README.txt` 를 따른다.
-Mac 압축 파일은 `uv sync` 와 `sh macos/install.sh` 로 설치하고, Xcode 명령줄 도구와 uv 가 있어야 한다. 음성 인식 모델과 비밀 값(토큰·API 키)은 넣지 않는다.
-
 ### 저장 위치
 
 | | Mac | Windows |

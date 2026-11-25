@@ -59,7 +59,6 @@ import typer
 import sync
 import version
 import crash_watch
-import sdpkg
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
 from collectors import orca_usage
@@ -531,8 +530,6 @@ class DeviceLoop:
         self.peer = version.Peer()
         print(f"[version] 도우미 {version.version()} (proto {version.PROTO})")
         self.crash = crash_watch.CrashWatch()
-        # sd_package.py 가 준비한 설치 파일을 USB 로 이어진 기기 SD 카드에 넣는다
-        self.sd_pkg = sdpkg.SdPackage()
         frames.log_sink = self.crash.on_log_line
         self.transport = None
         # 기기 화면 미러링 (브라우저 창). 화면 조각은 연결 쪽에서 바로 넘긴다
@@ -559,7 +556,7 @@ class DeviceLoop:
             print("[device] 다른 PC 가 기기를 사용 중이라 제어 명령을 거절했습니다.")
         # 한 곳에서 오류가 나도 나머지는 알림을 받는다 (오류는 기록만 하고 받는 스레드는 계속 돈다)
         for handler in (self.speaker, self.receiver, self.movies, self.apps, self.keys, self.pc, self.ask,
-                        self.sessions, self.peer, self.crash, self.view, self.sd_pkg):
+                        self.sessions, self.peer, self.crash, self.view):
             try:
                 handler.on_event(event)
             except Exception:
@@ -741,7 +738,6 @@ class DeviceLoop:
                 print(f"[device] {self.transport.name} 연결이 끊겼습니다. 다시 연결합니다.")
                 self._disconnect()
                 return
-            self.sd_pkg.poll(self.transport)
             extra = self._small_updates()
             if extra and not self._send({**extra, "host": _host_name()}):
                 return

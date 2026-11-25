@@ -4,7 +4,6 @@
 """
 
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -237,7 +236,6 @@ class Rig:
         monkeypatch.setattr(main, "load_config", lambda: {})
         monkeypatch.setattr(main, "_private_files", lambda: None)
         monkeypatch.setattr(main, "_host_name", lambda: "pc")
-        monkeypatch.setattr(main.sdpkg, "STAGE", Path("/nonexistent"))  # 이 저장소의 dist/ 준비물을 보내지 않게
         monkeypatch.setattr(main.faulthandler, "register", lambda *a, **k: None, raising=False)
         monkeypatch.setattr(main, "connect", self._connect)
         monkeypatch.setattr(main, "usb_plugged", lambda cfg: self.plugged)
