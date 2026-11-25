@@ -4,6 +4,7 @@
 (화면을 안 볼 때는 보내지 않아 블루투스를 아낀다).
 """
 
+import ctypes
 import functools
 import ntpath
 import os
@@ -46,14 +47,26 @@ def _mac_disk_image(mount: str) -> bool:
         return False
 
 
+def _windows_drives() -> list[str]:
+    """이동식·고정 드라이브 문자. psutil.disk_partitions 는 드라이브마다 볼륨 정보를 읽어 2초 넘게 걸리고
+    (네트워크 드라이브가 있으면 더), 그동안 기기로 보내는 것이 멈춰 기기 PC 상태 화면이 "받는 중" 에 머물렀다."""
+    kernel32 = ctypes.windll.kernel32
+    mask = kernel32.GetLogicalDrives()
+    roots = [f"{chr(65 + i)}:\\" for i in range(26) if mask >> i & 1]
+    return [r for r in roots if kernel32.GetDriveTypeW(r) in (2, 3)]  # DRIVE_REMOVABLE, DRIVE_FIXED
+
+
 def _disks() -> list[dict]:
     """시스템 디스크와 접근 가능한 로컬 드라이브. 네트워크/광학 드라이브, Mac 의 디스크 이미지(.dmg)는 제외."""
     system = _system_disk()
     candidates = [system]
     try:
-        candidates += [p.mountpoint for p in psutil.disk_partitions(all=False)
-                       if p.fstype and p.fstype.lower() not in ("cdfs", "udf", "smbfs", "cifs", "nfs", "nfs4")
-                       and "remote" not in p.opts.lower() and "cdrom" not in p.opts.lower()]
+        if sys.platform == "win32":
+            candidates += _windows_drives()
+        else:
+            candidates += [p.mountpoint for p in psutil.disk_partitions(all=False)
+                           if p.fstype and p.fstype.lower() not in ("cdfs", "udf", "smbfs", "cifs", "nfs", "nfs4")
+                           and "remote" not in p.opts.lower() and "cdrom" not in p.opts.lower()]
     except OSError:
         pass
     seen: set[str] = set()

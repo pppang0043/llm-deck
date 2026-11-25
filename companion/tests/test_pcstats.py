@@ -8,17 +8,23 @@ def partition(mount, fstype="NTFS", opts="rw"):
     return NS(mountpoint=mount, device=mount, fstype=fstype, opts=opts)
 
 
+def drives(monkeypatch, types):
+    """Windows 드라이브 문자와 종류 (3 고정, 2 이동식, 4 네트워크, 5 CD)."""
+    mask = sum(1 << (ord(root[0]) - 65) for root in types)
+    kernel32 = NS(GetLogicalDrives=lambda: mask, GetDriveTypeW=lambda root: types[root])
+    monkeypatch.setattr(pcstats.ctypes, "windll", NS(kernel32=kernel32), raising=False)
+
+
 @pytest.fixture
 def windows(monkeypatch):
     monkeypatch.setattr(pcstats.sys, "platform", "win32")
     monkeypatch.setattr(pcstats, "_system_disk", lambda: "C:\\")
+    # 2초 넘게 걸려 기기로 보내기가 멈췄다. Windows 에서는 부르지 않는다
+    monkeypatch.setattr(pcstats.psutil, "disk_partitions", lambda all: pytest.fail("disk_partitions on Windows"))
 
 
 def test_all_local_drives_skip_inaccessible_and_remote(windows, monkeypatch):
-    monkeypatch.setattr(pcstats.psutil, "disk_partitions", lambda all: [
-        partition("c:\\"), partition("D:\\"), partition("E:\\"),
-        partition("Z:\\", opts="rw,remote"), partition("F:\\", "CDFS"),
-    ])
+    drives(monkeypatch, {"C:\\": 3, "D:\\": 3, "E:\\": 2, "F:\\": 5, "Z:\\": 4})
     calls = []
 
     def usage(mount):
@@ -36,7 +42,7 @@ def test_all_local_drives_skip_inaccessible_and_remote(windows, monkeypatch):
 
 
 def test_empty_or_unavailable_drives_do_not_break_collection(windows, monkeypatch):
-    monkeypatch.setattr(pcstats.psutil, "disk_partitions", lambda all: [partition("D:\\")])
+    drives(monkeypatch, {"D:\\": 2})
     monkeypatch.setattr(pcstats.psutil, "disk_usage", lambda mount: NS(total=0, free=0, percent=0))
     assert pcstats._disks() == []
 
