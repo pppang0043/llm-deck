@@ -459,6 +459,15 @@ static bool apply_usb_commands(JsonObjectConst doc) {
       storage_clear("/videos");
     }
   }
+  // 읽을 수 없는 카드를 FAT32 로 포맷한다 (설정의 "카드 포맷" 버튼과 같다, 읽히는 카드는 건드리지 않는다)
+  if (doc["sd_format"] == true) {
+    if (sd_video_active()) {
+      ok = false;
+      Serial.println("[link] sd_format refused: video still being written");
+    } else {
+      ok = storage_format() && ok;
+    }
+  }
   return ok;
 }
 

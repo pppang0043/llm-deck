@@ -40,7 +40,7 @@ int main() {
   assert(message_allowed(LINK_BLE, LINK_USB, false, doc.as<JsonObjectConst>()));
 
   // USB 전용 명령
-  for (const char *text : {"{\"links\":{\"ble\":false}}", "{\"sd_pull\":true}", "{\"sd_clear\":true}",
+  for (const char *text : {"{\"links\":{\"ble\":false}}", "{\"sd_pull\":true}", "{\"sd_clear\":true}", "{\"sd_format\":true}",
                            "{\"health_clear\":true}", "{\"hang_test\":true}", "{\"crash_test\":true}",
                            "{\"wifi_add\":{\"ssid\":\"x\"}}", "{\"wifi_clear\":true}"}) {
     assert(!deserializeJson(doc, text));

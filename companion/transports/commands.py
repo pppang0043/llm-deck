@@ -19,7 +19,7 @@ from .keepalive import KeepaliveTransport
 COMMAND_FIELDS = frozenset({
     "mic", "battery_mv", "camera", "view", "camera_mount", "saver", "i2c_test", "usb_reconnect",
     "rotate", "photo_test", "wifi_add", "wifi_clear", "ble_use", "bt_check", "sd_pull",
-    "health_clear", "hang_test", "crash_test", "sd_clear", "screenshot", "links", "camera_ctl",
+    "health_clear", "hang_test", "crash_test", "sd_clear", "sd_format", "screenshot", "links", "camera_ctl",
 })
 STATES = frozenset({"queued", "running", "done", "failed", "uncertain", "unknown", "stale",
                     "rejected", "invalid", "forbidden", "clients_full", "busy", "conflict", "storage_error"})

@@ -405,6 +405,7 @@ def _parser() -> argparse.ArgumentParser:
                              "settings_general / settings_orca_buttons (settings_end 는 지금 화면의 맨 아래)")
     parser.add_argument("--sd-pull", action="store_true", help="기기 SD 카드의 마지막 동영상을 받아 온다 (USB, 진단용)")
     parser.add_argument("--sd-clear", action="store_true", help="기기 SD 카드의 사진을 모두 지운다 (USB)")
+    parser.add_argument("--sd-format", action="store_true", help="읽을 수 없는 기기 SD 카드를 FAT32 로 포맷한다 (USB, 카드 내용 지워짐)")
     parser.add_argument("--rotate", action="store_true", help="기기 화면을 90도 돌린다 (돌리기 버튼과 같다)")
     parser.add_argument("--saver", action="store_true", help="기기의 화면 보호기를 지금 띄운다 (화면을 만지면 사라짐)")
     parser.add_argument("--screenshot", action="store_true", help="기기 화면을 찍어 사진 폴더에 저장한다 (진단용)")
@@ -483,6 +484,8 @@ def _one_shot_fields(args) -> dict:
         fields["sd_pull"] = True
     if args.sd_clear:
         fields["sd_clear"] = True
+    if args.sd_format:
+        fields["sd_format"] = True
     if args.bt_check:
         fields["bt_check"] = args.bt_check
     if args.rotate:
@@ -660,6 +663,8 @@ class DeviceLoop:
             time.sleep(1)
         elif args.camera in ("open", "close", "gallery") or args.camera_mount or args.camera_ctl or args.links:
             time.sleep(2)
+        elif args.sd_format:
+            time.sleep(60)  # 큰 카드는 포맷이 수십 초 걸린다
         elif (args.view or args.saver or args.sd_clear or args.rotate) and not args.screenshot:
             time.sleep(1)
         elif args.test_photo or args.screenshot or args.sd_pull or args.camera in ("shoot", "dump"):

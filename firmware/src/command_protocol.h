@@ -7,12 +7,12 @@
 static const char *const COMMAND_FIELDS[] = {
   "mic", "battery_mv", "camera", "view", "camera_mount", "saver", "i2c_test", "usb_reconnect",
   "rotate", "photo_test", "wifi_add", "wifi_clear", "ble_use", "bt_check", "sd_pull",
-  "health_clear", "hang_test", "crash_test", "sd_clear", "screenshot", "links", "camera_ctl"
+  "health_clear", "hang_test", "crash_test", "sd_clear", "sd_format", "screenshot", "links", "camera_ctl"
 };
 
 // 케이블로 꽂은 PC 만 보낼 수 있는 명령 (Wi-Fi 비밀번호, 진단, 카드 지우기, 연결 방식)
 static const char *const USB_ONLY_FIELDS[] = {
-  "links", "sd_pull", "sd_clear", "health_clear", "hang_test", "crash_test", "wifi_add", "wifi_clear"
+  "links", "sd_pull", "sd_clear", "sd_format", "health_clear", "hang_test", "crash_test", "wifi_add", "wifi_clear"
 };
 
 inline bool valid_command(JsonObjectConst body) {

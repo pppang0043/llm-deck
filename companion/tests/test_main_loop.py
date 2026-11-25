@@ -344,6 +344,7 @@ def test_usage_asks_firmware_version_while_unknown(rig, monkeypatch):
     (["--screenshot"], {"screenshot": True}),
     (["--sd-pull"], {"sd_pull": True}),
     (["--sd-clear"], {"sd_clear": True}),
+    (["--sd-format"], {"sd_format": True}),
     (["--bt-check"], {"bt_check": True}),
     (["--bt-check", "all"], {"bt_check": "all"}),
     (["--rotate"], {"rotate": True}),
