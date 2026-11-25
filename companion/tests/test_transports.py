@@ -222,3 +222,27 @@ def test_usb_read_loop_does_not_wait_for_a_full_block():
     t = usb.UsbTransport({}, lambda seq, pcm: None, on_event=events.append)
     t._read_loop(Ser())
     assert events == [{}]
+
+
+def test_usb_write_timeout_logs_both_directions(capsys):
+    """회사 PC 의 USB 멈춤: 쓰기가 끊기면 마지막으로 받은 때·쓴 때·오간 양을 한 줄로 남긴다."""
+    import pytest
+    import serial
+
+    from transports import usb
+
+    class Ser:
+        port, is_open, in_waiting, out_waiting = "COM3", True, 0, 4096
+
+        def write(self, data):
+            raise serial.SerialTimeoutException("Write timeout")
+
+    t = usb.UsbTransport({}, lambda seq, pcm: None)
+    t.ser, t.confirmed, t.paired = Ser(), True, True
+    t.opened_at = t.last_rx = 1.0
+    t.rx_bytes = 1234
+    with pytest.raises(OSError):
+        t.send({"x": 1})
+    line = capsys.readouterr().out
+    assert "[USB-diag] 쓰기 실패 (SerialTimeoutException: Write timeout)" in line
+    assert "COM3" in line and "rx 1234 B" in line and "last write never" in line and "out 4096 B" in line

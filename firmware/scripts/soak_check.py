@@ -35,8 +35,12 @@ def log_size(log: Path) -> int:
         return 0
 
 
+# 도우미가 기록 줄 앞에 붙이는 시각 (main.py _Stamped)
+_STAMP = re.compile(r"^\d\d-\d\d \d\d:\d\d:\d\d ")
+
+
 def _is_crash(line: str) -> bool:
-    text = line.strip()
+    text = _STAMP.sub("", line.strip()).strip()
     if text.startswith("[crash] "):
         return True
     return text.startswith(DEVICE_PREFIX) and _crash_watch.is_crash_line(text[len(DEVICE_PREFIX):])

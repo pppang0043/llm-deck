@@ -29,6 +29,7 @@ import getpass
 import json
 import os
 import platform
+import re
 import socket
 import subprocess
 import sys
@@ -423,10 +424,39 @@ def _log_to_file(name: str) -> None:
     path = Path(name).expanduser()
     try:
         if path.stat().st_size > LOG_LIMIT:
+            # 회사 PC 에서 USB 가 멈춘 뒤 도우미를 몇 번 다시 켜도 그때 기록이 남게 세 개까지 둔다 (.1 이 가장 최근)
+            for i in (2, 1):
+                old = path.with_name(f"{path.name}.{i}")
+                if old.exists():
+                    old.replace(path.with_name(f"{path.name}.{i + 1}"))
             path.replace(path.with_name(path.name + ".1"))
     except OSError:
         pass  # 없거나, 앞 도우미가 아직 잡고 있으면 (Windows) 이번에는 그대로 이어 쓴다
     sys.stdout = sys.stderr = open(path, "a", encoding="utf-8", buffering=1)
+
+
+class _Stamped:
+    """기록 파일의 줄마다 시각을 붙인다. USB 가 언제 멈췄는지 기기 기록([usb-log])과 맞춰 보려고."""
+
+    def __init__(self, out):
+        self.out, self.fresh, self.lock = out, True, threading.Lock()
+
+    def write(self, text: str) -> int:
+        with self.lock:
+            parts = []
+            for piece in re.findall(r"[^\n]*\n|[^\n]+", text):
+                if self.fresh:
+                    parts.append(time.strftime("%m-%d %H:%M:%S "))
+                parts.append(piece)
+                self.fresh = piece.endswith("\n")
+            self.out.write("".join(parts))
+        return len(text)
+
+    def flush(self) -> None:
+        self.out.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.out, name)
 
 
 def _pairs(text: str) -> list[list[str]]:
@@ -813,6 +843,8 @@ def main() -> None:
         faulthandler.register(signal.SIGUSR1, all_threads=True)
     if args.log:
         _log_to_file(args.log)
+    if sys.stdout and not sys.stdout.isatty():  # 기록 파일 (Windows --log, Mac launchd)
+        sys.stdout = sys.stderr = _Stamped(sys.stdout)
     if args.install_statusline:
         return statusline.install()
     if args.uninstall_statusline:

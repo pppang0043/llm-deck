@@ -87,6 +87,22 @@ class UsbTransport:
         # Wi-Fi 인증 키를 받았는지, 마지막으로 달라고 한 시각 (auth.py). 케이블로 연결했을 때만 받는다
         self.paired = False
         self._pair_asked = 0.0
+        # 회사 Windows PC 의 USB 멈춤 원인을 찾으려고 남기는 것: 주고받은 양, 마지막으로 쓰기가 끝난 시각
+        self.rx_bytes = self.tx_bytes = 0
+        self.last_tx = 0.0
+        self._stat_at = self._stat_rx = self._stat_tx = 0
+
+    def diag(self) -> str:
+        """멈췄을 때 어느 쪽이 먼저 멈췄는지 보려는 한 줄."""
+        now = time.time()
+        ser = self.ser
+        try:
+            waiting = f"in {ser.in_waiting} B, out {ser.out_waiting} B" if ser and ser.is_open else "port closed"
+        except (serial.SerialException, OSError, AttributeError, TypeError) as e:
+            waiting = f"queue unknown ({type(e).__name__})"
+        ago = lambda t: f"{now - t:.0f}s" if t else "never"  # noqa: E731
+        return (f"{ser.port if ser else '-'}: opened {ago(self.opened_at)} ago, last rx {ago(self.last_rx)} ago, "
+                f"last write {ago(self.last_tx)} ago, rx {self.rx_bytes} B, tx {self.tx_bytes} B, {waiting}")
 
     def on_event(self, event) -> None:
         pair = event.get("pair") if isinstance(event, dict) else None
@@ -122,6 +138,10 @@ class UsbTransport:
             return False
         self.ser = ser
         self.opened_at = self.last_rx = time.time()
+        self.rx_bytes = self.tx_bytes = 0
+        self.last_tx = 0.0
+        self._stat_at, self._stat_rx, self._stat_tx = time.time(), 0, 0
+        print(f"[USB-diag] 열었습니다: {port} (serial {self.serial_number or '?'})")
         # 설정에 포트를 직접 적었거나 전에 확인한 기기면 바로 믿는다
         self.confirmed = bool(self.port_name) or (self.serial_number and self.serial_number == _known_serial())
         threading.Thread(target=self._read_loop, args=(ser,), daemon=True).start()
@@ -154,8 +174,13 @@ class UsbTransport:
             self.close()
             return False
         if self._silent():
+            print(f"[USB-diag] 조용함: {self.diag()}")
             self._reset_device()
             return False
+        if time.time() - self._stat_at >= 60:
+            # 1분마다 양쪽으로 얼마나 오갔는지. 기기의 [usb-stat] 과 함께 보면 어느 방향이 먼저 멈췄는지 보인다
+            print(f"[USB-diag] 1분: rx {self.rx_bytes - self._stat_rx} B, tx {self.tx_bytes - self._stat_tx} B | {self.diag()}")
+            self._stat_at, self._stat_rx, self._stat_tx = time.time(), self.rx_bytes, self.tx_bytes
         return self.port_name != "" or any(p.device == self.ser.port for p in list_ports.comports())
 
     def _silent(self) -> bool:
@@ -192,11 +217,13 @@ class UsbTransport:
             raise OSError("not an LLM Deck")
         try:
             with self._send_lock:
-                self.ser.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
+                self.tx_bytes += self.ser.write(json.dumps(message, separators=(",", ":")).encode() + b"\n") or 0
                 if not self.paired and time.time() - self._pair_asked > 30:
                     self._pair_asked = time.time()
-                    self.ser.write(b'{"pair":true}\n')
+                    self.tx_bytes += self.ser.write(b'{"pair":true}\n') or 0
+                self.last_tx = time.time()
         except (serial.SerialException, AttributeError) as e:
+            print(f"[USB-diag] 쓰기 실패 ({type(e).__name__}: {e}): {self.diag()}")
             raise OSError(str(e)) from e
 
     def close(self) -> None:
@@ -212,10 +239,13 @@ class UsbTransport:
                 # 와 있는 만큼만 읽는다. read(4096) 은 4096바이트가 찰 때까지 timeout(0.5초) 을 기다려
                 # 화면 장의 마지막 조각과 이벤트가 다음 데이터가 올 때까지 늦었다. 없으면 1바이트를 timeout 까지 기다린다
                 data = ser.read(max(1, ser.in_waiting))
-            except (serial.SerialException, OSError, TypeError):
+            except (serial.SerialException, OSError, TypeError, AttributeError) as e:
+                # 도우미가 포트를 닫을 때도 여기로 온다 (Windows 는 AttributeError hEvent)
+                print(f"[USB-diag] 읽기 끝남 ({type(e).__name__}: {e}): {self.diag()}")
                 return
             if data:
                 self.last_rx = time.time()
+                self.rx_bytes += len(data)
                 buf += data
             if not self.confirmed and (b"[link]" in buf or b"\xa5\x5a" in buf):
                 # LLM Deck 펌웨어만 내는 로그·묶음이 보이면 우리 기기다

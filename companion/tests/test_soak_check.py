@@ -154,3 +154,10 @@ def test_cli_exit_code(clock, monkeypatch, capsys):
     assert "Guru Meditation" in capsys.readouterr().out
     clock.later = {}
     assert soak_check.main() == 0
+
+
+def test_crash_line_found_behind_helper_timestamp(clock):
+    """도우미가 줄 앞에 시각을 붙여도 크래시 줄을 알아본다 (main.py _Stamped)."""
+    offset = clock.log.stat().st_size
+    clock.later = {3.0: GOOD, 7.0: "11-25 10:56:10   기기> assert failed: udp_new_ip_type\n"}
+    assert soak_check.soak(clock.log, offset, 10, BUILD)

@@ -837,3 +837,30 @@ def test_stuck_usb_reconnects_slowly(rig, monkeypatch):
     rig.run(ticks=5)
     assert rig.sleeps[:4] == [2, 2, main.USB_STUCK_WAIT, main.USB_STUCK_WAIT]
     assert main._usb_stuck == 0  # 다시 받으면 처음 간격으로
+
+
+def test_log_lines_get_a_timestamp_once_per_line(monkeypatch):
+    """USB 가 언제 멈췄는지 보려고 기록 줄마다 시각을 붙인다. 한 줄이 여러 번에 나눠 써져도 한 번만."""
+    import io
+    monkeypatch.setattr(main.time, "strftime", lambda fmt: "11-25 10:00:00 ")
+    out = io.StringIO()
+    stamped = main._Stamped(out)
+    stamped.write("[device] a")
+    stamped.write("b\nc\n\n")
+    assert out.getvalue() == "11-25 10:00:00 [device] ab\n11-25 10:00:00 c\n11-25 10:00:00 \n"
+
+
+def test_log_rotation_keeps_three_old_files(tmp_path, monkeypatch):
+    import sys as _sys
+    log = tmp_path / "companion.log"
+    for name, text in (("companion.log.2", "old2"), ("companion.log.1", "old1")):
+        (tmp_path / name).write_text(text)
+    log.write_text("x" * 10)
+    monkeypatch.setattr(main, "LOG_LIMIT", 5)
+    out, err = _sys.stdout, _sys.stderr
+    try:
+        main._log_to_file(str(log))
+        _sys.stdout.close()
+    finally:
+        _sys.stdout, _sys.stderr = out, err
+    assert [(tmp_path / f"companion.log.{i}").read_text() for i in (1, 2, 3)] == ["x" * 10, "old1", "old2"]
