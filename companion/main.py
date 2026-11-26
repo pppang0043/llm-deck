@@ -24,6 +24,7 @@
 """
 
 import argparse
+import atexit
 import faulthandler
 import getpass
 import json
@@ -55,6 +56,7 @@ import mirror
 import orca
 import pcstats
 import statusline
+import stale_usage
 import typer
 import sync
 import version
@@ -287,26 +289,61 @@ def restart() -> None:
 _instance_lock = None
 
 
+def _try_bind_instance() -> socket.socket | None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", INSTANCE_PORT))
+        sock.listen(1)
+        return sock
+    except OSError:
+        sock.close()
+        return None
+
+
+def _reclaim_orphan_helpers() -> bool:
+    """Windows: install.py 와 같이 이 폴더의 고아 도우미를 끈다. 끄면 True."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import importlib.util
+
+        path = Path(__file__).resolve().parent / "windows" / "install.py"
+        spec = importlib.util.spec_from_file_location("_llmdeck_windows_install", path)
+        if not spec or not spec.loader:
+            return False
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.stop_companion()
+        print("[device] 비정상 종료로 남은 도우미 프로세스를 정리했습니다.")
+        return True
+    except Exception as e:
+        print(f"[device] 고아 도우미 정리 실패: {e}")
+        return False
+
+
 def claim_device() -> bool:
     """기기에 붙는 도우미는 PC 에 하나만 돈다. 이미 돌고 있으면 False.
 
     USB 포트는 한 프로그램만 열 수 있고 같은 PC 에서 블루투스로 두 번 붙을 수도 없어서, 두 번째 도우미는
     기기를 "찾지 못했다"고만 나온다. 그 대신 무엇이 문제인지 알려 주려고 PC 안에서만 쓰는 포트를 잡는다.
+    ORCA 재시작 등으로 앞 도우미만 비정상 종료해 포트·프로세스가 남은 때는 한 번 정리하고 다시 잡는다.
     """
     global _instance_lock
     # 멈춰서 다시 띄운 도우미는 앞 도우미가 끝나 포트를 놓을 때까지 잠깐 기다린다
     tries = 20 if os.environ.pop("LLMDECK_RESTARTED", "") else 1
+    sock = None
     for attempt in range(tries):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", INSTANCE_PORT))
-            sock.listen(1)
+        sock = _try_bind_instance()
+        if sock:
             break
-        except OSError:
-            sock.close()
-            if attempt == tries - 1:
-                return False
-            time.sleep(0.5)
+        if attempt == tries - 1:
+            break
+        time.sleep(0.5)
+    if not sock and _reclaim_orphan_helpers():
+        time.sleep(0.5)
+        sock = _try_bind_instance()
+    if not sock:
+        return False
     _instance_lock = sock
     return True
 
@@ -851,6 +888,9 @@ def main() -> None:
     if args.uninstall_statusline:
         return statusline.uninstall()
     cfg = load_config()
+    config_path = Path(__file__).parent / "config.toml"
+    crashed = stale_usage.previous_helper_crashed()
+    cfg = stale_usage.recover_stale_orca_usage(config_path, cfg, crashed=crashed)
     if _run_without_device(args, cfg):
         return
     if not claim_device():
@@ -860,6 +900,8 @@ def main() -> None:
         print("         여기서 직접 실행하려면 먼저 그 도우미를 끄세요.")
         print("         Windows: 작업 관리자에서 python.exe 종료 / Mac: launchctl bootout gui/$(id -u)/com.llmdeck.companion")
         return
+    stale_usage.mark_running()
+    atexit.register(stale_usage.clear_pid)
     link = args.link or cfg.get("device", {}).get("link", "auto")
     if args.command_status or args.acknowledge_command:
         return _print_command_status(args, list(TRANSPORTS) if link == "auto" else [link], cfg)
