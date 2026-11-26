@@ -783,6 +783,17 @@ def install() -> None:
     if storage.get("clean_cache") is True:
         run_quiet([py, "-m", "pip", "cache", "purge"], env)
         say("      설치 부품 보관함을 비웠습니다 (clean_cache = true)")
+    # 비정상 종료로 남은 [orca] usage = false 가 있으면 기동 전에 지운다 (수동 삭제·재설치 우회)
+    try:
+        import stale_usage as _stale_usage
+
+        crashed = _stale_usage.previous_helper_crashed()
+        orca_cfg = read_section(config, "orca")
+        if crashed and orca_cfg.get("usage") is False:
+            if _stale_usage.clear_orca_usage_false(config):
+                say("      비정상 종료 뒤 남은 config.toml [orca] usage = false 를 지웠습니다.")
+    except Exception as e:
+        say(f"      usage 복구 확인을 건너뜁니다: {e}")
     # 예전 방식(공유만 하는 도우미)이 등록되어 있으면 지운다. 이제 이 도우미가 공유도 함께 한다.
     set_run(None, "LLMDeckSync")
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
