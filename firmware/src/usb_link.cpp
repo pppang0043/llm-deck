@@ -114,6 +114,11 @@ void usb_link_init() {
   log_event(why);
 }
 
+void usb_link_note(const char *note) {
+  Serial.printf("[usb] helper note: %s\n", note);
+  log_event(note);
+}
+
 void usb_reconnect(const char *why) {
   Serial.printf("[usb] reconnecting: %s\n", why);
   log_event(why);

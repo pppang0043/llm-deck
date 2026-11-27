@@ -834,7 +834,7 @@ def test_stuck_usb_reconnects_slowly(rig, monkeypatch):
         stuck.append(usb)
     rig.transports = stuck + [FakeTransport()]
     rig.run(ticks=5)
-    assert rig.sleeps[:4] == [2, 2, main.USB_STUCK_WAIT, main.USB_STUCK_WAIT]
+    assert rig.sleeps[:4] == [2, 2, main.USB_STUCK_WAIT, main.USB_STUCK_WAIT * 2]
     assert main._usb_stuck == 0  # 다시 받으면 처음 간격으로
 
 

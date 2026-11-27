@@ -370,6 +370,12 @@ def usb_health(transport, ok: bool) -> None:
         print("         그래도 안 되면 케이블을 뽑았다 꽂아 주세요.")
 
 
+def usb_retry_wait() -> int:
+    """USB 가 응답 없이 연달아 실패하면 천천히 붙는다 (30, 60, 120초). 붙을 때마다 기기가 연결 상태를 바꿔 화면을 다시 그리고,
+    회사 Windows PC 에서는 다시 열 때마다 기기가 재시작돼 부팅 중에 또 실패하는 것이 40초마다 되풀이됐다"""
+    return 2 if _usb_stuck < 3 else min(USB_STUCK_WAIT << (_usb_stuck - 3), 120)
+
+
 def connect(names: list[str], cfg: dict, on_audio, on_event, on_photo, on_video):
     for name in names:
         transport = TRANSPORTS[name](cfg.get("device", {}), on_audio, on_event, on_photo, on_video)
@@ -798,8 +804,7 @@ class DeviceLoop:
         if self.transport:
             self._serve_until_next_usage()
         else:
-            # USB 가 응답 없이 연달아 실패하면 천천히 붙는다. 붙을 때마다 기기가 연결 상태를 바꿔 화면을 다시 그린다
-            time.sleep(USB_STUCK_WAIT if _usb_stuck >= 3 else 2)
+            time.sleep(usb_retry_wait())
         return False
 
     def run(self) -> None:

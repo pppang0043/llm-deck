@@ -246,3 +246,64 @@ def test_usb_write_timeout_logs_both_directions(capsys):
     line = capsys.readouterr().out
     assert "[USB-diag] 쓰기 실패 (SerialTimeoutException: Write timeout)" in line
     assert "COM3" in line and "rx 1234 B" in line and "last write never" in line and "out 4096 B" in line
+
+
+@pytest.mark.parametrize("platform, lines", [("win32", (False, False)), ("darwin", (True, True))])
+def test_usb_open_keeps_reset_lines_quiet_on_windows(monkeypatch, tmp_path, platform, lines):
+    # ESP32-S3 는 DTR 꺼짐 + RTS 켜짐이 되면 재시작한다. Windows 는 열기 전에 둘 다 끄고, Mac 은 기본값(켜짐) 그대로 연다
+    from transports import usb
+
+    seen = []
+
+    class Ser:
+        def __init__(self, port, *a, **k):
+            assert port is None  # 신호를 정하기 전에 열리면 안 된다
+            self.port, self.dtr, self.rts, self.is_open = None, True, True, False
+
+        def open(self):
+            seen.append((self.port, self.dtr, self.rts))
+            self.is_open = True
+
+        def read(self, n):
+            self.is_open = False
+            return b""
+
+    monkeypatch.setattr(usb.sys, "platform", platform)
+    monkeypatch.setattr(usb.serial, "Serial", Ser)
+    monkeypatch.setattr(usb, "find_port", lambda fixed="": ("COM3", "AA"))
+    monkeypatch.setattr(usb, "FLASHING_FILE", tmp_path / "none")
+    monkeypatch.setattr(usb, "KNOWN_FILE", tmp_path / "usb_serial")
+    assert usb.UsbTransport({}, lambda seq, pcm: None).open()
+    assert seen == [("COM3", *lines)]
+
+
+def test_usb_note_tells_device_why_it_reopened(monkeypatch):
+    # 다시 연 이유는 처음 고른 것만 남고, 기기가 무언가 보낸 뒤 한 번만 {"usb_note"} 로 간다 (기기 [usb-log] 27자)
+    from transports import usb
+
+    monkeypatch.setattr(usb, "_close_why", "closed")
+    monkeypatch.setattr(usb, "_opens", 12)
+    usb._closing("write-fail")
+    usb._closing("read-end")
+    note = usb._note()
+    assert note.startswith("pc write-fail x12 ") and len(note) <= 27
+
+    written = []
+
+    class Ser:
+        port, is_open = "COM3", True
+
+        def write(self, data):
+            written.append(data)
+            return len(data)
+
+    t = usb.UsbTransport({}, lambda seq, pcm: None)
+    t.ser, t.confirmed, t.paired, t.note = Ser(), True, True, note
+    t.opened_at = t.last_rx = 5.0
+    t.send({"x": 1})
+    assert len(written) == 1  # 기기에서 아직 아무것도 못 받았다
+    t.last_rx = 6.0
+    t.send({"x": 1})
+    t.send({"x": 1})
+    notes = [w for w in written if b"usb_note" in w]
+    assert notes == [('{"usb_note": "%s"}\n' % note).encode()]

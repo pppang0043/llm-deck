@@ -429,6 +429,8 @@ static bool apply_commands(JsonObjectConst doc) {
 // 케이블로 꽂은 PC 만 보낼 수 있는 명령 (USB_ONLY_FIELDS). 실패한 것이 있으면 false.
 static bool apply_usb_commands(JsonObjectConst doc) {
   bool ok = true;
+  // 도우미가 USB 를 왜 다시 열었는지 (회사 PC 기록 없이 Mac 에서 [usb-log] 로 보려고)
+  if (doc["usb_note"].is<const char *>()) usb_link_note(doc["usb_note"]);
   if (doc["wifi_add"]["ssid"].is<const char *>()) net_add_wifi(doc["wifi_add"]["ssid"], doc["wifi_add"]["password"] | "");
   if (doc["wifi_clear"] | false) net_clear_wifi();
   // 진단용: SD 카드의 마지막 동영상을 PC 로 보낸다

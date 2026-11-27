@@ -21,6 +21,8 @@ uint32_t usb_last_rx_ms();
 // 케이블을 뽑았다 꽂은 것처럼 USB 를 다시 붙인다. PC 를 다시 켠 뒤 USB 가 꼬여 PC 가 보낸 것이 오지 않을 때.
 // usb_link_loop 가 PC 에서 2분 넘게 아무것도 오지 않거나 (그 뒤로도 계속 안 오면 2·4·8…30분마다), PC 가 30초 동안 하나도 가져가지 않으면 스스로 부른다
 void usb_reconnect(const char *why);
+// PC 도우미가 보낸 짧은 USB 진단 (다시 연 이유·버전) 을 [usb-log] 에 남긴다. 27자까지
+void usb_link_note(const char *note);
 void usb_send_audio(uint32_t seq, const int16_t *pcm, size_t samples);
 bool usb_send_event(const char *json);
 void usb_send_photo_chunk(uint32_t offset, const uint8_t *data, size_t len);

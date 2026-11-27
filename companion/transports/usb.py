@@ -2,6 +2,7 @@
 
 import json
 import struct
+import sys
 import threading
 import time
 from pathlib import Path
@@ -32,6 +33,26 @@ _last_reset = 0.0
 # 올리기가 중간에 끊겨 기기가 반쯤 써진 채 멈춘다. 올리기가 죽어 남은 표시는 이 시간이 지나면 무시한다.
 FLASHING_FILE = Path.home() / ".llm-deck" / "flashing"
 FLASHING_MAX_SECONDS = 600
+# 포트를 왜 닫았는지 (처음 고른 것만) 와 이번 실행에서 연 횟수. 다시 열면 기기에 {"usb_note"} 로 보내 기기 [usb-log] 에 남긴다.
+# 회사 PC 기록이 없어도 기기를 Mac 에 꽂으면 회사 PC 에서 언제·왜 다시 열었는지 보인다
+_close_why = "start"
+_opens = 0
+
+
+def _closing(why: str) -> None:
+    global _close_why
+    if _close_why == "closed":
+        _close_why = why
+
+
+def _note() -> str:
+    """기기 [usb-log] 한 칸(27자)에 들어가는 요약: pc <닫은 이유> x<연 횟수> <도우미 버전>"""
+    try:
+        import version  # companion/version.py (main.py 가 companion 폴더를 경로에 둔다)
+        ver = version.version()[:7]
+    except Exception:
+        ver = "?"
+    return f"pc {_close_why[:10]} x{min(_opens, 999)} {ver}"[:27]
 
 
 def flashing() -> bool:
@@ -77,6 +98,7 @@ class UsbTransport:
         self.on_photo = on_photo or (lambda offset, data: None)
         self.on_video = on_video or (lambda no, offset, total, ms, data: None)
         self.ser = None
+        self.note = ""  # 기기에 보낼 USB 진단 요약 (_note)
         self.serial_number = ""
         self.opened_at = 0.0
         self.last_rx = 0.0  # 기기에서 마지막으로 무언가 받은 시각
@@ -129,13 +151,23 @@ class UsbTransport:
             return False
         port, self.serial_number = found
         try:
-            # DTR/RTS 신호는 기본값(켜짐)으로 둔다. 끄고 열면 보드가 재시작된다.
+            # 기기(ESP32-S3 USB 시리얼)는 DTR 꺼짐 + RTS 켜짐이 되는 순간 재시작한다 (ESP_RST_USB).
+            # Mac 은 포트를 열면 두 신호가 함께 켜지므로 기본값(켜짐)으로 둔다. 끄고 열면 DTR 이 먼저 꺼져 재시작된다.
+            # Windows 는 열고 닫을 때 드라이버가 두 신호를 따로 바꿔 재시작될 수 있어 (회사 PC 에서 40초마다 재시작이 되풀이됐다)
+            # 열기 전에 둘 다 꺼 둔다: RTS 가 한 번도 켜지지 않으면 재시작되지 않는다
             # 기기가 멈춰 받아 가지 않으면 쓰기가 끝없이 기다리므로 5초에서 끊고 다시 연결한다
             # 혼자 쓴다 (exclusive): 올리기 도구(esptool)도 그렇게 열므로, 올리는 중이면 여기서 열리지 않고
             # 도우미가 쓰는 중이면 올리기가 쓰기 전에 실패한다 (둘이 같이 읽어 올리기가 중간에 끊기지 않게)
-            ser = serial.Serial(port, 115200, timeout=0.5, write_timeout=5, exclusive=True)
+            ser = serial.Serial(None, 115200, timeout=0.5, write_timeout=5, exclusive=True)
+            ser.port = port
+            if sys.platform == "win32":
+                ser.dtr = ser.rts = False
+            ser.open()
         except serial.SerialException:
             return False
+        global _close_why, _opens
+        _opens += 1
+        self.note, _close_why = _note(), "closed"
         self.ser = ser
         self.opened_at = self.last_rx = time.time()
         self.rx_bytes = self.tx_bytes = 0
@@ -171,17 +203,22 @@ class UsbTransport:
             return False
         if flashing():
             print("[USB] 펌웨어를 올리는 중이라 포트를 놓아줍니다.")
+            _closing("flashing")
             self.close()
             return False
         if self._silent():
             print(f"[USB-diag] 조용함: {self.diag()}")
+            _closing("silent")
             self._reset_device()
             return False
         if time.time() - self._stat_at >= 60:
             # 1분마다 양쪽으로 얼마나 오갔는지. 기기의 [usb-stat] 과 함께 보면 어느 방향이 먼저 멈췄는지 보인다
             print(f"[USB-diag] 1분: rx {self.rx_bytes - self._stat_rx} B, tx {self.tx_bytes - self._stat_tx} B | {self.diag()}")
             self._stat_at, self._stat_rx, self._stat_tx = time.time(), self.rx_bytes, self.tx_bytes
-        return self.port_name != "" or any(p.device == self.ser.port for p in list_ports.comports())
+        if self.port_name or any(p.device == self.ser.port for p in list_ports.comports()):
+            return True
+        _closing("port-gone")
+        return False
 
     def _silent(self) -> bool:
         """LLM Deck 이라고 아는 기기(기억해 둔 시리얼 번호)가 오래 아무것도 보내지 않는지"""
@@ -221,9 +258,13 @@ class UsbTransport:
                 if not self.paired and time.time() - self._pair_asked > 30:
                     self._pair_asked = time.time()
                     self.tx_bytes += self.ser.write(b'{"pair":true}\n') or 0
+                if self.note and self.last_rx > self.opened_at:  # 기기가 살아 있을 때 한 번
+                    self.tx_bytes += self.ser.write(json.dumps({"usb_note": self.note}).encode() + b"\n") or 0
+                    self.note = ""
                 self.last_tx = time.time()
         except (serial.SerialException, AttributeError) as e:
             print(f"[USB-diag] 쓰기 실패 ({type(e).__name__}: {e}): {self.diag()}")
+            _closing("write-fail")
             raise OSError(str(e)) from e
 
     def close(self) -> None:
@@ -242,6 +283,7 @@ class UsbTransport:
             except (serial.SerialException, OSError, TypeError, AttributeError) as e:
                 # 도우미가 포트를 닫을 때도 여기로 온다 (Windows 는 AttributeError hEvent)
                 print(f"[USB-diag] 읽기 끝남 ({type(e).__name__}: {e}): {self.diag()}")
+                _closing("read-end")
                 return
             if data:
                 self.last_rx = time.time()
