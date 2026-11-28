@@ -113,6 +113,7 @@ def pages(data: dict, cfg: dict) -> tuple[dict, list]:
         name = f"{title} {labels.get(active, 'PC 기본')}"
         if windows and isinstance(updated, (int, float)) and updated > 0:
             page = limits_page(name, {"as_of": updated / 1000, "windows": windows})
+            page["estimate_source"] = {"provider": provider, "as_of": updated / 1000, "title": title}
             if usage.get("error"):
                 page["sub"] = "ORCA 갱신 실패: 마지막 값"
         else:

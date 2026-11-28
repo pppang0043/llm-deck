@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "quickpanel.h"
 #include "toast_queue.h"
+#include "usage_swipe.h"
 
 // LVGL 은 잠금이 없어 화면을 그리는 태스크(loop)에서만 써야 한다. 다른 태스크에서 건드리면 메모리가 망가져 한참 뒤
 // 엉뚱한 곳에서 죽는다. 그런 호출은 화면을 건드리지 않고 돌아가며, 이름마다 한 번만 로그에 남긴다.
@@ -859,6 +860,20 @@ static void easy_paging(lv_event_t *e) {
   }
 }
 
+static void usage_value_gesture(lv_event_t *e) {
+  lv_obj_t *tv = lv_event_get_current_target(e);
+  lv_obj_t *active = lv_tileview_get_tile_act(tv);
+  if (!active || lv_obj_get_height(tv) <= 0) return;
+  intptr_t kind = (intptr_t)lv_obj_get_user_data(active);  // 1: %, 2: 같은 구간 토큰 환산
+  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+  int col = usage_swipe_column(dir == LV_DIR_RIGHT, dir == LV_DIR_LEFT, kind == 1 || kind == 2, kind == 2 ? 1 : 0);
+  if (col < 0) return;
+  uint8_t row = lv_obj_get_y(active) / lv_obj_get_height(tv);
+  lv_obj_set_tile_id(tv, col, row, LV_ANIM_OFF);
+  lv_event_stop_bubbling(e);  // % 오른쪽 스와이프가 홈으로 전달되지 않게 한다.
+  lv_indev_wait_release(lv_indev_get_act());
+}
+
 static void screen_gesture(lv_event_t *e) {
   // 어디서든 오른쪽으로 밀면 뒤로
   if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_RIGHT || view == VIEW_HOME) return;
@@ -1350,6 +1365,12 @@ void ui_set_usage(JsonArrayConst services) {
 // 원래 화면이면 첫 페이지 제목 옆에 나눠 쓰기 버튼을 둔다 (기기 화면은 위쪽 줄에 따로 있다).
 static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool main_screen, uint32_t *side_rows,
                                  uint8_t first_row) {
+  // LVGL은 GESTURE_BUBBLE 체인을 먼저 올라가서 이벤트 대상을 정한다.
+  // tileview에서 잡고, 처리하지 않은 제스처만 기존 화면 뒤로 가기로 보낸다.
+  lv_obj_clear_flag(tv, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(tv, LV_OBJ_FLAG_EVENT_BUBBLE);
+  lv_obj_remove_event_cb(tv, usage_value_gesture);
+  lv_obj_add_event_cb(tv, usage_value_gesture, LV_EVENT_GESTURE, NULL);
   uint8_t index = first_row;
   no_history = !main_screen;
   // 구독 한도 페이지가 둘 이상이면 처음 것 자리에 "구독제" 한 페이지로 모은다
@@ -1371,9 +1392,15 @@ static uint8_t build_usage_pages(lv_obj_t *tv, JsonArrayConst services, bool mai
     bool side = svc["side"] == true && prev && index > first_row && !(*side_rows & (1u << (index - 1)));
     lv_obj_t *page;
     if (side) {
-      ((lv_tileview_tile_t *)prev)->dir = (lv_dir_t)(LV_DIR_VER | LV_DIR_RIGHT);
+      bool value = svc["usage_value"] == true;
+      ((lv_tileview_tile_t *)prev)->dir = value ? LV_DIR_VER : (lv_dir_t)(LV_DIR_VER | LV_DIR_RIGHT);
+      if (value) lv_obj_set_user_data(prev, (void *)(intptr_t)1);
       *side_rows |= 1u << (index - 1);
       page = add_page(tv, index - 1, 1);
+      if (value) {
+        ((lv_tileview_tile_t *)page)->dir = LV_DIR_NONE;
+        lv_obj_set_user_data(page, (void *)(intptr_t)2);
+      }
     } else {
       page = prev = add_page(tv, index);
     }

@@ -1,4 +1,4 @@
-"""OpenAI API 청구액: 조직 Costs API 와 월 지출 한도.
+"""OpenAI 조직 Costs API 의 사용 비용 (카드 결제/최종 청구서 아님).
 
 Admin 키(sk-admin-...)가 필요하다. 날짜 경계는 UTC 기준이다.
 """
@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from . import budget, keys
+from . import keys, provider_costs
 
 NAME = "OpenAI"
 BASE = "https://api.openai.com/v1/organization"
@@ -28,20 +28,19 @@ def _get(path: str, params: dict, key: str) -> dict:
 def _get_all(path: str, params: dict, key: str) -> list:
     buckets = []
     page = None
+    seen = set()
     while True:
         body = _get(path, dict(params, **({"page": page} if page else {})), key)
-        buckets += body.get("data", [])
-        if not body.get("has_more"):
+        if not isinstance(body["data"], list) or not isinstance(body["has_more"], bool):
+            raise ValueError("Invalid cost response")
+        buckets += body["data"]
+        if not body["has_more"]:
             return buckets
-        page = body["next_page"]
-
-
-def _spend_limit(key: str) -> float | None:
-    """조직 월 지출 한도 (USD). 한도가 없으면(404) 또는 읽을 수 없으면 None."""
-    try:
-        return float(_get("spend_limit", {}, key)["threshold_amount"]) / 100  # 센트 단위
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+        next_page = body["next_page"]
+        if not next_page or next_page in seen:
+            raise ValueError("Invalid cost pagination")
+        seen.add(next_page)
+        page = next_page
 
 
 def fetch(cfg: dict) -> dict | None:
@@ -55,18 +54,23 @@ def fetch(cfg: dict) -> dict | None:
     month_start = today.replace(day=1)
 
     try:
-        start = int(budget.start(cfg, month_start).timestamp())
-        costs = _get_all("costs", {"start_time": start, "bucket_width": "1d", "limit": 31}, key)
+        costs = _get_all("costs", {"start_time": int(month_start.timestamp()),
+                                  "end_time": int(now.timestamp()), "bucket_width": "1d", "limit": 31}, key)
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403):
             raise
-        return {"error": keys.rejected_text("openai_api", key, cfg, e.code, KEY_PAGE)}
-    keys.mark_ok("openai_api", key)
+        return {"error": keys.rejected_text("openai_api", key, cfg, e.code, KEY_PAGE), "status": "auth"}
     # {"YYYY-MM-DD": USD}
-    daily = {
-        datetime.fromtimestamp(b["start_time"], timezone.utc).strftime("%Y-%m-%d"):
-            sum(float(r["amount"]["value"]) for r in b["results"])
-        for b in costs
-    }
-    api_limit = None if cfg.get("monthly_limit") else _spend_limit(key)
-    return budget.summary(cfg, daily, month_start, today, api_limit)
+    daily = {}
+    for bucket in costs:
+        day = datetime.fromtimestamp(bucket["start_time"], timezone.utc).strftime("%Y-%m-%d")
+        if day in daily:
+            raise ValueError("Duplicate cost bucket")
+        values = []
+        for result in bucket["results"]:
+            if result["amount"]["currency"].lower() != "usd":
+                raise ValueError("Unsupported cost currency")
+            values.append(provider_costs.amount(result["amount"]["value"]))
+        daily[day] = sum(values, provider_costs.amount(0))
+    keys.mark_ok("openai_api", key)
+    return provider_costs.summary(daily, now)

@@ -119,15 +119,14 @@ def test_collect_dedupes_and_flags_unknown(roots):
     ]
     (codex / "2026/s.jsonl").write_text("\n".join(codex_lines) + "\n")
 
-    page = api_cost.collect({})
-    assert page["table"][0] == ["", "Claude", "Codex"]
+    today = datetime.now().strftime("%Y-%m-%d")
+    claude_sums = api_cost._sum(api_cost._records(claude, api_cost._read_claude), today, today[:7])
+    codex_sums = api_cost._sum(api_cost._records(codex, api_cost._read_codex), today, today[:7])
     # Claude: 4 (opus-5-5) + 1 (sonnet-5 0.5M*2) = 5, Codex: 0.2M*2 = 0.4
-    assert page["table"][1][1:] == ["$5.00", "$0.40"]
-    assert page["table"][2][1:] == ["$5.00", "$0.40"]
-    assert "headline" not in page
-    assert page["title"] == "API Estimate"
-    assert "청구액 아님" in page["sub"] and "구독 사용 포함" in page["sub"]
-    assert page["sub"].endswith("단가 모름: claude-mystery-1")
+    assert claude_sums[:2] == (5.0, 5.0)
+    assert codex_sums[:2] == pytest.approx((0.4, 0.4))
+    assert claude_sums[2] == {"claude-mystery-1"}
+    assert api_cost.collect({"api_cost": {"enabled": True}}) is None
 
 
 def test_sonnet_55_cache_hit_rate():
@@ -159,13 +158,15 @@ def test_claude_streaming_and_resumed_copy_use_complete_snapshot(roots):
     complete = claude_line("m1", "claude-opus-5-5", 1_000_000)
     (claude / "a.jsonl").write_text(small + "\n" + complete + "\n")
     (claude / "b.jsonl").write_text(small + "\n")
-    assert api_cost.collect({})["table"][1][1] == "$4.00"
+    def estimate():
+        return sum(r[1] for r in api_cost._records(claude, api_cost._read_claude).values())
+    assert estimate() == pytest.approx(4)
     # 더 작은 복사본이 나중에 다시 수집돼도 줄어들지 않는다.
     (claude / "b.jsonl").write_text(small + "\n\n")
-    assert api_cost.collect({})["table"][1][1] == "$4.00"
+    assert estimate() == pytest.approx(4)
     (claude / "a.jsonl").unlink()
     # 지워진 파일의 캐시를 계속 합산하지 않는다.
-    assert api_cost.collect({})["table"][1][1] == "$0.00"
+    assert estimate() == pytest.approx(0.0004)
 
 
 def test_month_filter_does_not_include_previous_month_or_unknown_prices():

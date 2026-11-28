@@ -64,6 +64,7 @@ import crash_watch
 from collectors import COLLECTORS, LIMITS
 from collectors.fmt import limits_page
 from collectors import orca_usage
+from collectors import usage_estimate
 from transports import TRANSPORTS, frames
 from transports.commands import CommandTransport, CommandError
 
@@ -126,6 +127,7 @@ def collect_limits(cfg: dict) -> list:
     # 본 페이지는 이 PC 의 ORCA 가 지금 고른 계정 값이다. ORCA 를 못 읽으면 기존 값을 보인다
     global _orca_accounts
     orca_main, _orca_accounts = {}, []
+    data = None
     if cfg.get("orca", {}).get("enabled", True) and cfg.get("orca", {}).get("usage", True):
         data = orca_usage.read()
         if data:
@@ -139,6 +141,9 @@ def collect_limits(cfg: dict) -> list:
             pages.append(limits_page(module.NAME, snapshot))
         elif hasattr(module, "hint") and module.hint():
             pages.append(module.hint())
+    value_page = usage_estimate.collect(pages, data)
+    if value_page:
+        pages = [p for p in pages if p.get("bars")] + [value_page] + [p for p in pages if not p.get("bars")]
     return pages
 
 
@@ -157,6 +162,8 @@ def collect_all(cfg: dict) -> dict:
             except Exception as e:  # 한 서비스가 실패해도 나머지는 계속 보여준다
                 print(f"[{section}] 수집 실패: {e}")
                 _errors[section] = _error_text(e)
+                if section == "billing":
+                    result = module.unavailable()
             _last[section] = (time.time(), result)
         if result:
             services.append(result)

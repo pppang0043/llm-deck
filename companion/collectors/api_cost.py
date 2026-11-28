@@ -1,4 +1,6 @@
-"""Claude Code / Codex 를 API 로 썼다면 들었을 비용(환산).
+"""토큰 기록의 API 단가 환산 함수 (사용률 별도 뷰/읽기 전용 조사 도구용).
+
+이 모듈은 비용 페이지 수집기로 등록하지 않는다. 실제 API Cost는 billing.py만 담당한다.
 
 구독으로 쓰면 실제 청구액은 월 구독료로 고정이지만, 대화 기록에 남은 토큰 수에 API 단가를 곱하면
 "API 로 썼다면 얼마" 를 알 수 있다. 이 PC 의 기록만 센다 (다른 PC 에서 쓴 양은 빠진다).
@@ -40,8 +42,10 @@ CLAUDE_PRICES = {
 
 # OpenAI: (입력, 캐시 입력, 캐시 쓰기, 출력, 긴 입력일 때 입력 배수, 출력 배수).
 # 한 요청의 입력이 272K 를 넘으면 그 요청 전체에 긴 입력 단가가 붙는다. 캐시 단가도 입력 배수만큼 올린다.
-# developers.openai.com/api/docs/pricing (2026-10 기준, Standard)
+# https://developers.openai.com/api/docs/pricing (2026-11-28 확인, Standard)
 OPENAI_PRICES = {
+    "gpt-6.2-astra": (8.0, 0.40, 10.0, 40.0, 2.0, 1.5),
+    "gpt-6.2-sol": (2.0, 0.10, 2.50, 10.0, 2.0, 1.5),
     "gpt-6-astra": (10.0, 1.00, 12.50, 50.0, 2.0, 1.5),
     "gpt-6.1-sol": (2.0, 0.10, 2.50, 10.0, 2.0, 1.5),
     "gpt-6-sol": (2.0, 0.20, 2.50, 10.0, 2.0, 1.5),
@@ -100,7 +104,7 @@ def _read_claude(path: Path) -> dict:
                 usage = message["usage"]
                 model = message["model"]
                 key = f"{message['id']}:{entry.get('requestId', '')}"
-                date = _local_date(entry["timestamp"])
+                date = datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00")).astimezone().isoformat()
             except (ValueError, KeyError, TypeError):
                 continue
             if model.startswith("<"):  # <synthetic>: Claude Code 가 만든 가짜 응답
@@ -147,7 +151,7 @@ def _read_codex(path: Path) -> dict:
                     continue
                 key = payload["response_id"]
                 usage = payload["usage"]
-                date = _local_date(entry["timestamp"])
+                date = datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00")).astimezone().isoformat()
             except (ValueError, KeyError, TypeError):
                 continue
             _merge_record(found, key, (date, _codex_cost(model, usage), model or "?"))
@@ -173,12 +177,12 @@ def _merge_record(records: dict, key: str, record: tuple) -> None:
         records[key] = (min(previous[0], record[0]), best[1], best[2])
 
 
-def _records(root: Path, reader) -> dict:
+def _records(root: Path, reader, paths=None) -> dict:
     """root 아래 모든 기록을 {키: (날짜, USD, 모델)} 로 합친다."""
     merged = {}
     if not root.is_dir():
         return merged
-    for path in root.rglob("*.jsonl"):
+    for path in paths if paths is not None else root.rglob("*.jsonl"):
         try:
             stat = path.stat()
             stamp = (stat.st_mtime_ns, stat.st_size)
@@ -203,36 +207,11 @@ def _sum(records: dict, today: str, month: str) -> tuple[float, float, set]:
             unknown.add(model)
             continue
         month_usd += usd
-        if date == today:
+        if date[:10] == today:
             day_usd += usd
     return day_usd, month_usd, unknown
 
 
-def collect(cfg: dict) -> dict | None:
-    if not cfg.get("api_cost", {}).get("enabled", True):
-        return None
-    now = datetime.now()
-    today, month = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m")
-    services = [("Claude", _records(CLAUDE_ROOT, _read_claude)), ("Codex", _records(CODEX_ROOT, _read_codex))]
-    services = [(name, records) for name, records in services if records]
-    if not services:
-        return None
-
-    # 회사별로 나란히 한 표에 (API Billing 화면과 같은 모양). 스크롤 없이 한 화면에 들어가게 한다.
-    header, day_row, month_row = [""], ["오늘"], [f"{now.month}월"]
-    unknown = set()
-    for name, records in services:
-        day_usd, month_usd, missing = _sum(records, today, month)
-        unknown |= missing
-        header.append(name)
-        day_row.append(fmt_usd(day_usd))
-        month_row.append(fmt_usd(month_usd))
-
-    # 큰 합계를 빼고 추정치 안내를 항상 둔다. 구독 사용도 포함하므로 청구액으로 표시하면 안 된다.
-    # side: 기기에서 앞 페이지(구독제) 오른쪽에 둔다 (아래로 넘기면 그다음 페이지)
-    page = {"name": "API Cost", "title": "API Estimate", "note": now.strftime("이 PC · %H:%M"),
-            "table": [header, month_row, day_row], "side": True,
-            "sub": "API 환산 추정 · 청구액 아님\n구독 사용 포함"}
-    if unknown:
-        page["sub"] += "\n단가 모름: " + ", ".join(sorted(unknown))
-    return page
+def collect(cfg: dict) -> None:
+    """폐기된 비용 페이지 진입점. 환산은 사용률의 별도 뷰에서만 제공한다."""
+    return None
