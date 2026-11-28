@@ -19,10 +19,12 @@ enabled = true
 
 [api_cost]
 # Claude Code / Codex 대화 기록의 토큰 수에 API 단가를 곱한 "API 로 썼다면 든 비용". 키 필요 없음.
+# API Estimate 화면: 구독 사용도 포함한 로컬 추정치이며 추가 결제액이 아닙니다. 날짜 경계는 PC 현지 시간입니다.
 enabled = true
 
 [anthropic_api]
-# 실제 API 청구액 (API 키로 쓴 것만, 구독 사용분은 안 들어감). 일반 API 키(sk-ant-api03-...)로는 안 되고 Admin 키여야 합니다.
+# 공급자 비용 API 의 API 사용액 (UTC 기준). 구독료/카드 결제/최종 청구서를 조회하지 않습니다.
+# 일반 API 키(sk-ant-api03-...)로는 안 되고 Admin 키여야 합니다.
 # Anthropic Admin 키 (sk-ant-admin01-...). platform.claude.com/settings/admin-keys. 조직 계정에서만 만들 수 있습니다.
 admin_key = ""
 # 키를 만들 때 고른 만료일 (예: "2027-01-18"). 7일 전부터 화면에 알리고, 지나면 새 키를 넣으라고 알립니다. 만료 없음이면 비워 둡니다.

@@ -20,7 +20,7 @@ from pathlib import Path
 from .fmt import fmt_usd
 
 # Claude: (입력, 출력, 캐시 읽기). 캐시 쓰기는 5분 보관 = 입력 x1.25, 1시간 보관 = 입력 x2.
-# platform.claude.com 가격표 (2026-10 기준)
+# https://platform.claude.com/docs/en/about-claude/pricing (2026-11-28 확인)
 CLAUDE_PRICES = {
     "claude-fable-5-1": (10.0, 50.0, 0.25),
     "claude-mythos-5-1": (10.0, 50.0, 0.25),
@@ -31,7 +31,7 @@ CLAUDE_PRICES = {
     "claude-opus-4-8": (5.0, 25.0, 0.50),
     "claude-opus-4-7": (5.0, 25.0, 0.50),
     "claude-opus-4-6": (5.0, 25.0, 0.50),
-    "claude-sonnet-5-5": (2.0, 10.0, 0.20),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.10),
     "claude-sonnet-5": (2.0, 10.0, 0.20),
     "claude-sonnet-4-6": (3.0, 15.0, 0.30),
     "claude-haiku-5-5": (0.10, 0.50, 0.01),
@@ -103,9 +103,9 @@ def _read_claude(path: Path) -> dict:
                 date = _local_date(entry["timestamp"])
             except (ValueError, KeyError, TypeError):
                 continue
-            if model.startswith("<") or key in found:  # <synthetic>: Claude Code 가 만든 가짜 응답
+            if model.startswith("<"):  # <synthetic>: Claude Code 가 만든 가짜 응답
                 continue
-            found[key] = (date, _claude_cost(model, usage), model)
+            _merge_record(found, key, (date, _claude_cost(model, usage), model))
     return found
 
 
@@ -150,8 +150,27 @@ def _read_codex(path: Path) -> dict:
                 date = _local_date(entry["timestamp"])
             except (ValueError, KeyError, TypeError):
                 continue
-            found[key] = (date, _codex_cost(model, usage), model or "?")
+            _merge_record(found, key, (date, _codex_cost(model, usage), model or "?"))
     return found
+
+
+def _merge_record(records: dict, key: str, record: tuple) -> None:
+    """같은 응답의 조각/복사본은 더 완성된 usage 하나만 센다 (합산하지 않는다).
+
+    스트리밍 중의 작은 usage 가 먼저 기록될 수 있다. 파일 탐색 순서에 따라
+    결과가 달라지지 않도록 알려진 비용이 가장 큰 스냅샷을 고른다.
+    """
+    def rank(value):
+        _, usd, model = value
+        return (usd is not None, usd or 0, model)
+
+    if key not in records:
+        records[key] = record
+    else:
+        previous = records[key]
+        best = max(previous, record, key=rank)
+        # 재개/복사 시각이 달라도 동일 응답을 다른 달로 옮기지 않는다.
+        records[key] = (min(previous[0], record[0]), best[1], best[2])
 
 
 def _records(root: Path, reader) -> dict:
@@ -169,7 +188,8 @@ def _records(root: Path, reader) -> dict:
                 _cache[path] = cached
         except OSError:
             continue
-        merged.update(cached[1])
+        for key, record in cached[1].items():
+            _merge_record(merged, key, record)
     return merged
 
 
@@ -200,20 +220,19 @@ def collect(cfg: dict) -> dict | None:
 
     # 회사별로 나란히 한 표에 (API Billing 화면과 같은 모양). 스크롤 없이 한 화면에 들어가게 한다.
     header, day_row, month_row = [""], ["오늘"], [f"{now.month}월"]
-    total = 0.0
     unknown = set()
     for name, records in services:
         day_usd, month_usd, missing = _sum(records, today, month)
-        total += month_usd
         unknown |= missing
         header.append(name)
         day_row.append(fmt_usd(day_usd))
         month_row.append(fmt_usd(month_usd))
 
-    # 설명 줄을 빼야 가로 화면에 다 들어간다. 이 PC 기록만 센다는 것은 시각 옆에 적는다.
+    # 큰 합계를 빼고 추정치 안내를 항상 둔다. 구독 사용도 포함하므로 청구액으로 표시하면 안 된다.
     # side: 기기에서 앞 페이지(구독제) 오른쪽에 둔다 (아래로 넘기면 그다음 페이지)
-    page = {"name": "API Cost", "note": now.strftime("이 PC · %H:%M"), "headline": fmt_usd(total),
-            "table": [header, month_row, day_row], "side": True}
+    page = {"name": "API Cost", "title": "API Estimate", "note": now.strftime("이 PC · %H:%M"),
+            "table": [header, month_row, day_row], "side": True,
+            "sub": "API 환산 추정 · 청구액 아님\n구독 사용 포함"}
     if unknown:
-        page["sub"] = "단가 모름: " + ", ".join(sorted(unknown))
+        page["sub"] += "\n단가 모름: " + ", ".join(sorted(unknown))
     return page

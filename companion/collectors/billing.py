@@ -1,4 +1,4 @@
-"""Anthropic / OpenAI 실제 API 청구액을 한 페이지에 표로 나란히 보여준다.
+"""Anthropic / OpenAI 비용 API 의 사용액을 보여준다 (결제/청구서 조회 아님).
 
     API Billing          11:44
                Anthropic  OpenAI
@@ -10,7 +10,7 @@
 키를 넣은 회사만 열이 생긴다. 한도·크레딧 줄은 어느 한 회사라도 값이 있을 때만 나온다.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from . import anthropic_api, openai_api
 from .fmt import fmt_usd
@@ -47,7 +47,8 @@ def collect(cfg: dict) -> dict | None:
     def row(label: str, field: str) -> list:
         return [label] + [_usd(result.get(field)) for _, result in columns]
 
-    now = datetime.now()
+    # 공급자 비용 API 의 일/월 경계와 화면의 날짜를 같은 UTC 에 맞춘다.
+    now = datetime.now(timezone.utc)
     table = [[""] + [name for name, _ in columns], row(f"{now.month}월", "month"), row("오늘", "today")]
     for label, field in (("한도 남음", "limit_left"), ("크레딧", "credit_left")):
         if any(result.get(field) is not None for _, result in columns):
@@ -55,7 +56,8 @@ def collect(cfg: dict) -> dict | None:
 
     notes = [f"{name}: {result['error']}" for name, result in columns if "error" in result]
     notes += [f"{name}: {result['note']}" for name, result in columns if result.get("note")]
-    page = {"name": "API Billing", "note": now.strftime("%H:%M"), "table": table}
+    page = {"name": "API Billing", "note": now.strftime("UTC %H:%M"), "table": table,
+            "sub": "API 사용액 · 결제 내역 아님"}
     if notes:
-        page["sub"] = "\n".join(notes)
+        page["sub"] += "\n" + "\n".join(notes)
     return page
