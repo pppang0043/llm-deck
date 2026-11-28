@@ -119,10 +119,87 @@ def test_collect_dedupes_and_flags_unknown(roots):
     ]
     (codex / "2026/s.jsonl").write_text("\n".join(codex_lines) + "\n")
 
-    page = api_cost.collect({})
-    assert page["table"][0] == ["", "Claude", "Codex"]
+    today = datetime.now().strftime("%Y-%m-%d")
+    claude_sums = api_cost._sum(api_cost._records(claude, api_cost._read_claude), today, today[:7])
+    codex_sums = api_cost._sum(api_cost._records(codex, api_cost._read_codex), today, today[:7])
     # Claude: 4 (opus-5-5) + 1 (sonnet-5 0.5M*2) = 5, Codex: 0.2M*2 = 0.4
-    assert page["table"][1][1:] == ["$5.00", "$0.40"]
-    assert page["table"][2][1:] == ["$5.00", "$0.40"]
-    assert page["headline"] == "$5.40"
-    assert page["sub"] == "단가 모름: claude-mystery-1"
+    assert claude_sums[:2] == (5.0, 5.0)
+    assert codex_sums[:2] == pytest.approx((0.4, 0.4))
+    assert claude_sums[2] == {"claude-mystery-1"}
+    assert api_cost.collect({"api_cost": {"enabled": True}}) is None
+
+
+def test_sonnet_55_cache_hit_rate():
+    assert api_cost._claude_cost("claude-sonnet-5-5", {
+        "cache_read_input_tokens": 1_000_000,
+    }) == pytest.approx(0.10)
+
+
+def test_read_only_audit_excludes_old_month_and_marks_unknown(roots):
+    from audit_api_cost import audit
+
+    claude, codex = roots
+    claude.mkdir()
+    old = json.loads(claude_line("old", "claude-opus-5-5", 1_000_000))
+    old["timestamp"] = "2026-10-15T00:00:00Z"
+    unknown = json.loads(claude_line("unknown", "claude-mystery", 100))
+    unknown["timestamp"] = "2026-11-15T00:00:00Z"
+    (claude / "a.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(unknown) + "\n")
+    report = audit("2026-11", claude, codex)
+    assert report["services"]["Claude"]["models"] == {
+        "claude-mystery": {"responses": 1, "estimated_usd": None}}
+    assert "NOT a bill" in report["kind"]
+
+
+def test_claude_streaming_and_resumed_copy_use_complete_snapshot(roots):
+    claude, _ = roots
+    claude.mkdir()
+    small = claude_line("m1", "claude-opus-5-5", 100)
+    complete = claude_line("m1", "claude-opus-5-5", 1_000_000)
+    (claude / "a.jsonl").write_text(small + "\n" + complete + "\n")
+    (claude / "b.jsonl").write_text(small + "\n")
+    def estimate():
+        return sum(r[1] for r in api_cost._records(claude, api_cost._read_claude).values())
+    assert estimate() == pytest.approx(4)
+    # 더 작은 복사본이 나중에 다시 수집돼도 줄어들지 않는다.
+    (claude / "b.jsonl").write_text(small + "\n\n")
+    assert estimate() == pytest.approx(4)
+    (claude / "a.jsonl").unlink()
+    # 지워진 파일의 캐시를 계속 합산하지 않는다.
+    assert estimate() == pytest.approx(0.0004)
+
+
+def test_month_filter_does_not_include_previous_month_or_unknown_prices():
+    records = {"old": ("2026-10-31", 999, "known"),
+               "start": ("2026-11-01", 1.234567, "known"),
+               "today": ("2026-11-28", 2.345678, "known"),
+               "unknown": ("2026-11-28", None, "unknown")}
+    day, month, unknown = api_cost._sum(records, "2026-11-28", "2026-11")
+    assert day == pytest.approx(2.345678)
+    assert month == pytest.approx(3.580245)
+    assert unknown == {"unknown"}
+
+
+def test_resumed_copy_does_not_move_original_response_to_next_month(roots):
+    claude, _ = roots
+    claude.mkdir()
+    original = json.loads(claude_line("m1", "claude-opus-5-5", 1_000_000))
+    original["timestamp"] = "2026-11-15T00:00:00Z"
+    copy = {**original, "timestamp": "2026-12-15T00:00:00Z"}
+    (claude / "a.jsonl").write_text(json.dumps(original) + "\n")
+    (claude / "b.jsonl").write_text(json.dumps(copy) + "\n")
+    records = api_cost._records(claude, api_cost._read_claude)
+    assert api_cost._sum(records, "2026-11-15", "2026-11")[1] == pytest.approx(4)
+    assert api_cost._sum(records, "2026-12-15", "2026-12")[1] == 0
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="tzset unavailable on Windows")
+def test_local_month_boundary(monkeypatch):
+    try:
+        with monkeypatch.context() as patch:
+            patch.setenv("TZ", "Asia/Seoul")
+            time.tzset()
+            assert api_cost._local_date("2026-10-31T15:00:00Z") == "2026-11-01"
+            assert api_cost._local_date("2026-10-31T14:59:59Z") == "2026-10-31"
+    finally:
+        time.tzset()

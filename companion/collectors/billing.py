@@ -1,61 +1,54 @@
-"""Anthropic / OpenAI 실제 API 청구액을 한 페이지에 표로 나란히 보여준다.
+"""설정된 조직의 API 사용 비용. 조회 실패 시 과거 값/환산액으로 대체하지 않는다."""
 
-    API Billing          11:44
-               Anthropic  OpenAI
-    10월           $0.36   $0.42
-    오늘           $0.00   $0.18
-    한도 남음     $99.64   $9.58
-    크레딧        $99.52   $9.34
-
-키를 넣은 회사만 열이 생긴다. 한도·크레딧 줄은 어느 한 회사라도 값이 있을 때만 나온다.
-"""
-
-from datetime import datetime
+import math
+from datetime import datetime, timezone
 
 from . import anthropic_api, openai_api
 from .fmt import fmt_usd
 
-# (설정 섹션 이름, 모듈). 표의 열 순서
 PROVIDERS = [("anthropic_api", anthropic_api), ("openai_api", openai_api)]
 
-# 섹션 -> 마지막으로 받은 값. 잠깐 인터넷이 끊겨도 빈칸 대신 앞 값을 보여준다
-_last: dict[str, dict] = {}
 
-
-def _usd(value: float | None) -> str:
-    if value is None:
-        return "-"
-    return fmt_usd(value) if value >= 0 else "-" + fmt_usd(-value)
-
-
-def collect(cfg: dict) -> dict | None:
+def collect(cfg: dict) -> dict:
+    now = datetime.now(timezone.utc)
     columns = []
     for section, module in PROVIDERS:
         try:
             result = module.fetch(cfg.get(section, {}))
-        except Exception as e:  # 한 회사가 실패해도 다른 회사는 보여준다
-            print(f"[{section}] 수집 실패: {e}")
-            result = _last.get(section)
+        except Exception as e:
+            print(f"[{section}] 비용 조회 실패 ({type(e).__name__})")
+            result = {"status": "unavailable"}
         if result is None:
-            continue
-        if "error" not in result:
-            _last[section] = result
+            result = {"status": "unavailable" if cfg.get(section, {}).get("admin_key") else "unset"}
+        if not isinstance(result, dict):
+            result = {"status": "unavailable"}
         columns.append((module.NAME, result))
-    if not columns:
-        return None
+    return _page(columns, now)
 
-    def row(label: str, field: str) -> list:
-        return [label] + [_usd(result.get(field)) for _, result in columns]
 
-    now = datetime.now()
-    table = [[""] + [name for name, _ in columns], row(f"{now.month}월", "month"), row("오늘", "today")]
-    for label, field in (("한도 남음", "limit_left"), ("크레딧", "credit_left")):
-        if any(result.get(field) is not None for _, result in columns):
-            table.append(row(label, field))
+def unavailable() -> dict:
+    return _page([(module.NAME, {"status": "unavailable"}) for _, module in PROVIDERS],
+                 datetime.now(timezone.utc))
 
-    notes = [f"{name}: {result['error']}" for name, result in columns if "error" in result]
-    notes += [f"{name}: {result['note']}" for name, result in columns if result.get("note")]
-    page = {"name": "API Billing", "note": now.strftime("%H:%M"), "table": table}
-    if notes:
-        page["sub"] = "\n".join(notes)
-    return page
+
+def _page(columns, now):
+    def cell(result, field):
+        status = result.get("status")
+        if status or "error" in result:
+            return {"unset": "미설정", "auth": "인증필요"}.get(status, "조회불가")
+        if (result.get("currency") != "USD" or result.get("scope") != "organization"
+                or result.get("month_period") != now.strftime("%Y-%m")
+                or result.get("day_period") != now.strftime("%Y-%m-%d")):
+            return "조회불가"
+        value = result.get(field)
+        if value is None:
+            return "집계대기" if field == "today" else "조회불가"
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return "조회불가"
+        return fmt_usd(value)
+
+    return {"name": "API Billing", "title": "API Cost", "note": now.strftime("UTC %H:%M"),
+            "table": [[""] + [name for name, _ in columns],
+                      [now.strftime("%Y-%m")] + [cell(r, "month") for _, r in columns],
+                      ["오늘"] + [cell(r, "today") for _, r in columns]],
+            "sub": "설정된 조직 · USD · UTC\nAPI 사용액 · 결제 내역 아님"}

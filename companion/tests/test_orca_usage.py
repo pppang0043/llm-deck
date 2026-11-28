@@ -26,7 +26,7 @@ def data():
                 {"accountId": "c", "rateLimits": {"updatedAt": now - 2 * 86400000,
                                                   "session": win(40, -1000), "weekly": win(20, 86400000)}}],
             "inactiveCodexAccounts": [{"accountId": "d", "rateLimits": {"updatedAt": now,
-                                                                       "session": win(5, 1), "weekly": win(51, 1)}}],
+                                                                       "session": win(5, 3600000), "weekly": win(51, 86400000)}}],
         },
     }
 
@@ -102,6 +102,9 @@ def test_collection_uses_orca_or_falls_back(monkeypatch, data, orca_state):
     if orca_state == "expired":
         data["rateLimits"]["codex"] = {"error": "expired"}
     pages = main.collect_limits({"orca": {"usage": orca_state != "disabled"}})
+    value_pages = [p for p in pages if p.get("usage_value")]
+    assert len(value_pages) == 1
+    pages = [p for p in pages if not p.get("usage_value")]
     assert len(pages) == 2  # 본 페이지 수는 그대로라 usage_N 번호가 바뀌지 않는다
     if orca_state in ("offline", "disabled"):
         assert [p["name"] for p in pages] == ["Claude Code", "Codex"]
